@@ -211,10 +211,10 @@ func _build_hud() -> void:
 	add_child(_level_lbl)
 
 	_watch_ad_btn = Button.new()
-	_watch_ad_btn.text = "📺 Replay"
+	_watch_ad_btn.text = "📺 Watch Ad to Replay"
 	_watch_ad_btn.position = Vector2(20, 60)
-	_watch_ad_btn.size = Vector2(160, 44)
-	_watch_ad_btn.add_theme_font_size_override("font_size", 17)
+	_watch_ad_btn.size = Vector2(220, 44)
+	_watch_ad_btn.add_theme_font_size_override("font_size", 15)
 	_flat_btn(_watch_ad_btn, Color(0.75, 0.55, 0.0))
 	_watch_ad_btn.pressed.connect(_on_watch_ad)
 	_watch_ad_btn.visible = false
@@ -394,7 +394,8 @@ func _game_over() -> void:
 	_state = "gameover"
 	AudioManager.play_lose_sound()
 	_status_lbl.text = "Game Over!"
-	AdManager.try_show_interstitial()
+	if level - 1 > 5:
+		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)
 

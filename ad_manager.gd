@@ -10,7 +10,8 @@ var interstitial_ready: bool = false
 
 var _rewarded_ad: RewardedAd = null
 var _interstitial_ad: InterstitialAd = null
-var _games_played: int = 0
+var _pending_reward: Callable = Callable()
+var _reward_earned: bool = false
 
 func _ready() -> void:
 	MobileAds.initialize()
@@ -32,8 +33,16 @@ func _on_rewarded_loaded(ad: RewardedAd) -> void:
 		if _rewarded_ad:
 			_rewarded_ad.destroy()
 			_rewarded_ad = null
+		var earned := _reward_earned
+		var cb := _pending_reward
+		_reward_earned = false
+		_pending_reward = Callable()
 		_load_rewarded()
+		if earned and cb.is_valid():
+			cb.call()
 	content_cb.on_ad_failed_to_show_full_screen_content = func(_e: AdError) -> void:
+		_reward_earned = false
+		_pending_reward = Callable()
 		if _rewarded_ad:
 			_rewarded_ad.destroy()
 			_rewarded_ad = null
@@ -46,9 +55,11 @@ func show_rewarded(on_reward: Callable) -> void:
 	if not rewarded_ready or _rewarded_ad == null:
 		return
 	rewarded_ready = false
+	_pending_reward = on_reward
+	_reward_earned = false
 	var listener := OnUserEarnedRewardListener.new()
 	listener.on_user_earned_reward = func(_item: RewardedItem) -> void:
-		on_reward.call()
+		_reward_earned = true
 	_rewarded_ad.show(listener)
 
 # ── Interstitial ──────────────────────────────────────────────────────────────
@@ -76,13 +87,8 @@ func _on_interstitial_loaded(ad: InterstitialAd) -> void:
 	_interstitial_ad = ad
 	interstitial_ready = true
 
-# Shows an interstitial every other game over, if one is loaded.
 func try_show_interstitial() -> void:
-	_games_played += 1
-	if _games_played < 2:
-		return
 	if not interstitial_ready or _interstitial_ad == null:
 		return
-	_games_played = 0
 	interstitial_ready = false
 	_interstitial_ad.show()
