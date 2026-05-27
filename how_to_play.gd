@@ -32,7 +32,7 @@ func _build_ui() -> void:
 		["👁  Watch", "Simon will light up a sequence of colored buttons.\nPay close attention to the order!"],
 		["👆  Repeat", "Tap the buttons in the exact same order.\nOne wrong press and it's game over."],
 		["📈  Level Up", "Each round adds one more step to the sequence.\nSee how far your memory takes you!"],
-		["🔁  Replay", "Stuck? Use a Replay token to watch the\nsequence again. You get 3 per game."],
+		["🔁  Replay", "Stuck? Tap 'Watch Ad to Replay' to see\nthe sequence again after a short ad."],
 	]
 
 	for i in steps.size():

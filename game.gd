@@ -27,13 +27,12 @@ var speed_inc: float
 var _lit: Array[bool] = []
 var _press_anim: Array[float] = []  # 0..1, animates press
 var _ring_center: Vector2
-var _state: String = "idle"  # idle, showing, input, paused, gameover
-var _paused_state: String = ""
+var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
 
 var _status_lbl: Label
 var _level_lbl: Label
-var _pause_btn: Button
+var _quit_btn: Button
 var _watch_ad_btn: Button
 
 func _ready() -> void:
@@ -176,7 +175,7 @@ func _get_button_at(pos: Vector2) -> int:
 	return int(angle / (TAU / num_buttons)) % num_buttons
 
 func _input(event: InputEvent) -> void:
-	if _state != "input":
+	if _state != "input" or get_node("QuitDialog").visible:
 		return
 	var tap_pos := Vector2(-1, -1)
 	if event is InputEventMouseButton:
@@ -211,7 +210,7 @@ func _build_hud() -> void:
 	add_child(_level_lbl)
 
 	_watch_ad_btn = Button.new()
-	_watch_ad_btn.text = "📺 Watch Ad to Replay"
+	_watch_ad_btn.text = "Watch Ad to Replay"
 	_watch_ad_btn.position = Vector2(20, 60)
 	_watch_ad_btn.size = Vector2(220, 44)
 	_watch_ad_btn.add_theme_font_size_override("font_size", 15)
@@ -220,14 +219,14 @@ func _build_hud() -> void:
 	_watch_ad_btn.visible = false
 	add_child(_watch_ad_btn)
 
-	_pause_btn = Button.new()
-	_pause_btn.text = "⏸ Pause"
-	_pause_btn.position = Vector2(sz.x - 150, 20)
-	_pause_btn.size = Vector2(130, 44)
-	_pause_btn.add_theme_font_size_override("font_size", 16)
-	_flat_btn(_pause_btn, Color(0.3, 0.3, 0.5))
-	_pause_btn.pressed.connect(_on_pause)
-	add_child(_pause_btn)
+	_quit_btn = Button.new()
+	_quit_btn.text = "Quit"
+	_quit_btn.position = Vector2(sz.x - 120, 20)
+	_quit_btn.size = Vector2(100, 44)
+	_quit_btn.add_theme_font_size_override("font_size", 16)
+	_flat_btn(_quit_btn, Color(0.45, 0.1, 0.1))
+	_quit_btn.pressed.connect(_on_quit)
+	add_child(_quit_btn)
 
 	_status_lbl = Label.new()
 	_status_lbl.add_theme_font_size_override("font_size", 26)
@@ -240,50 +239,59 @@ func _build_hud() -> void:
 	_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(_status_lbl)
 
-	# Pause overlay (hidden by default)
-	_build_pause_overlay(sz)
+	_build_quit_dialog(sz)
 
-func _build_pause_overlay(sz: Vector2) -> void:
+func _build_quit_dialog(sz: Vector2) -> void:
 	var overlay := Panel.new()
-	overlay.name = "PauseOverlay"
+	overlay.name = "QuitDialog"
 	overlay.visible = false
-	overlay.position = Vector2(sz.x * 0.5 - 180, sz.y * 0.5 - 120)
-	overlay.size = Vector2(360, 240)
+	overlay.position = Vector2(sz.x * 0.5 - 190, sz.y * 0.5 - 100)
+	overlay.size = Vector2(380, 200)
 	var sn := StyleBoxFlat.new()
-	sn.bg_color = Color(0.05, 0.05, 0.2, 0.95)
+	sn.bg_color = Color(0.05, 0.05, 0.2, 0.97)
 	sn.corner_radius_top_left = 18; sn.corner_radius_top_right = 18
 	sn.corner_radius_bottom_left = 18; sn.corner_radius_bottom_right = 18
-	sn.border_color = Color(0.4, 0.4, 0.8); sn.border_width_left = 2
-	sn.border_width_right = 2; sn.border_width_top = 2; sn.border_width_bottom = 2
+	sn.border_color = Color(0.5, 0.15, 0.15)
+	sn.border_width_left = 2; sn.border_width_right = 2
+	sn.border_width_top = 2; sn.border_width_bottom = 2
 	overlay.add_theme_stylebox_override("panel", sn)
 	add_child(overlay)
 
 	var lbl := Label.new()
-	lbl.text = "PAUSED"
-	lbl.add_theme_font_size_override("font_size", 40)
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
-	lbl.position = Vector2(60, 30)
-	lbl.size = Vector2(240, 56)
+	lbl.text = "Quit to Home?"
+	lbl.add_theme_font_size_override("font_size", 30)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.position = Vector2(0, 28)
+	lbl.size = Vector2(380, 44)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	overlay.add_child(lbl)
 
-	var resume := Button.new()
-	resume.text = "▶ Resume"
-	resume.position = Vector2(60, 110)
-	resume.size = Vector2(240, 50)
-	resume.add_theme_font_size_override("font_size", 20)
-	_flat_btn(resume, Color(0.15, 0.6, 0.3))
-	resume.pressed.connect(_on_resume)
-	overlay.add_child(resume)
+	var sub := Label.new()
+	sub.text = "Your progress will be lost."
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	sub.position = Vector2(0, 72)
+	sub.size = Vector2(380, 24)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overlay.add_child(sub)
 
-	var home := Button.new()
-	home.text = "🏠 Home"
-	home.position = Vector2(60, 172)
-	home.size = Vector2(240, 50)
-	home.add_theme_font_size_override("font_size", 20)
-	_flat_btn(home, Color(0.3, 0.3, 0.55))
-	home.pressed.connect(func() -> void: game_manager.show_home())
-	overlay.add_child(home)
+	var yes := Button.new()
+	yes.text = "Yes, Quit"
+	yes.position = Vector2(24, 120)
+	yes.size = Vector2(155, 52)
+	yes.add_theme_font_size_override("font_size", 18)
+	_flat_btn(yes, Color(0.55, 0.12, 0.12))
+	yes.pressed.connect(func() -> void: game_manager.show_home())
+	overlay.add_child(yes)
+
+	var no := Button.new()
+	no.text = "Keep Playing"
+	no.position = Vector2(201, 120)
+	no.size = Vector2(155, 52)
+	no.add_theme_font_size_override("font_size", 18)
+	_flat_btn(no, Color(0.15, 0.45, 0.2))
+	no.pressed.connect(func() -> void: get_node("QuitDialog").visible = false)
+	overlay.add_child(no)
 
 func _flat_btn(btn: Button, col: Color) -> void:
 	var s := StyleBoxFlat.new()
@@ -366,35 +374,28 @@ func _on_replay() -> void:
 	_state = "input"
 	_status_lbl.text = "Your turn!"
 
-func _on_pause() -> void:
-	if _state == "paused":
-		return
-	_paused_state = _state
-	_state = "paused"
-	_pause_btn.text = ""
-	get_node("PauseOverlay").visible = true
-
-func _on_resume() -> void:
-	get_node("PauseOverlay").visible = false
-	_pause_btn.text = "⏸ Pause"
-	_state = _paused_state
-	if _state == "showing":
-		# Re-play sequence from start
-		_state = "input"
-		_status_lbl.text = "Your turn!"
+func _on_quit() -> void:
+	get_node("QuitDialog").visible = true
 
 func _on_watch_ad() -> void:
 	if _state != "input":
 		return
-	AdManager.show_rewarded(func() -> void:
-		replays += 1
-		_on_replay())
+	AdManager.show_rewarded(_replay_after_countdown)
+
+func _replay_after_countdown() -> void:
+	_state = "showing"
+	for n: int in [3, 2, 1]:
+		_status_lbl.text = str(n) + "..."
+		await get_tree().create_timer(1.0).timeout
+	replays += 1
+	_state = "input"
+	_on_replay()
 
 func _game_over() -> void:
 	_state = "gameover"
 	AudioManager.play_lose_sound()
 	_status_lbl.text = "Game Over!"
-	if level - 1 > 5:
+	if level > 5:
 		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)

@@ -112,6 +112,8 @@ func play_replay_sound() -> void:
 	_sfx_player.play()
 
 func play_bg_music() -> void:
+	if _music_on:
+		return
 	_music_on = true
 	_music_note = 0
 	_music_elapsed = 0.0
