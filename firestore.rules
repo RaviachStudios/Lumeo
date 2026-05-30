@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isUser(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+    function scoreOk() {
+      return request.resource.data.score is int
+          && request.resource.data.score >= 0
+          && request.resource.data.score <= 9999;
+    }
+
+    // All-time leaderboards. Public read so anyone can see the boards;
+    // each user may only write their own row, with a sane score.
+    match /global_easy/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && scoreOk();
+    }
+    match /global_moderate/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && scoreOk();
+    }
+    match /global_hard/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && scoreOk();
+    }
+  }
+}

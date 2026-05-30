@@ -14,6 +14,9 @@ var _is_new_high: bool = false
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_is_new_high = GameState.submit_score(rounds)
+	# If signed in, also push the score to Firestore (personal + global board).
+	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
+		LeaderboardManager.submit_score(GameState.difficulty, rounds)
 	_spawn_confetti()
 	_build_ui()
 	AudioManager.play_win_sound()

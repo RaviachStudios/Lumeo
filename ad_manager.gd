@@ -2,8 +2,8 @@ extends Node
 
 # Replace these with your real AdMob ad unit IDs before publishing to the Play Store.
 # These are Google's official test IDs — always safe to use during development.
-const REWARDED_ID := "ca-app-pub-3940256099942544/1712485313"
-const INTERSTITIAL_ID := "ca-app-pub-3940256099942544/1033173712"
+const REWARDED_ID := "ca-app-pub-4855985167611175/5696511973"
+const INTERSTITIAL_ID := "ca-app-pub-4855985167611175/5072180074"
 
 var rewarded_ready: bool = false
 var interstitial_ready: bool = false

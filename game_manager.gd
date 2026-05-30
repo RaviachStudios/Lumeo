@@ -5,6 +5,8 @@ const DifficultyScreen := preload("res://difficulty_screen.gd")
 const HowToPlayScreen := preload("res://how_to_play.gd")
 const GameScreen := preload("res://game.gd")
 const GameOverScreen := preload("res://game_over.gd")
+const NamePickerScreen := preload("res://name_picker_screen.gd")
+const LeaderboardsScreen := preload("res://leaderboards_screen.gd")
 
 var _current: Control = null
 var _root_ui: Control
@@ -16,10 +18,10 @@ func _ready() -> void:
 	get_tree().root.call_deferred("add_child", _root_ui)
 	await get_tree().process_frame
 	await get_tree().process_frame
+	# No forced login — go straight to the game. Sign-in is optional from Home.
 	show_home()
 
 func _notification(what: int) -> void:
-	# Android back button — go to home or quit
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
 		if _current is HomeScreen:
 			get_tree().quit()
@@ -32,6 +34,12 @@ func _swap(screen: Control) -> void:
 	_current = screen
 	_current.game_manager = self
 	_root_ui.add_child(_current)
+
+func show_name_picker() -> void:
+	_swap(NamePickerScreen.new())
+
+func show_leaderboards() -> void:
+	_swap(LeaderboardsScreen.new())
 
 func show_home() -> void:
 	_swap(HomeScreen.new())
