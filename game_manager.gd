@@ -1,4 +1,4 @@
-extends Node
+extends Control
 
 const HomeScreen := preload("res://home_screen.gd")
 const DifficultyScreen := preload("res://difficulty_screen.gd")
@@ -9,16 +9,15 @@ const NamePickerScreen := preload("res://name_picker_screen.gd")
 const LeaderboardsScreen := preload("res://leaderboards_screen.gd")
 
 var _current: Control = null
-var _root_ui: Control
+var _canvas: CanvasLayer
 
 func _ready() -> void:
-	_root_ui = Control.new()
-	_root_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_root_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	get_tree().root.call_deferred("add_child", _root_ui)
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_canvas = CanvasLayer.new()
+	_canvas.layer = 1
+	add_child(_canvas)
 	await get_tree().process_frame
-	await get_tree().process_frame
-	# No forced login — go straight to the game. Sign-in is optional from Home.
 	show_home()
 
 func _notification(what: int) -> void:
@@ -33,7 +32,7 @@ func _swap(screen: Control) -> void:
 		_current.queue_free()
 	_current = screen
 	_current.game_manager = self
-	_root_ui.add_child(_current)
+	_canvas.add_child(_current)
 
 func show_name_picker() -> void:
 	_swap(NamePickerScreen.new())

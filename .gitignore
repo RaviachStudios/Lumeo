@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Release keystore — never commit
+*.jks
+*.keystore

@@ -1,3 +1,13 @@
 [gd_scene format=3 uid="uid://bnhqx5by81qe4"]
 
-[node name="Main" type="Node" unique_id=1236884713]
+[ext_resource type="Script" uid="uid://c06xusat1mf08" path="res://game_manager.gd" id="1_gamemanager"]
+
+[node name="GameManager" type="Control" unique_id=19423276]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+script = ExtResource("1_gamemanager")
+
+[node name="Camera2D" type="Camera2D" parent="."]
