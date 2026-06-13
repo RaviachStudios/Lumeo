@@ -12,8 +12,6 @@ const BUTTON_COLORS := [
 ]
 const BG_TOP := Color(0.05, 0.05, 0.15)
 const BG_BOT := Color(0.02, 0.08, 0.22, 1.0)
-const INNER_R := 90.0
-const OUTER_R := 230.0
 
 var num_buttons: int
 var sequence: Array[int] = []
@@ -24,9 +22,7 @@ var flash_time: float
 var flash_gap: float
 var speed_inc: float
 
-var _lit: Array[bool] = []
-var _press_anim: Array[float] = []  # 0..1, animates press
-var _ring_center: Vector2
+var _wheel: SimonWheel
 var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
 
@@ -41,29 +37,25 @@ func _ready() -> void:
 	flash_time = GameState.flash_time
 	flash_gap = GameState.flash_gap
 	speed_inc = GameState.speed_increase
-	for _i in num_buttons:
-		_lit.append(false)
-		_press_anim.append(0.0)
+	# 3D Simon wheel (rendered via SubViewport). Added before the HUD so it sits
+	# behind the labels/buttons; it ignores mouse input - taps are handled here.
+	_wheel = SimonWheel.new()
+	add_child(_wheel)
+	_layout_wheel()
+	_wheel.configure(num_buttons, BUTTON_COLORS)
+	get_viewport().size_changed.connect(_layout_wheel)
 	_build_hud()
 	await get_tree().process_frame
 	_start_game()
 
-func _process(dt: float) -> void:
-	var dirty := false
-	for i in num_buttons:
-		if _press_anim[i] > 0.0:
-			_press_anim[i] = maxf(0.0, _press_anim[i] - dt * 6.0)
-			dirty = true
-	if dirty:
-		queue_redraw()
+func _process(_dt: float) -> void:
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
 		_watch_ad_btn.visible = AdManager.rewarded_ready
 
 func _draw() -> void:
 	var sz := get_viewport_rect().size
-	_ring_center = sz / 2.0
-	# Background gradient
+	# Background gradient (the wheel composites on top with a transparent backdrop)
 	for y in range(0, int(sz.y), 4):
 		var t := float(y) / sz.y
 		draw_line(Vector2(0,y), Vector2(sz.x,y), BG_TOP.lerp(BG_BOT, t), 4.0)
@@ -72,107 +64,15 @@ func _draw() -> void:
 		draw_line(Vector2(x,0), Vector2(x,sz.y), Color(1,1,1,0.025), 1.0)
 	for y in range(0, int(sz.y), 80):
 		draw_line(Vector2(0,y), Vector2(sz.x,y), Color(1,1,1,0.025), 1.0)
-	# Ring shadow
-	draw_circle(_ring_center, OUTER_R + 10, Color(0,0,0,0.22))
-	# Buttons
-	for i in num_buttons:
-		_draw_button(i)
-	# Center disc
-	draw_circle(_ring_center, INNER_R - 6, Color(0.08, 0.08, 0.2))
-	var level_txt := "LEVEL\n%d" % level
-	_draw_centered_text(_ring_center, level_txt, 22, Color(1.0, 0.85, 0.2))
 
-func _draw_button(idx: int) -> void:
-	var angle_step := TAU / num_buttons
-	var gap := deg_to_rad(4.5)
-	var a0 := idx * angle_step + gap - PI * 0.5
-	var a1 := (idx + 1) * angle_step - gap - PI * 0.5
-	var press := _press_anim[idx]
-	var shrink := press * 6.0
-	var inner := INNER_R + shrink
-	var outer := OUTER_R - shrink
-	var col: Color = BUTTON_COLORS[idx]
-	var is_lit := _lit[idx]
-
-	# Layered bloom glow when lit (outermost → inward)
-	if is_lit:
-		draw_colored_polygon(
-			_arc_poly(a0 - deg_to_rad(3.5), a1 + deg_to_rad(3.5), inner - 26, outer + 26, _ring_center),
-			col * Color(1, 1, 1, 0.09))
-		draw_colored_polygon(
-			_arc_poly(a0 - deg_to_rad(2.0), a1 + deg_to_rad(2.0), inner - 14, outer + 14, _ring_center),
-			col * Color(1, 1, 1, 0.20))
-		draw_colored_polygon(
-			_arc_poly(a0 - deg_to_rad(0.8), a1 + deg_to_rad(0.8), inner - 5, outer + 5, _ring_center),
-			col * Color(1, 1, 1, 0.30))
-
-	# Two-pass soft drop shadow
-	draw_colored_polygon(
-		_arc_poly(a0, a1, inner - 2, outer + 5, _ring_center + Vector2(2, 4)),
-		Color(0, 0, 0, 0.18))
-	draw_colored_polygon(
-		_arc_poly(a0, a1, inner - 1, outer + 3, _ring_center + Vector2(1, 2)),
-		Color(0, 0, 0, 0.22))
-
-	# Main face — clean flat surface
-	var face_col: Color
-	if is_lit:
-		face_col = col.lightened(0.44)
-	elif press > 0.0:
-		face_col = col.darkened(press * 0.20)
-	else:
-		face_col = col
-	draw_colored_polygon(
-		_arc_poly(a0, a1, inner, outer, _ring_center),
-		face_col)
-
-	# Subtle inner-edge highlight — single thin bright arc
-	var hi := 0.50 if is_lit else 0.22 * (1.0 - press * 0.9)
-	draw_polyline(
-		_arc_line(a0 + deg_to_rad(1.5), a1 - deg_to_rad(1.5), inner + 4, _ring_center),
-		Color(1, 1, 1, hi), 2.0)
-
-func _arc_poly(a0: float, a1: float, inner_r: float, outer_r: float,
-		center: Vector2, steps: int = 20) -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	for j in range(steps + 1):
-		var t: float = float(j) / steps
-		var a: float = lerp(a0, a1, t)
-		pts.append(center + Vector2(cos(a), sin(a)) * outer_r)
-	for j in range(steps + 1):
-		var t: float = float(j) / steps
-		var a: float = lerp(a1, a0, t)
-		pts.append(center + Vector2(cos(a), sin(a)) * inner_r)
-	return pts
-
-func _arc_line(a0: float, a1: float, r: float, center: Vector2,
-		steps: int = 20) -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	for j in range(steps + 1):
-		var t: float = float(j) / steps
-		var a: float = lerp(a0, a1, t)
-		pts.append(center + Vector2(cos(a), sin(a)) * r)
-	return pts
-
-func _draw_centered_text(pos: Vector2, txt: String, size_px: int, col: Color) -> void:
-	var font := ThemeDB.fallback_font
-	var lines := txt.split("\n")
-	var total_h := lines.size() * size_px * 1.3
-	var y := pos.y - total_h * 0.5
-	for line in lines:
-		var w := font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
-		draw_string(font, Vector2(pos.x - w * 0.5, y + size_px), line, HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, col)
-		y += size_px * 1.3
-
-func _get_button_at(pos: Vector2) -> int:
-	var rel := pos - _ring_center
-	var dist := rel.length()
-	if dist < INNER_R or dist > OUTER_R:
-		return -1
-	var angle := atan2(rel.y, rel.x) + PI * 0.5
-	if angle < 0.0:
-		angle += TAU
-	return int(angle / (TAU / num_buttons)) % num_buttons
+# Center the 3D wheel as a large square, leaving room for the top/bottom HUD.
+func _layout_wheel() -> void:
+	if _wheel == null:
+		return
+	var sz := get_viewport_rect().size
+	var s: float = minf(sz.x, sz.y) * 0.92
+	_wheel.size = Vector2(s, s)
+	_wheel.position = (sz - _wheel.size) * 0.5
 
 func _input(event: InputEvent) -> void:
 	if _state != "input" or get_node("QuitDialog").visible:
@@ -194,7 +94,7 @@ func _input(event: InputEvent) -> void:
 	if frame == _last_input_frame:
 		return
 	_last_input_frame = frame
-	var btn := _get_button_at(tap_pos)
+	var btn := _wheel.segment_at_point(tap_pos - _wheel.position)
 	if btn >= 0:
 		_player_pressed(btn)
 		get_viewport().set_input_as_handled()
@@ -333,15 +233,22 @@ func _play_sequence() -> void:
 		await get_tree().create_timer(flash_gap).timeout
 
 func _flash(idx: int, duration: float) -> void:
-	_lit[idx] = true
-	queue_redraw()
+	_wheel.set_lit(idx, true)
 	AudioManager.play_button_tone(idx, duration)
 	await get_tree().create_timer(duration).timeout
-	_lit[idx] = false
-	queue_redraw()
+	_wheel.set_lit(idx, false)
+
+# Brief press feedback on the 3D wheel: sink the segment and light it, then
+# release shortly after (set_press/set_lit do not auto-decay).
+func _press_feedback(idx: int) -> void:
+	_wheel.set_press(idx, 1.0)
+	_wheel.set_lit(idx, true)
+	get_tree().create_timer(0.18).timeout.connect(func() -> void:
+		_wheel.set_lit(idx, false)
+		_wheel.set_press(idx, 0.0))
 
 func _player_pressed(idx: int) -> void:
-	_press_anim[idx] = 1.0
+	_press_feedback(idx)
 	AudioManager.play_button_tone(idx, 0.3)
 	player_seq.append(idx)
 	var step := player_seq.size() - 1
@@ -402,5 +309,7 @@ func _game_over() -> void:
 
 func _update_hud() -> void:
 	_level_lbl.text = "Level: %d" % level
+	if _wheel:
+		_wheel.set_level(level)
 	if _watch_ad_btn:
 		_watch_ad_btn.visible = AdManager.rewarded_ready
