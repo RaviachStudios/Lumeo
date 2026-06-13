@@ -25,7 +25,9 @@ const BASE_H := 0.20
 const HUB_R := 0.40
 const HUB_H := 0.24
 const GAP_DEG := 6.0         # angular gap between segments
-const ARC_STEPS := 8         # arc tessellation per segment
+const ARC_STEPS := 10        # arc tessellation per segment
+const RADIAL_STEPS := 6      # radial tessellation of the domed top
+const DOME := 0.05           # how much the button top bulges (pillow look)
 
 const EMIT_ON := 4.0         # emission energy when lit
 const EMIT_OFF := 0.0
@@ -98,12 +100,20 @@ func _build_shell() -> void:
 	key.light_color = Color(1.0, 0.97, 0.92)
 	_vp.add_child(key)
 
-	var rim := OmniLight3D.new()
-	rim.position = Vector3(0, 2.2, -0.4)
-	rim.omni_range = 6.0
-	rim.light_energy = 0.7
-	rim.light_color = Color(0.6, 0.7, 1.0)
-	_vp.add_child(rim)
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-40, 145, 0)
+	fill.light_energy = 0.45
+	fill.light_color = Color(0.6, 0.7, 1.0)
+	_vp.add_child(fill)
+
+	# tight overhead light for a hot specular highlight on the glossy tops
+	var spec := OmniLight3D.new()
+	spec.position = Vector3(0.25, 2.4, 0.15)
+	spec.omni_range = 7.0
+	spec.light_energy = 1.1
+	spec.light_specular = 1.0
+	spec.light_color = Color(1.0, 1.0, 1.0)
+	_vp.add_child(spec)
 
 	_wheel_root = Node3D.new()
 	_vp.add_child(_wheel_root)
@@ -164,9 +174,12 @@ func _rebuild() -> void:
 func _seg_material(col: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
-	m.metallic = 0.15
-	m.roughness = 0.32
+	m.metallic = 0.12
+	m.roughness = 0.24                       # glossier plastic
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.rim_enabled = true                     # soft edge sheen
+	m.rim = 0.5
+	m.rim_tint = 0.2
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
@@ -187,30 +200,37 @@ func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstan
 	mi.material_override = m
 	return mi
 
-# Annular sector prism (top face + outer/inner walls + end caps).
+# Annular sector with a domed (pillow) top, vertical walls and end caps.
+# The dome is 0 at every edge, so the top stays continuous with the walls.
 func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var top := h * 0.5
 	var bot := -h * 0.5
+	# domed top face (radial x arc grid)
+	for jr in RADIAL_STEPS:
+		var r0: float = lerp(ri, ro, float(jr) / RADIAL_STEPS)
+		var r1: float = lerp(ri, ro, float(jr + 1) / RADIAL_STEPS)
+		for ja in ARC_STEPS:
+			var aa0: float = lerp(a0, a1, float(ja) / ARC_STEPS)
+			var aa1: float = lerp(a0, a1, float(ja + 1) / ARC_STEPS)
+			var p00 := _dome_pt(aa0, r0, a0, a1, ri, ro, top)
+			var p10 := _dome_pt(aa1, r0, a0, a1, ri, ro, top)
+			var p11 := _dome_pt(aa1, r1, a0, a1, ri, ro, top)
+			var p01 := _dome_pt(aa0, r1, a0, a1, ri, ro, top)
+			var n := (p10 - p00).cross(p01 - p00).normalized()
+			if n.y < 0.0:
+				n = -n
+			_quad(st, p00, p10, p11, p01, n)
+	# walls + caps
 	for j in ARC_STEPS:
-		var t0 := float(j) / ARC_STEPS
-		var t1 := float(j + 1) / ARC_STEPS
-		var b0: float = lerp(a0, a1, t0)
-		var b1: float = lerp(a0, a1, t1)
-		# top face
-		_quad(st,
-			_p(b0, ri, top), _p(b0, ro, top), _p(b1, ro, top), _p(b1, ri, top),
-			Vector3.UP)
+		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
+		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
+		var nrm := (Vector3(cos(b0), 0, sin(b0)) + Vector3(cos(b1), 0, sin(b1))).normalized()
 		# outer wall
-		var no0 := Vector3(cos(b0), 0, sin(b0))
-		_quad(st,
-			_p(b0, ro, bot), _p(b1, ro, bot), _p(b1, ro, top), _p(b0, ro, top),
-			no0)
+		_quad(st, _p(b0, ro, bot), _p(b1, ro, bot), _p(b1, ro, top), _p(b0, ro, top), nrm)
 		# inner wall
-		_quad(st,
-			_p(b0, ri, top), _p(b1, ri, top), _p(b1, ri, bot), _p(b0, ri, bot),
-			-no0)
+		_quad(st, _p(b0, ri, top), _p(b1, ri, top), _p(b1, ri, bot), _p(b0, ri, bot), -nrm)
 	# end caps
 	var tan0 := Vector3(-sin(a0), 0, cos(a0))
 	_quad(st, _p(a0, ri, bot), _p(a0, ro, bot), _p(a0, ro, top), _p(a0, ri, top), -tan0)
@@ -220,6 +240,15 @@ func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float) -> Array
 
 func _p(angle: float, r: float, y: float) -> Vector3:
 	return Vector3(cos(angle) * r, y, sin(angle) * r)
+
+# A point on the domed top. bump peaks at the segment center and is 0 on all
+# four edges, so walls/caps stay flush at y = top.
+func _dome_pt(angle: float, r: float, a0: float, a1: float,
+		ri: float, ro: float, top: float) -> Vector3:
+	var tr := (r - ri) / (ro - ri)
+	var ta := (angle - a0) / (a1 - a0)
+	var bump := sin(PI * tr) * sin(PI * ta)
+	return Vector3(cos(angle) * r, top + DOME * bump, sin(angle) * r)
 
 func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3) -> void:
 	for v in [a, b, c]:
