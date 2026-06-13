@@ -1,82 +1,413 @@
 extends Control
 
+# Premium main menu: shader-driven navy->indigo background (vignette + radial
+# glow + soft blobs, gently breathing), a slowly rotating orbit ring carrying
+# five pulsing colored orbs, a glowing SIMON logo, and three dark navy-glass pill
+# buttons with hover / press / float micro-animations. Everything is built from
+# Godot nodes + shaders + tweens (no static images).
+
 var game_manager: Node
 
-const BG_TOP := Color(0.04, 0.04, 0.18)
-const BG_BOT := Color(0.08, 0.03, 0.25)
 const GOLD := Color(1.0, 0.85, 0.2)
-const BUTTON_COLORS := [Color(0.9,0.15,0.15), Color(0.15,0.8,0.15), Color(0.15,0.35,0.95), Color(0.95,0.85,0.1), Color(0.95,0.5,0.1), Color(0.95,0.3,0.7)]
 
-var _deco_angles: Array[float] = []
-var _deco_speeds: Array[float] = []
+# Orbit orb colors - a soft reference to the Simon colors (premium, not neon).
+const ORB_COLORS := [
+	Color(1.00, 0.82, 0.29),  # yellow
+	Color(0.90, 0.28, 0.30),  # red
+	Color(0.55, 0.36, 0.96),  # purple
+	Color(0.18, 0.78, 0.39),  # green
+	Color(0.23, 0.51, 0.96),  # blue
+]
+
+const BTN_W := 360.0
+const BTN_H := 74.0
+const BTN_GAP := 22.0
+const ICON_BLUE := Color(0.23, 0.51, 0.96)
+const ICON_GREEN := Color(0.18, 0.78, 0.39)
+const ICON_PURPLE := Color(0.55, 0.36, 0.96)
+
+const BG_SHADER := "
+shader_type canvas_item;
+uniform float aspect = 0.5;
+void fragment() {
+	vec2 uv = UV;
+	// deep space gradient: #04081E -> #071447 -> #120E3D (never black/gray)
+	vec3 top = vec3(0.016, 0.031, 0.118);
+	vec3 mid = vec3(0.027, 0.078, 0.278);
+	vec3 bot = vec3(0.071, 0.055, 0.239);
+	vec3 col = uv.y < 0.5 ? mix(top, mid, uv.y / 0.5) : mix(mid, bot, (uv.y - 0.5) / 0.5);
+
+	vec2 p = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+
+	// large, very-low-opacity abstract blobs for depth (dark blue / purple)
+	float blob = smoothstep(0.42, 0.0, length(p - vec2(-0.34, -0.22)));
+	blob += smoothstep(0.50, 0.0, length(p - vec2(0.38, 0.06)));
+	blob += smoothstep(0.55, 0.0, length(p - vec2(-0.08, 0.40)));
+	col += vec3(0.10, 0.09, 0.26) * blob * 0.10;
+
+	// subtle blue ambient lighting (broad, upper-center)
+	col += vec3(0.06, 0.12, 0.30) * smoothstep(1.0, 0.0, length(p - vec2(0.0, -0.1))) * 0.18;
+
+	// soft radial glow behind the logo, slowly breathing
+	float breathe = 0.85 + 0.15 * sin(TIME * 0.6);
+	float g = smoothstep(0.6, 0.0, length(p - vec2(0.0, -0.16)));
+	col += vec3(0.16, 0.22, 0.55) * g * 0.34 * breathe;
+
+	// slight vignette around the edges
+	col *= mix(0.62, 1.0, smoothstep(1.15, 0.30, length(p)));
+	// very soft purple lighting in the corners (added over the vignette)
+	col += vec3(0.16, 0.09, 0.30) * smoothstep(0.62, 1.15, length(p)) * 0.14;
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# Dark navy-glass button face (gradient + top highlight + blue rim + inner glow +
+# soft drop shadow), drawn on a ColorRect padded out so the shadow has room.
+const BTN_PAD := 20.0
+const BTN_SHADER := "
+shader_type canvas_item;
+uniform vec2 rect_size = vec2(400.0, 114.0);
+uniform float pad = 20.0;
+uniform float radius = 34.0;
+uniform vec3 top_col = vec3(0.118, 0.153, 0.369);
+uniform vec3 bot_col = vec3(0.078, 0.102, 0.259);
+float sdf_round_box(vec2 pp, vec2 b, float r) {
+	vec2 q = abs(pp) - b + vec2(r);
+	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+void fragment() {
+	vec2 px = UV * rect_size;
+	vec2 p = px - rect_size * 0.5;
+	vec2 hb = (rect_size - vec2(pad * 2.0)) * 0.5;   // visual half-size
+	float d = sdf_round_box(p, hb, radius);
+	float body = smoothstep(1.0, -1.0, d);           // 1 inside, AA edge
+
+	// soft drop shadow below the panel
+	float sd = sdf_round_box(p - vec2(0.0, 7.0), hb, radius);
+	float shadow = smoothstep(pad, 0.0, sd) * 0.45;
+
+	float ty = clamp((px.y - pad) / (rect_size.y - pad * 2.0), 0.0, 1.0);
+	vec3 base = mix(top_col, bot_col, ty);                       // subtle gradient
+	base += vec3(0.55, 0.65, 0.95) * smoothstep(0.16, 0.0, ty) * 0.10;  // top highlight
+	base += vec3(0.35, 0.55, 1.0) * smoothstep(-7.0, -0.5, d) * 0.16;   // blue rim light
+	base += vec3(0.20, 0.35, 0.80) * smoothstep(95.0, 0.0, length(p)) * 0.05;  // inner glow
+
+	float a = max(shadow, body);
+	vec3 rgb = mix(vec3(0.0, 0.01, 0.04), base, body);
+	COLOR = vec4(rgb, a);
+}
+"
+
+var _bg_mat: ShaderMaterial
+var _orbit: Node2D
+var _ring_glow: Line2D
+var _ring_line: Line2D
+var _orbs: Array[Node2D] = []
+var _orb_tex: Texture2D
+var _logo_box: Control
+var _btn_wrappers: Array[Control] = []
+var _btn_face_mat: ShaderMaterial
 var _signing_in := false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for i in 6:
-		_deco_angles.append(i * TAU / 6.0)
-		_deco_speeds.append(0.12 + i * 0.03)
 	FirebaseManager.signed_in.connect(_on_signed_in)
 	FirebaseManager.sign_in_failed.connect(_on_sign_in_failed)
 	FirebaseManager.signed_out.connect(_on_signed_out)
-	_build_ui()
+
+	_orb_tex = _make_radial_texture()
+	_build_background()
+	_build_orbit()
+	_build_logo()
+	_build_buttons()
+	_build_account_corner()
+
+	_layout()
+	get_viewport().size_changed.connect(_layout)
+	_start_animations()
 	AudioManager.play_bg_music()
 
-func _process(dt: float) -> void:
-	for i in _deco_angles.size():
-		_deco_angles[i] += _deco_speeds[i] * dt
-	queue_redraw()
+# ---------------- background ----------------
 
-func _draw() -> void:
-	var sz := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, sz), BG_TOP)
-	for y in range(0, int(sz.y), 4):
-		var t := float(y) / sz.y
-		var c := BG_TOP.lerp(BG_BOT, t)
-		draw_line(Vector2(0, y), Vector2(sz.x, y), c, 4.0)
-	var cx := sz.x * 0.5
-	var cy := sz.y * 0.5
-	var orb_r := minf(cx, cy) * 0.72
-	for i in 6:
-		var a := _deco_angles[i]
-		var pos := Vector2(cx + cos(a) * orb_r, cy + sin(a) * orb_r)
-		var col: Color = BUTTON_COLORS[i]
-		draw_circle(pos, 28.0, col * Color(1,1,1,0.18))
-		draw_circle(pos, 18.0, col * Color(1,1,1,0.35))
-	draw_arc(Vector2(cx, cy), orb_r, 0, TAU, 64, Color(1,1,1,0.06), 2.0)
+func _build_background() -> void:
+	var bg := ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sh := Shader.new()
+	sh.code = BG_SHADER
+	_bg_mat = ShaderMaterial.new()
+	_bg_mat.shader = sh
+	bg.material = _bg_mat
+	add_child(bg)
 
-func _build_ui() -> void:
-	var sz := get_viewport_rect().size
-	var cx := sz.x * 0.5
+# ---------------- orbit + orbs ----------------
 
-	# Title
+func _build_orbit() -> void:
+	# A single parent (OrbitContainer): the ring and all orbs are children, so
+	# rotating it spins the whole system together. The orbs are radially
+	# symmetric, so they keep facing the viewer as the container turns.
+	_orbit = Node2D.new()
+	add_child(_orbit)
+
+	_ring_glow = _make_ring(7.0, Color(0.45, 0.42, 1.0, 0.08))  # soft blue-purple bloom
+	_orbit.add_child(_ring_glow)
+	_ring_line = _make_ring(2.0, Color(0.62, 0.60, 1.0, 0.25))  # thin blue+purple line
+	_orbit.add_child(_ring_line)
+
+	_orbs.clear()
+	for i in ORB_COLORS.size():
+		var orb := _make_orb(ORB_COLORS[i])
+		_orbit.add_child(orb)
+		_orbs.append(orb)
+
+func _make_ring(w: float, col: Color) -> Line2D:
+	var l := Line2D.new()
+	l.width = w
+	l.default_color = col
+	l.antialiased = true
+	l.joint_mode = Line2D.LINE_JOINT_ROUND
+	return l
+
+# An orb = a soft additive halo + a brighter core, both from one radial texture.
+func _make_orb(col: Color) -> Node2D:
+	var orb := Node2D.new()
+
+	var halo := Sprite2D.new()
+	halo.texture = _orb_tex
+	halo.modulate = Color(col.r, col.g, col.b, 0.45)
+	halo.scale = Vector2.ONE * (72.0 / 128.0)
+	var add_mat := CanvasItemMaterial.new()
+	add_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	halo.material = add_mat
+	orb.add_child(halo)
+
+	var core := Sprite2D.new()
+	core.texture = _orb_tex
+	core.modulate = col.lightened(0.25)
+	core.scale = Vector2.ONE * (26.0 / 128.0)
+	orb.add_child(core)
+	return orb
+
+# White radial gradient (bright center -> transparent edge) for orbs.
+func _make_radial_texture() -> Texture2D:
+	var s := 128
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	var c := Vector2(s, s) * 0.5
+	for y in s:
+		for x in s:
+			var d := Vector2(x, y).distance_to(c) / (s * 0.5)
+			var a := pow(clampf(1.0 - d, 0.0, 1.0), 2.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a))
+	return ImageTexture.create_from_image(img)
+
+# ---------------- logo ----------------
+
+func _build_logo() -> void:
+	_logo_box = Control.new()
+	_logo_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_logo_box.custom_minimum_size = Vector2(520, 150)
+	_logo_box.size = Vector2(520, 150)
+	add_child(_logo_box)
+
 	var title := Label.new()
 	title.text = "SIMON"
 	title.add_theme_font_size_override("font_size", 96)
-	title.add_theme_color_override("font_color", GOLD)
-	title.add_theme_color_override("font_shadow_color", Color(0,0,0,0.6))
-	title.add_theme_constant_override("shadow_offset_x", 4)
-	title.add_theme_constant_override("shadow_offset_y", 4)
-	title.position = Vector2(cx - 180, sz.y * 0.08)
-	title.size = Vector2(360, 120)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", Color(0.0, 0.02, 0.10, 0.55))
+	title.add_theme_constant_override("shadow_offset_x", 0)
+	title.add_theme_constant_override("shadow_offset_y", 6)
+	title.add_theme_constant_override("shadow_outline_size", 10)   # soft glow
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(title)
+	title.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_logo_box.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "Memory Challenge"
-	sub.add_theme_font_size_override("font_size", 22)
-	sub.add_theme_color_override("font_color", Color(0.7, 0.7, 1.0))
-	sub.position = Vector2(cx - 160, sz.y * 0.23)
-	sub.size = Vector2(320, 40)
+	sub.text = "M E M O R Y   C H A L L E N G E"
+	sub.add_theme_font_size_override("font_size", 20)
+	sub.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.85))
+	sub.add_theme_color_override("font_shadow_color", Color(0.0, 0.02, 0.10, 0.4))
+	sub.add_theme_constant_override("shadow_offset_y", 2)
+	sub.add_theme_constant_override("shadow_outline_size", 3)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(sub)
+	sub.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sub.offset_top = 108
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_logo_box.add_child(sub)
 
-	_add_btn("START GAME", Vector2(cx - 160, sz.y * 0.40), Color(0.15,0.6,0.95), _on_start)
-	_add_btn("LEADERBOARDS", Vector2(cx - 160, sz.y * 0.55), Color(0.2,0.5,0.35), _on_leaderboards)
-	_add_btn("HOW TO PLAY", Vector2(cx - 160, sz.y * 0.70), Color(0.25,0.25,0.55), _on_how)
+# ---------------- buttons ----------------
 
-	_build_account_corner()
+func _build_buttons() -> void:
+	# Shared dark-glass face material (all pills are identical size/colors).
+	var sh := Shader.new()
+	sh.code = BTN_SHADER
+	_btn_face_mat = ShaderMaterial.new()
+	_btn_face_mat.shader = sh
+	_btn_face_mat.set_shader_parameter("rect_size", Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0))
+	_btn_face_mat.set_shader_parameter("pad", BTN_PAD)
+	_btn_face_mat.set_shader_parameter("radius", 34.0)
+	_btn_face_mat.set_shader_parameter("top_col", Vector3(0.118, 0.153, 0.369))  # #1E275E
+	_btn_face_mat.set_shader_parameter("bot_col", Vector3(0.078, 0.102, 0.259))  # #141A42
+
+	_btn_wrappers.clear()
+	_btn_wrappers.append(_make_menu_button("START GAME", ICON_BLUE, _on_start))
+	_btn_wrappers.append(_make_menu_button("LEADERBOARDS", ICON_GREEN, _on_leaderboards))
+	_btn_wrappers.append(_make_menu_button("HOW TO PLAY", ICON_PURPLE, _on_how))
+
+# A dark navy-glass pill (shader face: gradient + top highlight + blue rim + inner
+# glow + soft shadow), a glowing colored icon on the left, light label center-left,
+# and a chevron on the right.
+# Wrapped in a Control so layout (wrapper.position) and animation (button.scale /
+# position) never fight each other.
+func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
+	var wrap := Control.new()
+	wrap.custom_minimum_size = Vector2(BTN_W, BTN_H)
+	wrap.size = Vector2(BTN_W, BTN_H)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(wrap)
+
+	var btn := Button.new()
+	btn.size = Vector2(BTN_W, BTN_H)
+	btn.pivot_offset = Vector2(BTN_W, BTN_H) * 0.5      # scale about the center
+	btn.focus_mode = Control.FOCUS_NONE
+	# invisible styleboxes - the dark-glass look comes entirely from the shader face
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		btn.add_theme_stylebox_override(st, empty)
+	wrap.add_child(btn)
+
+	# dark navy-glass face (shader). Padded out so the shadow has room; the visual
+	# pill is inset by BTN_PAD and stays centered under scaling.
+	var face := ColorRect.new()
+	face.material = _btn_face_mat
+	face.position = Vector2(-BTN_PAD, -BTN_PAD)
+	face.size = Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0)
+	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(face)
+
+	# colored circular icon - brighter than the button, glowing from within
+	var icon := Panel.new()
+	var d := 44.0
+	icon.size = Vector2(d, d)
+	icon.position = Vector2(18, (BTN_H - d) * 0.5)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ic := StyleBoxFlat.new()
+	ic.bg_color = icon_col.lightened(0.12)
+	ic.set_corner_radius_all(int(d * 0.5))
+	ic.border_color = icon_col.lightened(0.45)        # bright inner-lit rim
+	ic.set_border_width_all(2)
+	ic.shadow_color = Color(icon_col.r, icon_col.g, icon_col.b, 0.6)
+	ic.shadow_size = 13                               # soft colored bloom
+	icon.add_theme_stylebox_override("panel", ic)
+	btn.add_child(icon)
+
+	var lbl := Label.new()
+	lbl.text = txt
+	lbl.add_theme_font_size_override("font_size", 23)
+	lbl.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
+	lbl.position = Vector2(18 + d + 16, 0)
+	lbl.size = Vector2(BTN_W - (18 + d + 16) - 40, BTN_H)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(lbl)
+
+	var arrow := Label.new()
+	arrow.text = "›"                               # ›
+	arrow.add_theme_font_size_override("font_size", 32)
+	arrow.add_theme_color_override("font_color", Color(0.55, 0.66, 0.92))
+	arrow.position = Vector2(BTN_W - 40, 0)
+	arrow.size = Vector2(30, BTN_H)
+	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(arrow)
+
+	btn.mouse_entered.connect(_on_btn_hover.bind(btn, true))
+	btn.mouse_exited.connect(_on_btn_hover.bind(btn, false))
+	btn.button_down.connect(_on_btn_down.bind(btn))
+	btn.button_up.connect(_on_btn_up.bind(btn))
+	btn.pressed.connect(cb)
+	return wrap
+
+func _on_btn_hover(btn: Button, entered: bool) -> void:
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(btn, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(btn, "modulate", Color(1.10, 1.10, 1.10) if entered else Color.WHITE, 0.16)
+
+func _on_btn_down(btn: Button) -> void:
+	create_tween().tween_property(btn, "scale", Vector2.ONE * 0.98, 0.10) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+func _on_btn_up(btn: Button) -> void:
+	create_tween().tween_property(btn, "scale", Vector2.ONE, 0.20) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)   # quick bounce back
+
+# ---------------- layout ----------------
+
+func _layout() -> void:
+	var sz := get_viewport_rect().size
+	var cx := sz.x * 0.5
+	var cy := sz.y * 0.5
+	if _bg_mat:
+		_bg_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
+
+	# orbit: centered, radius ~40% of screen width
+	var r := sz.x * 0.40
+	if _orbit:
+		_orbit.position = Vector2(cx, cy)
+		_rebuild_ring(r)
+		for i in _orbs.size():
+			var a: float = -PI * 0.5 + i * TAU / _orbs.size()
+			_orbs[i].position = Vector2(cos(a), sin(a)) * r
+
+	# logo: focal point, upper-center
+	if _logo_box:
+		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.20)
+
+	# buttons: stacked, centered, lower portion
+	var total := _btn_wrappers.size() * BTN_H + (_btn_wrappers.size() - 1) * BTN_GAP
+	var start_y := sz.y * 0.60 - total * 0.5
+	for i in _btn_wrappers.size():
+		_btn_wrappers[i].position = Vector2(cx - BTN_W * 0.5, start_y + i * (BTN_H + BTN_GAP))
+
+func _rebuild_ring(r: float) -> void:
+	var pts := PackedVector2Array()
+	var n := 72
+	for i in n + 1:
+		var a: float = TAU * float(i) / n
+		pts.append(Vector2(cos(a), sin(a)) * r)
+	_ring_glow.points = pts
+	_ring_line.points = pts
+
+# ---------------- animations ----------------
+
+func _start_animations() -> void:
+	# orbit: one full revolution every 25s, perfectly linear (no easing)
+	var rot := create_tween().set_loops()
+	rot.tween_property(_orbit, "rotation", TAU, 25.0).from(0.0).set_trans(Tween.TRANS_LINEAR)
+
+	# orbs: subtle ~5% pulse, ~2s, slightly different timing each
+	for i in _orbs.size():
+		var dur := 0.9 + i * 0.06
+		var pulse := create_tween().set_loops()
+		pulse.tween_property(_orbs[i], "scale", Vector2.ONE * 1.05, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		pulse.tween_property(_orbs[i], "scale", Vector2.ONE, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	# buttons: gentle vertical float of 1-2px, each slightly out of phase
+	for i in _btn_wrappers.size():
+		var btn := _btn_wrappers[i].get_child(0)
+		var dur := 2.4 + i * 0.4
+		var fl := create_tween().set_loops()
+		fl.tween_property(btn, "position:y", -2.0, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		fl.tween_property(btn, "position:y", 0.0, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+# ---------------- account corner ----------------
 
 func _build_account_corner() -> void:
 	var sz := get_viewport_rect().size
@@ -119,23 +450,10 @@ func _add_corner_btn(txt: String, pos: Vector2, size: Vector2, col: Color, cb: C
 	btn.pressed.connect(cb)
 	add_child(btn)
 
-func _add_btn(txt: String, pos: Vector2, col: Color, cb: Callable) -> void:
-	var btn := Button.new()
-	btn.text = txt
-	btn.position = pos
-	btn.size = Vector2(320, 64)
-	btn.add_theme_font_size_override("font_size", 24)
-	_style(btn, col)
-	btn.pressed.connect(cb)
-	add_child(btn)
-
 func _style(btn: Button, col: Color) -> void:
 	var sn := StyleBoxFlat.new()
 	sn.bg_color = col
-	sn.corner_radius_top_left = 14
-	sn.corner_radius_top_right = 14
-	sn.corner_radius_bottom_left = 14
-	sn.corner_radius_bottom_right = 14
+	sn.set_corner_radius_all(14)
 	btn.add_theme_stylebox_override("normal", sn)
 	var sh := sn.duplicate() as StyleBoxFlat
 	sh.bg_color = col.lightened(0.2)
