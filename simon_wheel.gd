@@ -43,7 +43,6 @@ const BTN_RAISE := 0.05      # how far the button sits above the frame plate
 const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
 # White top-edge highlight, per edge (currently tuned on the orange button).
 const FOCUS_COLOR := Color(0.95, 0.5, 0.1)  # orange
-const EDGE_BAND := 0.2       # width (as a fraction) of the glowing edge band
 const GLOW_OUTER := 0.85     # long outer edge - strong
 const GLOW_INNER := 0.1      # short inner edge (toward center) - very low
 const GLOW_SIDE := 0.45      # the two radial side edges - medium
@@ -232,19 +231,15 @@ func _rebuild() -> void:
 		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
 		var ri_b := INNER_R + BTN_RAD_MARGIN
 		var ro_b := OUTER_R - BTN_RAD_MARGIN
-		var mesh: ArrayMesh
-		var mat: StandardMaterial3D
-		if is_focus:
-			# orange: add the per-edge white top-edge highlight
-			mesh = _sector_mesh_glow(ba0, ba1, ri_b, ro_b, SEG_H * 1.6, DOME * 2.4, col)
-			mat = _seg_glow_material(col)
-		else:
-			mesh = _sector_mesh(ba0, ba1, ri_b, ro_b, SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
-			mat = _seg_material(col, true)
+		var mesh := _sector_mesh(ba0, ba1, ri_b, ro_b, SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
+		var mat := _seg_material(col, true)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.position.y = BASE_H * 0.5 + BTN_RAISE
 		mi.material_override = mat
+		if is_focus:
+			# orange: glowing white highlight ribbons along the top edges
+			mi.add_child(_edge_highlight(ba0, ba1, ri_b, ro_b, SEG_H * 1.6 * 0.5, DOME * 2.4))
 		_wheel_root.add_child(mi)
 		_segments.append(mi)
 		_seg_mats.append(mat)
@@ -282,11 +277,16 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	m.emission_energy_multiplier = EMIT_OFF
 	return m
 
-# Material for the edge-glow buttons: the real color lives in the vertex
-# colors (so the rim can brighten toward white), albedo stays white.
-func _seg_glow_material(base: Color) -> StandardMaterial3D:
-	var m := _seg_material(Color.WHITE, true)
-	m.emission = base
+# Unshaded additive material for the glowing white edge ribbons. Per-vertex
+# alpha (white rgb) controls glow strength, so it emits regardless of lighting.
+func _edge_glow_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.vertex_color_use_as_albedo = true
+	m.albedo_color = Color.WHITE
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
 func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
@@ -410,59 +410,60 @@ func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float,
 	_quad(st, _p(a1, ri, top), _p(a1, ro, top), _p(a1, ro, bot), _p(a1, ri, bot), tan1, side)
 	return st.commit()
 
-# Same domed sector, but with a white top-edge highlight baked into the
-# vertex colors. The real (base) color lives in the vertices; the side walls
-# are darkened; the top rim brightens toward white per edge.
-func _sector_mesh_glow(a0: float, a1: float, ri: float, ro: float, h: float,
-		dome: float, base: Color) -> ArrayMesh:
+# Glowing white highlight ribbons hugging the four top edges of a button.
+# Each ribbon is brightest right at the edge (alpha = per-edge intensity) and
+# fades to transparent inward. Built in the button's local space, lifted just
+# above the domed top. Returns a MeshInstance3D to parent to the button.
+func _edge_highlight(a0: float, a1: float, ri: float, ro: float,
+		top: float, dome: float) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var top := h * 0.5
-	var bot := -h * 0.5
-	var side := base.darkened(1.0 - SIDE_DARK)
-	# domed top face, per-vertex edge-glow color
-	for jr in RADIAL_STEPS:
-		var t0 := float(jr) / RADIAL_STEPS
-		var t1 := float(jr + 1) / RADIAL_STEPS
-		var r0: float = lerp(ri, ro, t0)
-		var r1: float = lerp(ri, ro, t1)
-		for ja in ARC_STEPS:
-			var s0 := float(ja) / ARC_STEPS
-			var s1 := float(ja + 1) / ARC_STEPS
-			var aa0: float = lerp(a0, a1, s0)
-			var aa1: float = lerp(a0, a1, s1)
-			var p00 := _dome_pt(aa0, r0, a0, a1, ri, ro, top, dome)
-			var p10 := _dome_pt(aa1, r0, a0, a1, ri, ro, top, dome)
-			var p11 := _dome_pt(aa1, r1, a0, a1, ri, ro, top, dome)
-			var p01 := _dome_pt(aa0, r1, a0, a1, ri, ro, top, dome)
-			var n := (p10 - p00).cross(p01 - p00).normalized()
-			if n.y < 0.0:
-				n = -n
-			_quad_c(st, p00, p10, p11, p01, n,
-				_edge_glow_color(base, t0, s0), _edge_glow_color(base, t0, s1),
-				_edge_glow_color(base, t1, s1), _edge_glow_color(base, t1, s0))
-	# walls + caps (darker)
+	var n := Vector3.UP
+	var rim_w := 0.07                 # ribbon width (radial)
+	var rim_a := deg_to_rad(4.5)      # ribbon width (angular, for side edges)
+	var lift := 0.006
+	var co := Color(1, 1, 1, GLOW_OUTER)
+	var ci := Color(1, 1, 1, GLOW_INNER)
+	var cs := Color(1, 1, 1, GLOW_SIDE)
+	var clear := Color(1, 1, 1, 0.0)
+	# outer arc edge (strong)
 	for j in ARC_STEPS:
 		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
 		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
-		var nrm := (Vector3(cos(b0), 0, sin(b0)) + Vector3(cos(b1), 0, sin(b1))).normalized()
-		_quad(st, _p(b0, ro, bot), _p(b1, ro, bot), _p(b1, ro, top), _p(b0, ro, top), nrm, side)
-		_quad(st, _p(b0, ri, top), _p(b1, ri, top), _p(b1, ri, bot), _p(b0, ri, bot), -nrm, side)
-	var tan0 := Vector3(-sin(a0), 0, cos(a0))
-	_quad(st, _p(a0, ri, bot), _p(a0, ro, bot), _p(a0, ro, top), _p(a0, ri, top), -tan0, side)
-	var tan1 := Vector3(-sin(a1), 0, cos(a1))
-	_quad(st, _p(a1, ri, top), _p(a1, ro, top), _p(a1, ro, bot), _p(a1, ri, bot), tan1, side)
-	return st.commit()
+		_quad_c(st, _rim_pt(b0, ro, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b1, ro, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b1, ro - rim_w, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b0, ro - rim_w, a0, a1, ri, ro, top, dome, lift), n, co, co, clear, clear)
+	# inner arc edge (faint)
+	for j in ARC_STEPS:
+		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
+		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
+		_quad_c(st, _rim_pt(b0, ri, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b1, ri, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b1, ri + rim_w, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(b0, ri + rim_w, a0, a1, ri, ro, top, dome, lift), n, ci, ci, clear, clear)
+	# two radial side edges (medium)
+	for j in RADIAL_STEPS:
+		var r0: float = lerp(ri, ro, float(j) / RADIAL_STEPS)
+		var r1: float = lerp(ri, ro, float(j + 1) / RADIAL_STEPS)
+		_quad_c(st, _rim_pt(a0, r0, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a0, r1, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a0 + rim_a, r1, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a0 + rim_a, r0, a0, a1, ri, ro, top, dome, lift), n, cs, cs, clear, clear)
+		_quad_c(st, _rim_pt(a1, r0, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a1, r1, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a1 - rim_a, r1, a0, a1, ri, ro, top, dome, lift),
+			_rim_pt(a1 - rim_a, r0, a0, a1, ri, ro, top, dome, lift), n, cs, cs, clear, clear)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = _edge_glow_mat()
+	return mi
 
-# Vertex color for a top-face point: base color brightened toward white near
-# the edges. tr = 0 inner .. 1 outer; ta = 0 .. 1 across the arc.
-func _edge_glow_color(base: Color, tr: float, ta: float) -> Color:
-	var outer_b := clampf((tr - (1.0 - EDGE_BAND)) / EDGE_BAND, 0.0, 1.0) * GLOW_OUTER
-	var inner_b := clampf((EDGE_BAND - tr) / EDGE_BAND, 0.0, 1.0) * GLOW_INNER
-	var sa := minf(ta, 1.0 - ta)
-	var side_b := clampf((EDGE_BAND - sa) / EDGE_BAND, 0.0, 1.0) * GLOW_SIDE
-	var g := maxf(maxf(outer_b, inner_b), side_b)
-	return base.lerp(Color.WHITE, g)
+func _rim_pt(angle: float, r: float, a0: float, a1: float, ri: float, ro: float,
+		top: float, dome: float, lift: float) -> Vector3:
+	var p := _dome_pt(angle, r, a0, a1, ri, ro, top, dome)
+	p.y += lift
+	return p
 
 # Quad with a distinct color at each of the four corners.
 func _quad_c(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3,
