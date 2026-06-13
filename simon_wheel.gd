@@ -34,7 +34,12 @@ const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
 const HALO_SIZE := 2.0       # size of the soft glow billboard over a segment
-const HALO_ALPHA := 0.85     # peak glow strength when fully lit
+const HALO_ALPHA := 0.5      # peak glow strength when fully lit (real bloom adds more)
+# Each colored button is inset inside its slot, leaving a dark metal frame
+# border around it, and raised so it sits proud of the frame.
+const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
+const BTN_RAD_MARGIN := 0.05 # radial inset
+const BTN_RAISE := 0.05      # how far the button sits above the frame plate
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
@@ -79,13 +84,25 @@ func _build_shell() -> void:
 
 	# --- environment ---
 	var env := Environment.new()
-	env.background_mode = Environment.BG_CLEAR_COLOR
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.5, 0.52, 0.62)
-	env.ambient_light_energy = 0.16    # low ambient = dark, dramatic contrast
-	env.glow_enabled = true            # bonus on renderers that support it
-	env.glow_intensity = 0.8
-	env.glow_bloom = 0.2
+	env.background_mode = Environment.BG_CLEAR_COLOR   # transparent for compositing
+	# A studio-ish sky drives image-based reflections so metal reads as metal.
+	# It is NOT drawn (background stays transparent) - only used for IBL.
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.55, 0.62, 0.85)
+	sky_mat.sky_horizon_color = Color(0.16, 0.18, 0.28)
+	sky_mat.ground_horizon_color = Color(0.12, 0.12, 0.16)
+	sky_mat.ground_bottom_color = Color(0.02, 0.02, 0.04)
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	env.sky = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.45
+	# real bloom now that we are on the Mobile (Vulkan) renderer
+	env.glow_enabled = true
+	env.glow_intensity = 1.0
+	env.glow_bloom = 0.25
+	env.glow_hdr_threshold = 1.0
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 	var we := WorldEnvironment.new()
 	we.environment = env
 	_vp.add_child(we)
@@ -155,26 +172,28 @@ func _rebuild() -> void:
 	if _glow_tex == null:
 		_glow_tex = _make_glow_tex()
 
-	# near-black glossy base shows through the gaps between buttons
-	var base := _disc(BASE_R, BASE_H, Color(0.02, 0.02, 0.03), 0.3)
-	(base.material_override as StandardMaterial3D).metallic = 0.4
+	# dark metallic plate the buttons sit in (shows as the frame border)
+	var base := _disc(BASE_R, BASE_H, Color(0.035, 0.035, 0.045), 0.35)
+	(base.material_override as StandardMaterial3D).metallic = 0.85
 	_wheel_root.add_child(base)
 
-	# raised glossy rounded bezel framing the buttons
+	# main rounded metallic bezel rim
 	var bezel := MeshInstance3D.new()
-	bezel.mesh = _ring_mesh(1.0, 1.21, 0.24, 0.13)
+	bezel.mesh = _ring_mesh(1.0, 1.18, 0.24, 0.14)
 	bezel.position.y = 0.06
-	var bm := StandardMaterial3D.new()
-	bm.albedo_color = Color(0.045, 0.045, 0.06)
-	bm.metallic = 0.55
-	bm.roughness = 0.22
-	bm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	bezel.material_override = bm
+	bezel.material_override = _metal_mat(Color(0.09, 0.09, 0.11), 0.9, 0.26)
 	_wheel_root.add_child(bezel)
 
+	# outer stepped rim (thin, brighter metal) for a machined-edge detail
+	var rim := MeshInstance3D.new()
+	rim.mesh = _ring_mesh(1.17, 1.27, 0.16, 0.05)
+	rim.position.y = 0.02
+	rim.material_override = _metal_mat(Color(0.13, 0.13, 0.16), 0.95, 0.2)
+	_wheel_root.add_child(rim)
+
 	# center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.03, 0.03, 0.07), 0.35)
-	(hub.material_override as StandardMaterial3D).metallic = 0.5
+	var hub := _disc(HUB_R, HUB_H, Color(0.03, 0.03, 0.06), 0.3)
+	(hub.material_override as StandardMaterial3D).metallic = 0.85
 	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
 
@@ -184,10 +203,19 @@ func _rebuild() -> void:
 		var a0 := _start_angle + i * step + gap * 0.5
 		var a1 := _start_angle + (i + 1) * step - gap * 0.5
 		var col: Color = _colors[i % _colors.size()] if not _colors.is_empty() else Color.GRAY
-		var mesh := _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
+		# dark metallic frame plate filling this slot (the button's own frame)
+		var frame := MeshInstance3D.new()
+		frame.mesh = _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
+		frame.position.y = BASE_H * 0.5
+		frame.material_override = _metal_mat(Color(0.05, 0.05, 0.065), 0.85, 0.3)
+		_wheel_root.add_child(frame)
+		# inset, raised, glossy colored button sitting inside the frame
+		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
+		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
+		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN, SEG_H)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
-		mi.position.y = BASE_H * 0.5
+		mi.position.y = BASE_H * 0.5 + BTN_RAISE
 		var mat := _seg_material(col)
 		mi.material_override = mat
 		_wheel_root.add_child(mi)
@@ -224,6 +252,14 @@ func _seg_material(col: Color) -> StandardMaterial3D:
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
+	return m
+
+func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.metallic = metal
+	m.roughness = rough
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
 func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstance3D:
@@ -383,7 +419,7 @@ func _process(dt: float) -> void:
 			hc.a = lit_amount * HALO_ALPHA
 			_halo_mats[i].albedo_color = hc
 		# press sink
-		_segments[i].position.y = BASE_H * 0.5 - _press[i] * PRESS_DROP
+		_segments[i].position.y = BASE_H * 0.5 + BTN_RAISE - _press[i] * PRESS_DROP
 
 # ---------------- hit testing ----------------
 
