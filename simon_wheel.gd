@@ -40,6 +40,8 @@ const HALO_ALPHA := 0.4      # peak glow strength when fully lit (real bloom add
 const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
 const BTN_RAD_MARGIN := 0.05 # radial inset
 const BTN_RAISE := 0.05      # how far the button sits above the frame plate
+const FOCUS_COLOR := Color(0.95, 0.5, 0.1)  # orange - the button we are tuning
+const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
@@ -218,14 +220,21 @@ func _rebuild() -> void:
 		frame.position.y = BASE_H * 0.5
 		frame.material_override = _metal_mat(Color(0.05, 0.05, 0.065), 0.85, 0.3)
 		_wheel_root.add_child(frame)
-		# inset, raised, glossy colored button sitting inside the frame
+		# inset, raised, glossy colored button sitting inside the frame.
+		# The orange button is the one we are currently tuning: extra dome +
+		# height and darker side faces for a real beveled-button feel.
+		var is_focus := col.is_equal_approx(FOCUS_COLOR)
+		var btn_h := SEG_H * 1.6 if is_focus else SEG_H
+		var btn_dome := DOME * 2.4 if is_focus else DOME
+		var btn_side := SIDE_DARK if is_focus else 1.0
 		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
 		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
-		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN, SEG_H)
+		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN,
+			btn_h, btn_dome, btn_side)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.position.y = BASE_H * 0.5 + BTN_RAISE
-		var mat := _seg_material(col)
+		var mat := _seg_material(col, is_focus)
 		mi.material_override = mat
 		_wheel_root.add_child(mi)
 		_segments.append(mi)
@@ -248,9 +257,10 @@ func _rebuild() -> void:
 		_halos.append(halo)
 		_halo_mats.append(gmat)
 
-func _seg_material(col: Color) -> StandardMaterial3D:
+func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
+	m.vertex_color_use_as_albedo = use_vcol  # lets the mesh darken side faces
 	m.metallic = 0.55                        # metallic-tinted colored surface
 	m.roughness = 0.2
 	m.specular = 0.6
@@ -346,40 +356,42 @@ func _halo_material(col: Color) -> StandardMaterial3D:
 
 # Annular sector with a domed (pillow) top, vertical walls and end caps.
 # The dome is 0 at every edge, so the top stays continuous with the walls.
-func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float) -> ArrayMesh:
+func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float,
+		dome: float = DOME, side_dark: float = 1.0) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var top := h * 0.5
 	var bot := -h * 0.5
-	# domed top face (radial x arc grid)
+	var side := Color(side_dark, side_dark, side_dark)   # darker side-wall tint
+	# domed top face (radial x arc grid) - keeps full (white) vertex color
 	for jr in RADIAL_STEPS:
 		var r0: float = lerp(ri, ro, float(jr) / RADIAL_STEPS)
 		var r1: float = lerp(ri, ro, float(jr + 1) / RADIAL_STEPS)
 		for ja in ARC_STEPS:
 			var aa0: float = lerp(a0, a1, float(ja) / ARC_STEPS)
 			var aa1: float = lerp(a0, a1, float(ja + 1) / ARC_STEPS)
-			var p00 := _dome_pt(aa0, r0, a0, a1, ri, ro, top)
-			var p10 := _dome_pt(aa1, r0, a0, a1, ri, ro, top)
-			var p11 := _dome_pt(aa1, r1, a0, a1, ri, ro, top)
-			var p01 := _dome_pt(aa0, r1, a0, a1, ri, ro, top)
+			var p00 := _dome_pt(aa0, r0, a0, a1, ri, ro, top, dome)
+			var p10 := _dome_pt(aa1, r0, a0, a1, ri, ro, top, dome)
+			var p11 := _dome_pt(aa1, r1, a0, a1, ri, ro, top, dome)
+			var p01 := _dome_pt(aa0, r1, a0, a1, ri, ro, top, dome)
 			var n := (p10 - p00).cross(p01 - p00).normalized()
 			if n.y < 0.0:
 				n = -n
 			_quad(st, p00, p10, p11, p01, n)
-	# walls + caps
+	# walls + caps - tinted darker for a 3D bevel feel
 	for j in ARC_STEPS:
 		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
 		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
 		var nrm := (Vector3(cos(b0), 0, sin(b0)) + Vector3(cos(b1), 0, sin(b1))).normalized()
 		# outer wall
-		_quad(st, _p(b0, ro, bot), _p(b1, ro, bot), _p(b1, ro, top), _p(b0, ro, top), nrm)
+		_quad(st, _p(b0, ro, bot), _p(b1, ro, bot), _p(b1, ro, top), _p(b0, ro, top), nrm, side)
 		# inner wall
-		_quad(st, _p(b0, ri, top), _p(b1, ri, top), _p(b1, ri, bot), _p(b0, ri, bot), -nrm)
+		_quad(st, _p(b0, ri, top), _p(b1, ri, top), _p(b1, ri, bot), _p(b0, ri, bot), -nrm, side)
 	# end caps
 	var tan0 := Vector3(-sin(a0), 0, cos(a0))
-	_quad(st, _p(a0, ri, bot), _p(a0, ro, bot), _p(a0, ro, top), _p(a0, ri, top), -tan0)
+	_quad(st, _p(a0, ri, bot), _p(a0, ro, bot), _p(a0, ro, top), _p(a0, ri, top), -tan0, side)
 	var tan1 := Vector3(-sin(a1), 0, cos(a1))
-	_quad(st, _p(a1, ri, top), _p(a1, ro, top), _p(a1, ro, bot), _p(a1, ri, bot), tan1)
+	_quad(st, _p(a1, ri, top), _p(a1, ro, top), _p(a1, ro, bot), _p(a1, ri, bot), tan1, side)
 	return st.commit()
 
 func _p(angle: float, r: float, y: float) -> Vector3:
@@ -388,17 +400,18 @@ func _p(angle: float, r: float, y: float) -> Vector3:
 # A point on the domed top. bump peaks at the segment center and is 0 on all
 # four edges, so walls/caps stay flush at y = top.
 func _dome_pt(angle: float, r: float, a0: float, a1: float,
-		ri: float, ro: float, top: float) -> Vector3:
+		ri: float, ro: float, top: float, dome: float = DOME) -> Vector3:
 	var tr := (r - ri) / (ro - ri)
 	var ta := (angle - a0) / (a1 - a0)
 	var bump := sin(PI * tr) * sin(PI * ta)
-	return Vector3(cos(angle) * r, top + DOME * bump, sin(angle) * r)
+	return Vector3(cos(angle) * r, top + dome * bump, sin(angle) * r)
 
-func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3) -> void:
+func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3,
+		col: Color = Color.WHITE) -> void:
 	for v in [a, b, c]:
-		st.set_normal(n); st.add_vertex(v)
+		st.set_color(col); st.set_normal(n); st.add_vertex(v)
 	for v in [a, c, d]:
-		st.set_normal(n); st.add_vertex(v)
+		st.set_color(col); st.set_normal(n); st.add_vertex(v)
 
 # ---------------- runtime ----------------
 
