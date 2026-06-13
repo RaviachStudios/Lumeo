@@ -88,8 +88,8 @@ func _build_shell() -> void:
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_cam.fov = CAM_FOV
 	_cam.position = CAM_POS
-	_cam.look_at(Vector3.ZERO, Vector3.UP)
 	_vp.add_child(_cam)
+	_cam.look_at(Vector3.ZERO, Vector3.UP)  # must be in-tree before look_at
 
 	# --- lights ---
 	var key := DirectionalLight3D.new()
