@@ -31,32 +31,25 @@ shader_type canvas_item;
 uniform float aspect = 0.5;
 void fragment() {
 	vec2 uv = UV;
-	// deep space gradient: #04081E -> #071447 -> #120E3D (never black/gray)
-	vec3 top = vec3(0.016, 0.031, 0.118);
-	vec3 mid = vec3(0.027, 0.078, 0.278);
-	vec3 bot = vec3(0.071, 0.055, 0.239);
-	vec3 col = uv.y < 0.5 ? mix(top, mid, uv.y / 0.5) : mix(mid, bot, (uv.y - 0.5) / 0.5);
+	// deep, near-black space gradient (no pure black) - dark like the reference.
+	// Built with mix() only (no ternary, which can fail to compile).
+	vec3 top = vec3(0.012, 0.020, 0.070);
+	vec3 mid = vec3(0.018, 0.035, 0.110);
+	vec3 bot = vec3(0.045, 0.030, 0.105);
+	vec3 col = mix(top, mid, clamp(uv.y / 0.5, 0.0, 1.0));
+	col = mix(col, bot, clamp((uv.y - 0.5) / 0.5, 0.0, 1.0));
+
+	// soft BLUE glow hugging the left edge, soft RED glow hugging the right edge
+	col += vec3(0.10, 0.22, 0.58) * smoothstep(0.5, 0.0, distance(uv, vec2(0.0, 0.45))) * 0.30;
+	col += vec3(0.55, 0.12, 0.22) * smoothstep(0.5, 0.0, distance(uv, vec2(1.0, 0.50))) * 0.22;
 
 	vec2 p = (uv - vec2(0.5)) * vec2(aspect, 1.0);
-
-	// large, very-low-opacity abstract blobs for depth (dark blue / purple)
-	float blob = smoothstep(0.42, 0.0, length(p - vec2(-0.34, -0.22)));
-	blob += smoothstep(0.50, 0.0, length(p - vec2(0.38, 0.06)));
-	blob += smoothstep(0.55, 0.0, length(p - vec2(-0.08, 0.40)));
-	col += vec3(0.10, 0.09, 0.26) * blob * 0.10;
-
-	// subtle blue ambient lighting (broad, upper-center)
-	col += vec3(0.06, 0.12, 0.30) * smoothstep(1.0, 0.0, length(p - vec2(0.0, -0.1))) * 0.18;
-
-	// soft radial glow behind the logo, slowly breathing
+	// very subtle radial glow behind the logo (upper-center), slowly breathing
 	float breathe = 0.85 + 0.15 * sin(TIME * 0.6);
-	float g = smoothstep(0.6, 0.0, length(p - vec2(0.0, -0.16)));
-	col += vec3(0.16, 0.22, 0.55) * g * 0.34 * breathe;
+	col += vec3(0.10, 0.16, 0.42) * smoothstep(0.5, 0.0, length(p - vec2(0.0, -0.18))) * 0.20 * breathe;
 
-	// slight vignette around the edges
-	col *= mix(0.62, 1.0, smoothstep(1.15, 0.30, length(p)));
-	// very soft purple lighting in the corners (added over the vignette)
-	col += vec3(0.16, 0.09, 0.30) * smoothstep(0.62, 1.15, length(p)) * 0.14;
+	// gentle vignette to keep the center deep
+	col *= mix(0.6, 1.0, smoothstep(1.1, 0.25, length(p)));
 	COLOR = vec4(col, 1.0);
 }
 "
@@ -134,6 +127,7 @@ func _build_background() -> void:
 	var bg := ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bg.color = Color(0.02, 0.03, 0.09)   # dark fallback if the shader ever fails (never gray)
 	var sh := Shader.new()
 	sh.code = BG_SHADER
 	_bg_mat = ShaderMaterial.new()
