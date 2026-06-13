@@ -33,6 +33,8 @@ const EMIT_ON := 4.0         # emission energy when lit
 const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
+const HALO_SIZE := 2.0       # size of the soft glow billboard over a segment
+const HALO_ALPHA := 0.85     # peak glow strength when fully lit
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
@@ -52,6 +54,9 @@ var _seg_mats: Array[StandardMaterial3D] = []
 var _emit_cur: Array[float] = []
 var _emit_tgt: Array[float] = []
 var _press: Array[float] = []
+var _halos: Array[MeshInstance3D] = []
+var _halo_mats: Array[StandardMaterial3D] = []
+var _glow_tex: Texture2D
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -76,11 +81,11 @@ func _build_shell() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_CLEAR_COLOR
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.45, 0.5, 0.7)
-	env.ambient_light_energy = 0.55
+	env.ambient_light_color = Color(0.5, 0.52, 0.62)
+	env.ambient_light_energy = 0.16    # low ambient = dark, dramatic contrast
 	env.glow_enabled = true            # bonus on renderers that support it
-	env.glow_intensity = 0.9
-	env.glow_bloom = 0.25
+	env.glow_intensity = 0.8
+	env.glow_bloom = 0.2
 	var we := WorldEnvironment.new()
 	we.environment = env
 	_vp.add_child(we)
@@ -96,13 +101,13 @@ func _build_shell() -> void:
 	# --- lights ---
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-58, -32, 0)
-	key.light_energy = 1.15
+	key.light_energy = 1.7
 	key.light_color = Color(1.0, 0.97, 0.92)
 	_vp.add_child(key)
 
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-40, 145, 0)
-	fill.light_energy = 0.45
+	fill.light_energy = 0.35
 	fill.light_color = Color(0.6, 0.7, 1.0)
 	_vp.add_child(fill)
 
@@ -110,7 +115,7 @@ func _build_shell() -> void:
 	var spec := OmniLight3D.new()
 	spec.position = Vector3(0.25, 2.4, 0.15)
 	spec.omni_range = 7.0
-	spec.light_energy = 1.1
+	spec.light_energy = 1.5
 	spec.light_specular = 1.0
 	spec.light_color = Color(1.0, 1.0, 1.0)
 	_vp.add_child(spec)
@@ -145,11 +150,32 @@ func _rebuild() -> void:
 	_emit_tgt.clear()
 	_press.clear()
 
-	# dark body disc under the buttons
-	_wheel_root.add_child(_disc(BASE_R, BASE_H, Color(0.06, 0.06, 0.09), 0.6))
+	_halos.clear()
+	_halo_mats.clear()
+	if _glow_tex == null:
+		_glow_tex = _make_glow_tex()
+
+	# near-black glossy base shows through the gaps between buttons
+	var base := _disc(BASE_R, BASE_H, Color(0.02, 0.02, 0.03), 0.3)
+	(base.material_override as StandardMaterial3D).metallic = 0.4
+	_wheel_root.add_child(base)
+
+	# raised glossy rounded bezel framing the buttons
+	var bezel := MeshInstance3D.new()
+	bezel.mesh = _ring_mesh(1.0, 1.21, 0.24, 0.13)
+	bezel.position.y = 0.06
+	var bm := StandardMaterial3D.new()
+	bm.albedo_color = Color(0.045, 0.045, 0.06)
+	bm.metallic = 0.55
+	bm.roughness = 0.22
+	bm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	bezel.material_override = bm
+	_wheel_root.add_child(bezel)
+
 	# center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.04, 0.04, 0.10), 0.5)
-	hub.position.y = 0.02
+	var hub := _disc(HUB_R, HUB_H, Color(0.03, 0.03, 0.07), 0.35)
+	(hub.material_override as StandardMaterial3D).metallic = 0.5
+	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
 
 	var step := TAU / _count
@@ -170,16 +196,31 @@ func _rebuild() -> void:
 		_emit_cur.append(EMIT_OFF)
 		_emit_tgt.append(EMIT_OFF)
 		_press.append(0.0)
+		# soft additive glow halo over this segment (blooms outward when lit)
+		var am := (a0 + a1) * 0.5
+		var rm := (INNER_R + OUTER_R) * 0.5
+		var halo := MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(HALO_SIZE, HALO_SIZE)
+		halo.mesh = q
+		halo.rotation_degrees = Vector3(-90, 0, 0)   # lie flat, facing up
+		halo.position = Vector3(cos(am) * rm, 0.34, sin(am) * rm)
+		var gmat := _halo_material(col)
+		halo.material_override = gmat
+		_wheel_root.add_child(halo)
+		_halos.append(halo)
+		_halo_mats.append(gmat)
 
 func _seg_material(col: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
-	m.metallic = 0.12
-	m.roughness = 0.24                       # glossier plastic
+	m.metallic = 0.0
+	m.roughness = 0.17                       # candy-gloss plastic
+	m.specular = 0.6
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.rim_enabled = true                     # soft edge sheen
-	m.rim = 0.5
-	m.rim_tint = 0.2
+	m.rim = 0.4
+	m.rim_tint = 0.3
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
@@ -199,6 +240,64 @@ func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstan
 	m.roughness = rough
 	mi.material_override = m
 	return mi
+
+# Full-circle rounded rim (domed across the radius only -> no seam).
+func _ring_mesh(ri: float, ro: float, h: float, dome_h: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top := h * 0.5
+	var bot := -h * 0.5
+	var steps := 96
+	for j in steps:
+		var a0: float = TAU * float(j) / steps
+		var a1: float = TAU * float(j + 1) / steps
+		for jr in RADIAL_STEPS:
+			var t0 := float(jr) / RADIAL_STEPS
+			var t1 := float(jr + 1) / RADIAL_STEPS
+			var r0: float = lerp(ri, ro, t0)
+			var r1: float = lerp(ri, ro, t1)
+			var y0: float = top + dome_h * sin(PI * t0)
+			var y1: float = top + dome_h * sin(PI * t1)
+			var p00 := Vector3(cos(a0) * r0, y0, sin(a0) * r0)
+			var p10 := Vector3(cos(a1) * r0, y0, sin(a1) * r0)
+			var p11 := Vector3(cos(a1) * r1, y1, sin(a1) * r1)
+			var p01 := Vector3(cos(a0) * r1, y1, sin(a0) * r1)
+			var n := (p10 - p00).cross(p01 - p00).normalized()
+			if n.y < 0.0:
+				n = -n
+			_quad(st, p00, p10, p11, p01, n)
+		var nrm := (Vector3(cos(a0), 0, sin(a0)) + Vector3(cos(a1), 0, sin(a1))).normalized()
+		# outer wall
+		_quad(st,
+			Vector3(cos(a0) * ro, bot, sin(a0) * ro), Vector3(cos(a1) * ro, bot, sin(a1) * ro),
+			Vector3(cos(a1) * ro, top, sin(a1) * ro), Vector3(cos(a0) * ro, top, sin(a0) * ro), nrm)
+		# inner wall
+		_quad(st,
+			Vector3(cos(a0) * ri, top, sin(a0) * ri), Vector3(cos(a1) * ri, top, sin(a1) * ri),
+			Vector3(cos(a1) * ri, bot, sin(a1) * ri), Vector3(cos(a0) * ri, bot, sin(a0) * ri), -nrm)
+	return st.commit()
+
+# Soft radial gradient (white center -> transparent edge) for glow billboards.
+func _make_glow_tex() -> Texture2D:
+	var s := 128
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	var c := Vector2(s, s) * 0.5
+	for y in s:
+		for x in s:
+			var d := Vector2(x, y).distance_to(c) / (s * 0.5)
+			var a := pow(clampf(1.0 - d, 0.0, 1.0), 2.2)
+			img.set_pixel(x, y, Color(1, 1, 1, a))
+	return ImageTexture.create_from_image(img)
+
+func _halo_material(col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_texture = _glow_tex
+	m.albedo_color = Color(col.r, col.g, col.b, 0.0)   # invisible until lit
+	return m
 
 # Annular sector with a domed (pillow) top, vertical walls and end caps.
 # The dome is 0 at every edge, so the top stays continuous with the walls.
@@ -274,10 +373,15 @@ func _process(dt: float) -> void:
 		_emit_cur[i] = lerp(_emit_cur[i], _emit_tgt[i], k)
 		var mat := _seg_mats[i]
 		mat.emission_energy_multiplier = _emit_cur[i]
-		# brighten albedo a touch while lit
 		var base: Color = _colors[i % _colors.size()] if not _colors.is_empty() else Color.GRAY
 		var lit_amount := clampf(_emit_cur[i] / EMIT_ON, 0.0, 1.0)
-		mat.albedo_color = base.lerp(base.lightened(0.5), lit_amount)
+		# brighten albedo a touch while lit
+		mat.albedo_color = base.lerp(base.lightened(0.35), lit_amount)
+		# fade the glow halo in/out
+		if i < _halo_mats.size():
+			var hc := _halo_mats[i].albedo_color
+			hc.a = lit_amount * HALO_ALPHA
+			_halo_mats[i].albedo_color = hc
 		# press sink
 		_segments[i].position.y = BASE_H * 0.5 - _press[i] * PRESS_DROP
 
