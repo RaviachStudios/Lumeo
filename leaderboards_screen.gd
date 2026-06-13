@@ -9,7 +9,6 @@ const PANEL := Color(0.12, 0.10, 0.28)
 const PANEL_ME := Color(0.30, 0.22, 0.0, 0.55)
 const TEXT_DIM := Color(0.7, 0.7, 1.0)
 const DIFFS: Array[String] = ["easy", "moderate", "hard"]
-const TIMEOUT_SEC := 12.0
 
 var _tab_row: HBoxContainer
 var _content: VBoxContainer
@@ -22,6 +21,7 @@ var _overlay_retry: Button
 var _current_diff := "easy"
 var _data: Dictionary = {}   # diff -> { rows, my_rank, total }
 var _loaded := false
+var _load_token := 0
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -109,11 +109,14 @@ func _on_tab(diff: String) -> void:
 
 func _load_all() -> void:
 	_show_loading()
-	var done := false
-	get_tree().create_timer(TIMEOUT_SEC).timeout.connect(func():
-		if not done: _show_error())
+	_load_token += 1
+	var token := _load_token
 	var result: Dictionary = await LeaderboardManager.load_all_globals()
-	done = true
+	if token != _load_token:
+		return  # a newer load started (e.g. user hit Try Again); ignore this result
+	if not result.get("ok", false):
+		_show_error()
+		return
 	_data = result
 	_loaded = true
 	_hide_overlay()

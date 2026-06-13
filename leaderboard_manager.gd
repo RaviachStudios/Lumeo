@@ -44,21 +44,23 @@ func _rest_get(collection: String, doc_id: String) -> Dictionary:
 	if not j.data is Dictionary: return {"exists": false}
 	return {"exists": true, "data": _fields(j.data.get("fields", {}))}
 
-func _rest_list(collection: String, page_size: int = 300) -> Array:
+# Returns { ok, items }. ok is false only when every attempt failed to reach
+# the server (HTTP != 200). An empty list with ok == true means "no scores yet".
+func _rest_list(collection: String, page_size: int = 300) -> Dictionary:
 	for attempt in 3:
 		var r := await _http_get(_FB_BASE + "/" + collection + "?pageSize=%d" % page_size)
 		if r[1] == 200:
 			var j := JSON.new()
 			j.parse((r[3] as PackedByteArray).get_string_from_utf8())
-			if not j.data is Dictionary: return []
+			if not j.data is Dictionary: return {"ok": true, "items": []}
 			var out := []
 			for doc in j.data.get("documents", []):
 				var parts: PackedStringArray = (doc.get("name", "") as String).split("/")
 				out.append({"id": parts[-1], "data": _fields(doc.get("fields", {}))})
-			return out
+			return {"ok": true, "items": out}
 		if attempt < 2:
 			await get_tree().create_timer(1.0).timeout
-	return []
+	return {"ok": false, "items": []}
 
 func _val(v: Variant) -> Variant:
 	if not v is Dictionary: return null
@@ -103,6 +105,7 @@ func submit_score(difficulty: String, score: int) -> void:
 # Loads one difficulty and returns { rows, my_rank, total }.
 func load_global(difficulty: String) -> Dictionary:
 	var rows := []
+	var ok := true
 	if _is_editor:
 		var g: Dictionary = _sim_global.get(difficulty, {})
 		for uid in g:
@@ -110,8 +113,9 @@ func load_global(difficulty: String) -> Dictionary:
 			rows.append({"uid": uid, "name": e.get("name", "Player"),
 				"score": int(e.get("score", 0))})
 	else:
-		var docs := await _rest_list("global_" + difficulty, 300)
-		for doc in docs:
+		var res := await _rest_list("global_" + difficulty, 300)
+		ok = res.get("ok", false)
+		for doc in res.get("items", []):
 			var d: Dictionary = doc.get("data", {})
 			rows.append({"uid": doc.get("id", ""), "name": d.get("name", "Player"),
 				"score": int(d.get("score", 0))})
@@ -120,11 +124,16 @@ func load_global(difficulty: String) -> Dictionary:
 	for i in rows.size():
 		rows[i]["is_me"] = rows[i]["uid"] == _uid()
 		if rows[i]["is_me"]: my_rank = i + 1
-	return {"rows": rows.slice(0, GLOBAL_TOP_N), "my_rank": my_rank, "total": rows.size()}
+	return {"rows": rows.slice(0, GLOBAL_TOP_N), "my_rank": my_rank,
+		"total": rows.size(), "ok": ok}
 
 # Loads all three difficulties at once. Returns { easy: {...}, moderate: {...}, hard: {...} }.
 func load_all_globals() -> Dictionary:
 	var out := {}
+	var ok := true
 	for diff in DIFFS:
-		out[diff] = await load_global(diff)
+		var d := await load_global(diff)
+		if not d.get("ok", false): ok = false
+		out[diff] = d
+	out["ok"] = ok
 	return out
