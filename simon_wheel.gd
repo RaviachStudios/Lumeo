@@ -41,11 +41,6 @@ const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
 const BTN_RAD_MARGIN := 0.05 # radial inset
 const BTN_RAISE := 0.05      # how far the button sits above the frame plate
 const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
-# White top-edge highlight, per edge (currently tuned on the orange button).
-const FOCUS_COLOR := Color(0.95, 0.5, 0.1)  # orange
-const GLOW_OUTER := 0.85     # long outer edge - strong
-const GLOW_INNER := 0.1      # short inner edge (toward center) - very low
-const GLOW_SIDE := 0.45      # the two radial side edges - medium
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
@@ -226,20 +221,15 @@ func _rebuild() -> void:
 		_wheel_root.add_child(frame)
 		# inset, raised, glossy colored button sitting inside the frame:
 		# extra dome + height and darker side faces for a real beveled-button feel.
-		var is_focus := col.is_equal_approx(FOCUS_COLOR)
 		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
 		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
-		var ri_b := INNER_R + BTN_RAD_MARGIN
-		var ro_b := OUTER_R - BTN_RAD_MARGIN
-		var mesh := _sector_mesh(ba0, ba1, ri_b, ro_b, SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
-		var mat := _seg_material(col, true)
+		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN,
+			SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.position.y = BASE_H * 0.5 + BTN_RAISE
+		var mat := _seg_material(col, true)
 		mi.material_override = mat
-		if is_focus:
-			# orange: glowing white highlight ribbons along the top edges
-			mi.add_child(_edge_highlight(ba0, ba1, ri_b, ro_b, SEG_H * 1.6 * 0.5, DOME * 2.4))
 		_wheel_root.add_child(mi)
 		_segments.append(mi)
 		_seg_mats.append(mat)
@@ -275,18 +265,6 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
-	return m
-
-# Unshaded additive material for the glowing white edge ribbons. Per-vertex
-# alpha (white rgb) controls glow strength, so it emits regardless of lighting.
-func _edge_glow_mat() -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	m.vertex_color_use_as_albedo = true
-	m.albedo_color = Color.WHITE
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
 func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
@@ -409,71 +387,6 @@ func _sector_mesh(a0: float, a1: float, ri: float, ro: float, h: float,
 	var tan1 := Vector3(-sin(a1), 0, cos(a1))
 	_quad(st, _p(a1, ri, top), _p(a1, ro, top), _p(a1, ro, bot), _p(a1, ri, bot), tan1, side)
 	return st.commit()
-
-# Glowing white highlight ribbons hugging the four top edges of a button.
-# Each ribbon is brightest right at the edge (alpha = per-edge intensity) and
-# fades to transparent inward. Built in the button's local space, lifted just
-# above the domed top. Returns a MeshInstance3D to parent to the button.
-func _edge_highlight(a0: float, a1: float, ri: float, ro: float,
-		top: float, dome: float) -> MeshInstance3D:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var n := Vector3.UP
-	var rim_w := 0.07                 # ribbon width (radial)
-	var rim_a := deg_to_rad(4.5)      # ribbon width (angular, for side edges)
-	var lift := 0.006
-	var co := Color(1, 1, 1, GLOW_OUTER)
-	var ci := Color(1, 1, 1, GLOW_INNER)
-	var cs := Color(1, 1, 1, GLOW_SIDE)
-	var clear := Color(1, 1, 1, 0.0)
-	# outer arc edge (strong)
-	for j in ARC_STEPS:
-		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
-		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
-		_quad_c(st, _rim_pt(b0, ro, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b1, ro, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b1, ro - rim_w, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b0, ro - rim_w, a0, a1, ri, ro, top, dome, lift), n, co, co, clear, clear)
-	# inner arc edge (faint)
-	for j in ARC_STEPS:
-		var b0: float = lerp(a0, a1, float(j) / ARC_STEPS)
-		var b1: float = lerp(a0, a1, float(j + 1) / ARC_STEPS)
-		_quad_c(st, _rim_pt(b0, ri, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b1, ri, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b1, ri + rim_w, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(b0, ri + rim_w, a0, a1, ri, ro, top, dome, lift), n, ci, ci, clear, clear)
-	# two radial side edges (medium)
-	for j in RADIAL_STEPS:
-		var r0: float = lerp(ri, ro, float(j) / RADIAL_STEPS)
-		var r1: float = lerp(ri, ro, float(j + 1) / RADIAL_STEPS)
-		_quad_c(st, _rim_pt(a0, r0, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a0, r1, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a0 + rim_a, r1, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a0 + rim_a, r0, a0, a1, ri, ro, top, dome, lift), n, cs, cs, clear, clear)
-		_quad_c(st, _rim_pt(a1, r0, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a1, r1, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a1 - rim_a, r1, a0, a1, ri, ro, top, dome, lift),
-			_rim_pt(a1 - rim_a, r0, a0, a1, ri, ro, top, dome, lift), n, cs, cs, clear, clear)
-	var mi := MeshInstance3D.new()
-	mi.mesh = st.commit()
-	mi.material_override = _edge_glow_mat()
-	return mi
-
-func _rim_pt(angle: float, r: float, a0: float, a1: float, ri: float, ro: float,
-		top: float, dome: float, lift: float) -> Vector3:
-	var p := _dome_pt(angle, r, a0, a1, ri, ro, top, dome)
-	p.y += lift
-	return p
-
-# Quad with a distinct color at each of the four corners.
-func _quad_c(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: Vector3,
-		ca: Color, cb: Color, cc: Color, cd: Color) -> void:
-	st.set_color(ca); st.set_normal(n); st.add_vertex(a)
-	st.set_color(cb); st.set_normal(n); st.add_vertex(b)
-	st.set_color(cc); st.set_normal(n); st.add_vertex(c)
-	st.set_color(ca); st.set_normal(n); st.add_vertex(a)
-	st.set_color(cc); st.set_normal(n); st.add_vertex(c)
-	st.set_color(cd); st.set_normal(n); st.add_vertex(d)
 
 func _p(angle: float, r: float, y: float) -> Vector3:
 	return Vector3(cos(angle) * r, y, sin(angle) * r)
