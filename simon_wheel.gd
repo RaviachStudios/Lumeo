@@ -34,7 +34,7 @@ const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
 const HALO_SIZE := 2.0       # size of the soft glow billboard over a segment
-const HALO_ALPHA := 0.4      # peak glow strength when fully lit (real bloom adds more)
+const HALO_ALPHA := 0.55     # peak outer-glow strength when fully lit
 # Each colored button is inset inside its slot, leaving a dark metal frame
 # border around it, and raised so it sits proud of the frame.
 const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
@@ -43,8 +43,8 @@ const BTN_RAISE := 0.08      # how far the button sits above the frame plate
 const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
-# Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
-const CAM_POS := Vector3(0.0, 4.6, 1.7)
+# Pulled in so the wheel fills most of the widget (large, prominent).
+const CAM_POS := Vector3(0.0, 4.0, 1.5)
 const CAM_FOV := 34.0
 
 var _colors: Array = []
@@ -63,6 +63,7 @@ var _press: Array[float] = []
 var _halos: Array[MeshInstance3D] = []
 var _halo_mats: Array[StandardMaterial3D] = []
 var _glow_tex: Texture2D
+var _level_num: Label
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -144,7 +145,53 @@ func _build_shell() -> void:
 	_wheel_root = Node3D.new()
 	_vp.add_child(_wheel_root)
 
+	_build_center_overlay()
 	_sync_viewport_size()
+
+# "LEVEL n" readout + glowing blue dot, drawn as 2D on top of the 3D hub.
+func _build_center_overlay() -> void:
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(center)
+
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 1)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(box)
+
+	var lv := Label.new()
+	lv.text = "LEVEL"
+	lv.add_theme_font_size_override("font_size", 15)
+	lv.add_theme_color_override("font_color", Color(0.75, 0.82, 1.0))
+	lv.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(lv)
+
+	_level_num = Label.new()
+	_level_num.text = "1"
+	_level_num.add_theme_font_size_override("font_size", 44)
+	_level_num.add_theme_color_override("font_color", Color.WHITE)
+	_level_num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_level_num)
+
+	var dot_row := HBoxContainer.new()
+	dot_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	dot_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(dot_row)
+	var dot := Panel.new()
+	dot.custom_minimum_size = Vector2(12, 12)
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(0.35, 0.62, 1.0)
+	ds.set_corner_radius_all(6)
+	ds.shadow_color = Color(0.35, 0.62, 1.0, 0.7)   # soft blue glow
+	ds.shadow_size = 9
+	dot.add_theme_stylebox_override("panel", ds)
+	dot_row.add_child(dot)
+
+func set_level(n: int) -> void:
+	if _level_num:
+		_level_num.text = str(n)
 
 func _sync_viewport_size() -> void:
 	if _vpc:
@@ -433,7 +480,7 @@ func _process(dt: float) -> void:
 		var base: Color = _colors[i % _colors.size()] if not _colors.is_empty() else Color.GRAY
 		var lit_amount := clampf(_emit_cur[i] / EMIT_ON, 0.0, 1.0)
 		# brighten albedo a touch while lit
-		mat.albedo_color = base.lerp(base.lightened(0.35), lit_amount)
+		mat.albedo_color = base.lerp(base.lightened(0.55), lit_amount)
 		# fade the glow halo in/out
 		if i < _halo_mats.size():
 			var hc := _halo_mats[i].albedo_color
