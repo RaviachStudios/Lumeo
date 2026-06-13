@@ -200,37 +200,140 @@ func _make_radial_texture() -> Texture2D:
 # ---------------- logo ----------------
 
 func _build_logo() -> void:
+	var lw := 720.0
+	var lh := 172.0
 	_logo_box = Control.new()
 	_logo_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_logo_box.custom_minimum_size = Vector2(520, 150)
-	_logo_box.size = Vector2(520, 150)
+	_logo_box.custom_minimum_size = Vector2(lw, lh)
+	_logo_box.size = Vector2(lw, lh)
 	add_child(_logo_box)
 
-	var title := Label.new()
-	title.text = "SIMON"
-	title.add_theme_font_size_override("font_size", 96)
-	title.add_theme_color_override("font_color", Color.WHITE)
-	title.add_theme_color_override("font_shadow_color", Color(0.0, 0.02, 0.10, 0.55))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 6)
-	title.add_theme_constant_override("shadow_outline_size", 10)   # soft glow
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.set_anchors_preset(Control.PRESET_FULL_RECT)
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_logo_box.add_child(title)
+	var font := ThemeDB.fallback_font
+	var f := 96
+
+	# "S I M [O] N" - the O is a 4-colour Simon ring, not a letter.
+	var w_left := font.get_string_size("S I M", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
+	var w_right := font.get_string_size("N", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
+	var w_space := font.get_string_size(" ", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
+	var dr := 72.0                                   # O-ring diameter (~ cap height)
+	var g := w_space * 0.7                           # gap on each side of the ring
+	var th := 112.0                                  # title band height
+	var group_w := w_left + g + dr + g + w_right
+	var x0 := (lw - group_w) * 0.5
+
+	_logo_box.add_child(_logo_letter("S I M", f, Vector2(x0, 0), Vector2(w_left, th)))
+	var ring := _make_o_ring(dr)
+	# raise the ring to the cap-height center (Label centers the whole line box,
+	# which sits lower than the capitals' optical center)
+	ring.position = Vector2(x0 + w_left + g + dr * 0.5, th * 0.5 - f * 0.085)
+	_logo_box.add_child(ring)
+	_logo_box.add_child(_logo_letter("N", f, Vector2(x0 + w_left + g + dr + g, 0), Vector2(w_right, th)))
+
+	# subtitle + glowing side lines, each ending in a small glowing dot
+	var sf := 20
+	var sub_txt := "M E M O R Y   C H A L L E N G E"
+	var w_sub := font.get_string_size(sub_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sf).x
+	var sub_y := th + 12.0
+	var sub_x := (lw - w_sub) * 0.5
 
 	var sub := Label.new()
-	sub.text = "M E M O R Y   C H A L L E N G E"
-	sub.add_theme_font_size_override("font_size", 20)
-	sub.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.85))
-	sub.add_theme_color_override("font_shadow_color", Color(0.0, 0.02, 0.10, 0.4))
-	sub.add_theme_constant_override("shadow_offset_y", 2)
-	sub.add_theme_constant_override("shadow_outline_size", 3)
+	sub.text = sub_txt
+	sub.add_theme_font_size_override("font_size", sf)
+	sub.add_theme_color_override("font_color", Color(0.76, 0.74, 1.0, 0.95))  # lavender
+	sub.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.35))
+	sub.add_theme_constant_override("shadow_offset_x", 0)
+	sub.add_theme_constant_override("shadow_offset_y", 0)
+	sub.add_theme_constant_override("shadow_outline_size", 5)   # subtle glow
+	sub.position = Vector2(sub_x, sub_y)
+	sub.size = Vector2(w_sub, 28)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub.set_anchors_preset(Control.PRESET_FULL_RECT)
-	sub.offset_top = 108
+	sub.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_logo_box.add_child(sub)
+
+	var line_col := Color(0.50, 0.50, 1.0, 0.5)
+	var dot_col := Color(0.58, 0.56, 1.0)
+	var llen := 56.0
+	var lgap := 18.0
+	var ly := sub_y + 14.0                           # vertical centre of the subtitle
+	_add_line(Vector2(sub_x - lgap - llen, ly - 1.0), Vector2(llen, 2.0), line_col)
+	_logo_box.add_child(_glow_dot(9.0, dot_col, Vector2(sub_x - lgap - llen, ly)))
+	_add_line(Vector2(sub_x + w_sub + lgap, ly - 1.0), Vector2(llen, 2.0), line_col)
+	_logo_box.add_child(_glow_dot(9.0, dot_col, Vector2(sub_x + w_sub + lgap + llen, ly)))
+
+# A bold, white, soft-shadowed logo letter (faux-bold via same-colour outline).
+func _logo_letter(txt: String, fsize: int, pos: Vector2, size: Vector2) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_size_override("font_size", fsize)
+	l.add_theme_color_override("font_color", Color.WHITE)
+	l.add_theme_color_override("font_outline_color", Color(1, 1, 1, 1))
+	l.add_theme_constant_override("outline_size", 2)             # weight, not a stroke
+	l.add_theme_color_override("font_shadow_color", Color(0.0, 0.02, 0.10, 0.55))
+	l.add_theme_constant_override("shadow_offset_x", 0)
+	l.add_theme_constant_override("shadow_offset_y", 6)
+	l.add_theme_constant_override("shadow_outline_size", 10)     # soft shadow + glow
+	l.position = pos
+	l.size = size
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+# The Simon "O": four colored quarter-arcs (yellow/red/green/blue) around an
+# empty dark center, drawn as round-capped Line2D arcs. Centered on its origin.
+func _make_o_ring(diameter: float) -> Node2D:
+	var ring := Node2D.new()
+	var rr := diameter * 0.5
+	var thick := diameter * 0.2
+	var cols := [
+		Color(0.97, 0.78, 0.22),  # top    - yellow
+		Color(0.88, 0.22, 0.24),  # right  - red
+		Color(0.20, 0.70, 0.34),  # bottom - green
+		Color(0.24, 0.50, 0.95),  # left   - blue
+	]
+	var gap := deg_to_rad(12.0)
+	var base := -PI * 0.75                            # start of the top segment
+	for i in 4:
+		var a0: float = base + i * PI * 0.5 + gap * 0.5
+		var a1: float = base + (i + 1) * PI * 0.5 - gap * 0.5
+		var arc := Line2D.new()
+		arc.width = thick
+		arc.default_color = cols[i]
+		arc.antialiased = true
+		arc.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		arc.end_cap_mode = Line2D.LINE_CAP_ROUND
+		var pts := PackedVector2Array()
+		var n := 14
+		var pr := rr - thick * 0.5
+		for j in n + 1:
+			var a: float = lerp(a0, a1, float(j) / n)
+			pts.append(Vector2(cos(a), sin(a)) * pr)
+		arc.points = pts
+		ring.add_child(arc)
+	return ring
+
+func _add_line(pos: Vector2, size: Vector2, col: Color) -> void:
+	var r := ColorRect.new()
+	r.position = pos
+	r.size = size
+	r.color = col
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_logo_box.add_child(r)
+
+# Small glowing dot centered on `center`.
+func _glow_dot(d: float, col: Color, center: Vector2) -> Panel:
+	var p := Panel.new()
+	p.size = Vector2(d, d)
+	p.position = center - Vector2(d, d) * 0.5
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var s := StyleBoxFlat.new()
+	s.bg_color = col
+	s.set_corner_radius_all(int(d * 0.5))
+	s.shadow_color = Color(col.r, col.g, col.b, 0.7)
+	s.shadow_size = 7
+	p.add_theme_stylebox_override("panel", s)
+	return p
 
 # ---------------- buttons ----------------
 
@@ -363,7 +466,7 @@ func _layout() -> void:
 
 	# logo: focal point, upper-center
 	if _logo_box:
-		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.20)
+		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.16)
 
 	# buttons: stacked, centered, lower portion
 	var total := _btn_wrappers.size() * BTN_H + (_btn_wrappers.size() - 1) * BTN_GAP
