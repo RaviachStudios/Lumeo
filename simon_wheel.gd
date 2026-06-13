@@ -64,6 +64,10 @@ var _halos: Array[MeshInstance3D] = []
 var _halo_mats: Array[StandardMaterial3D] = []
 var _glow_tex: Texture2D
 var _level_num: Label
+# procedural surface-detail maps for the buttons (premium molded-ABS feel)
+var _noise_albedo: NoiseTexture2D
+var _noise_normal: NoiseTexture2D
+var _noise_rough: NoiseTexture2D
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -71,6 +75,7 @@ func _ready() -> void:
 	resized.connect(_sync_viewport_size)
 
 func _build_shell() -> void:
+	_make_noise_textures()
 	_vpc = SubViewportContainer.new()
 	_vpc.stretch = true
 	_vpc.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -313,13 +318,70 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	m.clearcoat = 0.6
 	m.clearcoat_roughness = 0.15
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.rim_enabled = true                     # soft edge sheen
-	m.rim = 0.25
-	m.rim_tint = 0.5
+	# rounded edges catch more light than the center (sells the thickness)
+	m.rim_enabled = true
+	m.rim = 0.45
+	m.rim_tint = 0.25
+	# procedural surface detail (triplanar -> no UVs needed on the mesh)
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3(2.5, 2.5, 2.5)
+	if _noise_albedo:
+		m.albedo_texture = _noise_albedo
+	if _noise_normal:
+		m.normal_enabled = true
+		m.normal_texture = _noise_normal
+		m.normal_scale = 0.18                # very low - microscopic only
+	if _noise_rough:
+		m.roughness_texture = _noise_rough
+		m.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
 	return m
+
+# Procedural surface-detail maps shared by all buttons: a faint albedo
+# break-up, a low-intensity micro-bump normal map, and a roughness-variation
+# map - so the molded plastic reads as manufactured, not mathematically perfect.
+func _make_noise_textures() -> void:
+	# faint albedo variation (mostly white -> barely darkens in places)
+	var fa := FastNoiseLite.new()
+	fa.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	fa.frequency = 0.03
+	_noise_albedo = NoiseTexture2D.new()
+	_noise_albedo.width = 256
+	_noise_albedo.height = 256
+	_noise_albedo.seamless = true
+	_noise_albedo.noise = fa
+	_noise_albedo.color_ramp = _ramp(Color(0.9, 0.9, 0.9), Color(1, 1, 1))
+
+	# roughness variation (multiplier 0.7..1.0 -> slightly irregular reflections)
+	var fr := FastNoiseLite.new()
+	fr.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	fr.frequency = 0.06
+	_noise_rough = NoiseTexture2D.new()
+	_noise_rough.width = 256
+	_noise_rough.height = 256
+	_noise_rough.seamless = true
+	_noise_rough.noise = fr
+	_noise_rough.color_ramp = _ramp(Color(0.7, 0.7, 0.7), Color(1, 1, 1))
+
+	# microscopic bumps -> light scatters slightly across the surface
+	var fnm := FastNoiseLite.new()
+	fnm.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	fnm.frequency = 0.09
+	_noise_normal = NoiseTexture2D.new()
+	_noise_normal.width = 256
+	_noise_normal.height = 256
+	_noise_normal.seamless = true
+	_noise_normal.as_normal_map = true
+	_noise_normal.bump_strength = 0.5
+	_noise_normal.noise = fnm
+
+func _ramp(c0: Color, c1: Color) -> Gradient:
+	var g := Gradient.new()
+	g.set_color(0, c0)
+	g.set_color(1, c1)
+	return g
 
 func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
