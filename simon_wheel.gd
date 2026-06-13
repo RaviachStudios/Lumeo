@@ -98,7 +98,7 @@ func _build_shell() -> void:
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.35
+	env.ambient_light_energy = 0.5
 	# real bloom, but with a high threshold so ONLY truly-lit segments bloom -
 	# the regular button colors must not glow in idle.
 	env.glow_enabled = true
@@ -121,7 +121,7 @@ func _build_shell() -> void:
 	# --- lights ---
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-58, -32, 0)
-	key.light_energy = 1.2
+	key.light_energy = 1.35
 	key.light_color = Color(1.0, 0.97, 0.92)
 	key.shadow_enabled = true                # buttons cast soft shadows on the base
 	key.shadow_blur = 1.5
@@ -225,34 +225,36 @@ func _rebuild() -> void:
 
 	# --- premium graphite base plate + concentric machined rings ---
 	# Graphite (never pure black), satin metal so it catches soft reflections.
-	var base := _disc(BASE_R, BASE_H, Color(0.10, 0.105, 0.12), 0.45)
-	(base.material_override as StandardMaterial3D).metallic = 0.85
+	# Semi-metallic graphite: enough diffuse to read as a lit gray metal surface
+	# (pure metal would only show dim reflections and look black).
+	var base := _disc(BASE_R, BASE_H, Color(0.15, 0.155, 0.17), 0.45)
+	(base.material_override as StandardMaterial3D).metallic = 0.4
 	_wheel_root.add_child(base)
 
 	# recessed dark groove just outside the buttons - reads as ambient occlusion
 	var groove := MeshInstance3D.new()
 	groove.mesh = _ring_mesh(OUTER_R, OUTER_R + 0.035, 0.16, 0.0)
 	groove.position.y = 0.04
-	groove.material_override = _metal_mat(Color(0.04, 0.04, 0.05), 0.5, 0.6)
+	groove.material_override = _metal_mat(Color(0.05, 0.05, 0.06), 0.3, 0.6)
 	_wheel_root.add_child(groove)
 
 	# raised beveled inner ring (machined lip)
 	var ring_a := MeshInstance3D.new()
 	ring_a.mesh = _ring_mesh(OUTER_R + 0.035, OUTER_R + 0.10, 0.22, 0.05)
 	ring_a.position.y = 0.05
-	ring_a.material_override = _metal_mat(Color(0.135, 0.14, 0.16), 0.9, 0.3)
+	ring_a.material_override = _metal_mat(Color(0.19, 0.195, 0.22), 0.45, 0.32)
 	_wheel_root.add_child(ring_a)
 
 	# outer rounded rim ring (catches the soft top highlight); thin overall frame
 	var ring_b := MeshInstance3D.new()
 	ring_b.mesh = _ring_mesh(OUTER_R + 0.095, OUTER_R + 0.16, 0.2, 0.07)
 	ring_b.position.y = 0.03
-	ring_b.material_override = _metal_mat(Color(0.16, 0.165, 0.19), 0.95, 0.24)
+	ring_b.material_override = _metal_mat(Color(0.23, 0.235, 0.26), 0.5, 0.26)
 	_wheel_root.add_child(ring_b)
 
-	# smaller dark glossy graphite center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.07, 0.07, 0.1), 0.3)
-	(hub.material_override as StandardMaterial3D).metallic = 0.85
+	# smaller glossy graphite center hub
+	var hub := _disc(HUB_R, HUB_H, Color(0.11, 0.11, 0.14), 0.3)
+	(hub.material_override as StandardMaterial3D).metallic = 0.5
 	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
 
@@ -266,7 +268,7 @@ func _rebuild() -> void:
 		var frame := MeshInstance3D.new()
 		frame.mesh = _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
 		frame.position.y = BASE_H * 0.5
-		frame.material_override = _metal_mat(Color(0.055, 0.055, 0.07), 0.8, 0.4)
+		frame.material_override = _metal_mat(Color(0.08, 0.08, 0.095), 0.3, 0.45)
 		_wheel_root.add_child(frame)
 		# inset, raised, glossy colored button sitting inside the frame:
 		# extra dome + height and darker side faces for a real beveled-button feel.
