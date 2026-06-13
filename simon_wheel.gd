@@ -27,7 +27,7 @@ const HUB_H := 0.24
 const GAP_DEG := 6.0         # angular gap between segments
 const ARC_STEPS := 10        # arc tessellation per segment
 const RADIAL_STEPS := 6      # radial tessellation of the domed top
-const DOME := 0.05           # how much the button top bulges (pillow look)
+const DOME := 0.06           # how much the button top bulges (pillow look)
 
 const EMIT_ON := 4.0         # emission energy when lit
 const EMIT_OFF := 0.0
@@ -39,7 +39,7 @@ const HALO_ALPHA := 0.4      # peak glow strength when fully lit (real bloom add
 # border around it, and raised so it sits proud of the frame.
 const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
 const BTN_RAD_MARGIN := 0.05 # radial inset
-const BTN_RAISE := 0.05      # how far the button sits above the frame plate
+const BTN_RAISE := 0.08      # how far the button sits above the frame plate
 const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
@@ -120,8 +120,10 @@ func _build_shell() -> void:
 	# --- lights ---
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-58, -32, 0)
-	key.light_energy = 1.1
+	key.light_energy = 1.2
 	key.light_color = Color(1.0, 0.97, 0.92)
+	key.shadow_enabled = true                # buttons cast soft shadows on the base
+	key.shadow_blur = 1.5
 	_vp.add_child(key)
 
 	var fill := DirectionalLight3D.new()
@@ -134,7 +136,7 @@ func _build_shell() -> void:
 	var spec := OmniLight3D.new()
 	spec.position = Vector3(0.25, 2.4, 0.15)
 	spec.omni_range = 7.0
-	spec.light_energy = 0.9
+	spec.light_energy = 1.1
 	spec.light_specular = 1.0
 	spec.light_color = Color(1.0, 1.0, 1.0)
 	_vp.add_child(spec)
@@ -224,7 +226,7 @@ func _rebuild() -> void:
 		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
 		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
 		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN,
-			SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
+			SEG_H * 2.0, DOME * 2.4, SIDE_DARK)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.position.y = BASE_H * 0.5 + BTN_RAISE
@@ -255,13 +257,16 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
 	m.vertex_color_use_as_albedo = use_vcol  # lets the mesh darken side faces
-	m.metallic = 0.55                        # metallic-tinted colored surface
-	m.roughness = 0.2
-	m.specular = 0.6
+	m.metallic = 0.0                         # dielectric: glossy plastic, not metal
+	m.roughness = 0.13                       # low roughness = wet/glossy finish
+	m.specular = 0.7
+	m.clearcoat_enabled = true               # extra plastic gloss coat
+	m.clearcoat = 0.9
+	m.clearcoat_roughness = 0.08
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.rim_enabled = true                     # soft edge sheen
-	m.rim = 0.4
-	m.rim_tint = 0.3
+	m.rim = 0.35
+	m.rim_tint = 0.4
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
