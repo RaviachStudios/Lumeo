@@ -18,29 +18,29 @@ class_name SimonWheel
 
 # ---- tunables (wheel is built in local units, ring outer radius = 1.0) ----
 const OUTER_R := 1.0
-const INNER_R := 0.42
+const INNER_R := 0.34        # buttons reach closer to center (bigger buttons)
 const SEG_H := 0.16          # segment thickness (depth)
-const BASE_R := 1.14         # dark body disc radius
+const BASE_R := 1.16         # graphite base plate radius (thin frame outside buttons)
 const BASE_H := 0.20
-const HUB_R := 0.40
-const HUB_H := 0.24
-const GAP_DEG := 6.0         # angular gap between segments
+const HUB_R := 0.30          # smaller center circle (~ -25%)
+const HUB_H := 0.22
+const GAP_DEG := 5.0         # angular gap between segments
 const ARC_STEPS := 10        # arc tessellation per segment
 const RADIAL_STEPS := 6      # radial tessellation of the domed top
-const DOME := 0.06           # how much the button top bulges (pillow look)
+const DOME := 0.09           # how much the button top bulges (rounder bevel)
 
-const EMIT_ON := 4.0         # emission energy when lit
+const EMIT_ON := 1.3         # emission energy when lit (~ +40% brighter, not neon)
 const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
-const HALO_SIZE := 2.0       # size of the soft glow billboard over a segment
-const HALO_ALPHA := 0.55     # peak outer-glow strength when fully lit
-# Each colored button is inset inside its slot, leaving a dark metal frame
+const HALO_SIZE := 1.7       # size of the soft glow billboard over a segment
+const HALO_ALPHA := 0.3      # peak outer-glow strength when lit (subtle)
+# Each colored button is inset inside its slot, leaving a dark frame
 # border around it, and raised so it sits proud of the frame.
-const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
-const BTN_RAD_MARGIN := 0.05 # radial inset
-const BTN_RAISE := 0.08      # how far the button sits above the frame plate
-const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
+const BTN_ANG_MARGIN := 2.0  # degrees trimmed from each angular side
+const BTN_RAD_MARGIN := 0.06 # radial inset
+const BTN_RAISE := 0.07      # how far the button sits above the frame plate
+const SIDE_DARK := 0.5       # side-wall brightness vs the top face (3D feel)
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Pulled in so the wheel fills most of the widget (large, prominent).
@@ -102,9 +102,9 @@ func _build_shell() -> void:
 	# real bloom, but with a high threshold so ONLY truly-lit segments bloom -
 	# the regular button colors must not glow in idle.
 	env.glow_enabled = true
-	env.glow_intensity = 0.9
-	env.glow_bloom = 0.15
-	env.glow_hdr_threshold = 1.4
+	env.glow_intensity = 0.55                # subtle bloom only on lit segments
+	env.glow_bloom = 0.1
+	env.glow_hdr_threshold = 1.1
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -223,36 +223,36 @@ func _rebuild() -> void:
 	if _glow_tex == null:
 		_glow_tex = _make_glow_tex()
 
-	# dark plate the buttons sit in (kept small so it doesn't read as a dome)
-	var base := _disc(1.02, BASE_H, Color(0.03, 0.03, 0.04), 0.4)
-	(base.material_override as StandardMaterial3D).metallic = 0.6
+	# --- premium graphite base plate + concentric machined rings ---
+	# Graphite (never pure black), satin metal so it catches soft reflections.
+	var base := _disc(BASE_R, BASE_H, Color(0.10, 0.105, 0.12), 0.45)
+	(base.material_override as StandardMaterial3D).metallic = 0.85
 	_wheel_root.add_child(base)
 
-	# raised inner lip where the frame meets the buttons
-	var lip := MeshInstance3D.new()
-	lip.mesh = _ring_mesh(1.0, 1.06, 0.22, 0.05)
-	lip.position.y = 0.05
-	lip.material_override = _metal_mat(Color(0.16, 0.16, 0.2), 1.0, 0.12)
-	_wheel_root.add_child(lip)
+	# recessed dark groove just outside the buttons - reads as ambient occlusion
+	var groove := MeshInstance3D.new()
+	groove.mesh = _ring_mesh(OUTER_R, OUTER_R + 0.035, 0.16, 0.0)
+	groove.position.y = 0.04
+	groove.material_override = _metal_mat(Color(0.04, 0.04, 0.05), 0.5, 0.6)
+	_wheel_root.add_child(groove)
 
-	# main outer frame ring: wide, flat-ish, polished dark metal (low roughness
-	# = sharp reflections so it catches a bright highlight arc on top)
-	var bezel := MeshInstance3D.new()
-	bezel.mesh = _ring_mesh(1.05, 1.34, 0.26, 0.10)
-	bezel.position.y = 0.04
-	bezel.material_override = _metal_mat(Color(0.13, 0.13, 0.16), 1.0, 0.12)
-	_wheel_root.add_child(bezel)
+	# raised beveled inner ring (machined lip)
+	var ring_a := MeshInstance3D.new()
+	ring_a.mesh = _ring_mesh(OUTER_R + 0.035, OUTER_R + 0.10, 0.22, 0.05)
+	ring_a.position.y = 0.05
+	ring_a.material_override = _metal_mat(Color(0.135, 0.14, 0.16), 0.9, 0.3)
+	_wheel_root.add_child(ring_a)
 
-	# brighter polished outer edge for a defined machined rim
-	var rim := MeshInstance3D.new()
-	rim.mesh = _ring_mesh(1.30, 1.40, 0.18, 0.05)
-	rim.position.y = 0.0
-	rim.material_override = _metal_mat(Color(0.2, 0.2, 0.24), 1.0, 0.1)
-	_wheel_root.add_child(rim)
+	# outer rounded rim ring (catches the soft top highlight); thin overall frame
+	var ring_b := MeshInstance3D.new()
+	ring_b.mesh = _ring_mesh(OUTER_R + 0.095, OUTER_R + 0.16, 0.2, 0.07)
+	ring_b.position.y = 0.03
+	ring_b.material_override = _metal_mat(Color(0.16, 0.165, 0.19), 0.95, 0.24)
+	_wheel_root.add_child(ring_b)
 
-	# center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.04, 0.04, 0.07), 0.25)
-	(hub.material_override as StandardMaterial3D).metallic = 0.9
+	# smaller dark glossy graphite center hub
+	var hub := _disc(HUB_R, HUB_H, Color(0.07, 0.07, 0.1), 0.3)
+	(hub.material_override as StandardMaterial3D).metallic = 0.85
 	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
 
@@ -266,7 +266,7 @@ func _rebuild() -> void:
 		var frame := MeshInstance3D.new()
 		frame.mesh = _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
 		frame.position.y = BASE_H * 0.5
-		frame.material_override = _metal_mat(Color(0.05, 0.05, 0.065), 0.85, 0.3)
+		frame.material_override = _metal_mat(Color(0.055, 0.055, 0.07), 0.8, 0.4)
 		_wheel_root.add_child(frame)
 		# inset, raised, glossy colored button sitting inside the frame:
 		# extra dome + height and darker side faces for a real beveled-button feel.
@@ -304,16 +304,16 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
 	m.vertex_color_use_as_albedo = use_vcol  # lets the mesh darken side faces
-	m.metallic = 0.0                         # dielectric: glossy plastic, not metal
-	m.roughness = 0.13                       # low roughness = wet/glossy finish
-	m.specular = 0.7
-	m.clearcoat_enabled = true               # extra plastic gloss coat
-	m.clearcoat = 0.9
-	m.clearcoat_roughness = 0.08
+	m.metallic = 0.0                         # dielectric ABS plastic, not metal
+	m.roughness = 0.28                       # satin gloss (refined, not neon-shiny)
+	m.specular = 0.5
+	m.clearcoat_enabled = true               # subtle ABS gloss coat
+	m.clearcoat = 0.6
+	m.clearcoat_roughness = 0.15
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.rim_enabled = true                     # soft edge sheen
-	m.rim = 0.35
-	m.rim_tint = 0.4
+	m.rim = 0.25
+	m.rim_tint = 0.5
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
@@ -480,7 +480,7 @@ func _process(dt: float) -> void:
 		var base: Color = _colors[i % _colors.size()] if not _colors.is_empty() else Color.GRAY
 		var lit_amount := clampf(_emit_cur[i] / EMIT_ON, 0.0, 1.0)
 		# brighten albedo a touch while lit
-		mat.albedo_color = base.lerp(base.lightened(0.55), lit_amount)
+		mat.albedo_color = base.lerp(base.lightened(0.4), lit_amount)
 		# fade the glow halo in/out
 		if i < _halo_mats.size():
 			var hc := _halo_mats[i].albedo_color

@@ -5,13 +5,14 @@ extends Control
 # Quit), and a bottom message pill. Run this scene directly (F6).
 # (Segment count can be switched with keys 4/5/6 for testing - no on-screen UI.)
 
+# Deeper, slightly desaturated colors read as premium (not neon/cartoon).
 const COLORS := [
-	Color(0.9, 0.15, 0.15),   # Red
-	Color(0.15, 0.8, 0.15),   # Green
-	Color(0.15, 0.35, 0.95),  # Blue
-	Color(0.95, 0.85, 0.1),   # Yellow
-	Color(0.95, 0.5,  0.1),   # Orange
-	Color(0.95, 0.3,  0.7),   # Pink
+	Color(0.74, 0.13, 0.13),  # deep red
+	Color(0.13, 0.56, 0.24),  # deep green
+	Color(0.13, 0.30, 0.74),  # deep blue
+	Color(0.82, 0.64, 0.10),  # amber
+	Color(0.82, 0.40, 0.10),  # burnt orange
+	Color(0.62, 0.18, 0.46),  # deep magenta
 ]
 
 const BG_SHADER := "
