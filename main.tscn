@@ -10,4 +10,5 @@ anchor_bottom = 1.0
 mouse_filter = 2
 script = ExtResource("1_gamemanager")
 
-[node name="Camera2D" type="Camera2D" parent="."]
+[node name="ScreenCanvas" type="CanvasLayer" parent="."]
+layer = 1

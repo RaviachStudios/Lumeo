@@ -64,10 +64,6 @@ var _halos: Array[MeshInstance3D] = []
 var _halo_mats: Array[StandardMaterial3D] = []
 var _glow_tex: Texture2D
 var _level_num: Label
-# procedural surface-detail maps for the buttons (premium molded-ABS feel)
-var _noise_albedo: NoiseTexture2D
-var _noise_normal: NoiseTexture2D
-var _noise_rough: NoiseTexture2D
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -75,7 +71,6 @@ func _ready() -> void:
 	resized.connect(_sync_viewport_size)
 
 func _build_shell() -> void:
-	_make_noise_textures()
 	_vpc = SubViewportContainer.new()
 	_vpc.stretch = true
 	_vpc.set_anchors_preset(Control.PRESET_FULL_RECT)

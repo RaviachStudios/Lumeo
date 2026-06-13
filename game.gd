@@ -11,7 +11,7 @@ const BUTTON_COLORS := [
 	Color(0.95, 0.3,  0.7),   # Pink
 ]
 const BG_TOP := Color(0.05, 0.05, 0.15)
-const BG_BOT := Color(0.02, 0.08, 0.22)
+const BG_BOT := Color(0.02, 0.08, 0.22, 1.0)
 const INNER_R := 90.0
 const OUTER_R := 230.0
 

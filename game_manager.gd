@@ -14,9 +14,7 @@ var _canvas: CanvasLayer
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_canvas = CanvasLayer.new()
-	_canvas.layer = 1
-	add_child(_canvas)
+	_canvas = $ScreenCanvas
 	await get_tree().process_frame
 	show_home()
 
