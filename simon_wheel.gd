@@ -40,7 +40,6 @@ const HALO_ALPHA := 0.4      # peak glow strength when fully lit (real bloom add
 const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
 const BTN_RAD_MARGIN := 0.05 # radial inset
 const BTN_RAISE := 0.05      # how far the button sits above the frame plate
-const FOCUS_COLOR := Color(0.95, 0.5, 0.1)  # orange - the button we are tuning
 const SIDE_DARK := 0.42      # side-wall brightness vs the top face (3D feel)
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
@@ -220,21 +219,16 @@ func _rebuild() -> void:
 		frame.position.y = BASE_H * 0.5
 		frame.material_override = _metal_mat(Color(0.05, 0.05, 0.065), 0.85, 0.3)
 		_wheel_root.add_child(frame)
-		# inset, raised, glossy colored button sitting inside the frame.
-		# The orange button is the one we are currently tuning: extra dome +
-		# height and darker side faces for a real beveled-button feel.
-		var is_focus := col.is_equal_approx(FOCUS_COLOR)
-		var btn_h := SEG_H * 1.6 if is_focus else SEG_H
-		var btn_dome := DOME * 2.4 if is_focus else DOME
-		var btn_side := SIDE_DARK if is_focus else 1.0
+		# inset, raised, glossy colored button sitting inside the frame:
+		# extra dome + height and darker side faces for a real beveled-button feel.
 		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
 		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
 		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN,
-			btn_h, btn_dome, btn_side)
+			SEG_H * 1.6, DOME * 2.4, SIDE_DARK)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
 		mi.position.y = BASE_H * 0.5 + BTN_RAISE
-		var mat := _seg_material(col, is_focus)
+		var mat := _seg_material(col, true)
 		mi.material_override = mat
 		_wheel_root.add_child(mi)
 		_segments.append(mi)
