@@ -34,7 +34,7 @@ const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
 const HALO_SIZE := 2.0       # size of the soft glow billboard over a segment
-const HALO_ALPHA := 0.5      # peak glow strength when fully lit (real bloom adds more)
+const HALO_ALPHA := 0.4      # peak glow strength when fully lit (real bloom adds more)
 # Each colored button is inset inside its slot, leaving a dark metal frame
 # border around it, and raised so it sits proud of the frame.
 const BTN_ANG_MARGIN := 1.6  # degrees trimmed from each angular side
@@ -96,12 +96,13 @@ func _build_shell() -> void:
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.45
-	# real bloom now that we are on the Mobile (Vulkan) renderer
+	env.ambient_light_energy = 0.35
+	# real bloom, but with a high threshold so ONLY truly-lit segments bloom -
+	# the regular button colors must not glow in idle.
 	env.glow_enabled = true
-	env.glow_intensity = 1.0
-	env.glow_bloom = 0.25
-	env.glow_hdr_threshold = 1.0
+	env.glow_intensity = 0.9
+	env.glow_bloom = 0.15
+	env.glow_hdr_threshold = 1.4
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -118,7 +119,7 @@ func _build_shell() -> void:
 	# --- lights ---
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-58, -32, 0)
-	key.light_energy = 1.7
+	key.light_energy = 1.1
 	key.light_color = Color(1.0, 0.97, 0.92)
 	_vp.add_child(key)
 
@@ -132,7 +133,7 @@ func _build_shell() -> void:
 	var spec := OmniLight3D.new()
 	spec.position = Vector3(0.25, 2.4, 0.15)
 	spec.omni_range = 7.0
-	spec.light_energy = 1.5
+	spec.light_energy = 0.9
 	spec.light_specular = 1.0
 	spec.light_color = Color(1.0, 1.0, 1.0)
 	_vp.add_child(spec)
@@ -172,28 +173,36 @@ func _rebuild() -> void:
 	if _glow_tex == null:
 		_glow_tex = _make_glow_tex()
 
-	# dark metallic plate the buttons sit in (shows as the frame border)
-	var base := _disc(BASE_R, BASE_H, Color(0.035, 0.035, 0.045), 0.35)
-	(base.material_override as StandardMaterial3D).metallic = 0.85
+	# dark plate the buttons sit in (kept small so it doesn't read as a dome)
+	var base := _disc(1.02, BASE_H, Color(0.03, 0.03, 0.04), 0.4)
+	(base.material_override as StandardMaterial3D).metallic = 0.6
 	_wheel_root.add_child(base)
 
-	# main rounded metallic bezel rim
+	# raised inner lip where the frame meets the buttons
+	var lip := MeshInstance3D.new()
+	lip.mesh = _ring_mesh(1.0, 1.06, 0.22, 0.05)
+	lip.position.y = 0.05
+	lip.material_override = _metal_mat(Color(0.16, 0.16, 0.2), 1.0, 0.12)
+	_wheel_root.add_child(lip)
+
+	# main outer frame ring: wide, flat-ish, polished dark metal (low roughness
+	# = sharp reflections so it catches a bright highlight arc on top)
 	var bezel := MeshInstance3D.new()
-	bezel.mesh = _ring_mesh(1.0, 1.18, 0.24, 0.14)
-	bezel.position.y = 0.06
-	bezel.material_override = _metal_mat(Color(0.09, 0.09, 0.11), 0.9, 0.26)
+	bezel.mesh = _ring_mesh(1.05, 1.34, 0.26, 0.10)
+	bezel.position.y = 0.04
+	bezel.material_override = _metal_mat(Color(0.13, 0.13, 0.16), 1.0, 0.12)
 	_wheel_root.add_child(bezel)
 
-	# outer stepped rim (thin, brighter metal) for a machined-edge detail
+	# brighter polished outer edge for a defined machined rim
 	var rim := MeshInstance3D.new()
-	rim.mesh = _ring_mesh(1.17, 1.27, 0.16, 0.05)
-	rim.position.y = 0.02
-	rim.material_override = _metal_mat(Color(0.13, 0.13, 0.16), 0.95, 0.2)
+	rim.mesh = _ring_mesh(1.30, 1.40, 0.18, 0.05)
+	rim.position.y = 0.0
+	rim.material_override = _metal_mat(Color(0.2, 0.2, 0.24), 1.0, 0.1)
 	_wheel_root.add_child(rim)
 
 	# center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.03, 0.03, 0.06), 0.3)
-	(hub.material_override as StandardMaterial3D).metallic = 0.85
+	var hub := _disc(HUB_R, HUB_H, Color(0.04, 0.04, 0.07), 0.25)
+	(hub.material_override as StandardMaterial3D).metallic = 0.9
 	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
 
@@ -242,8 +251,8 @@ func _rebuild() -> void:
 func _seg_material(col: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = col
-	m.metallic = 0.0
-	m.roughness = 0.17                       # candy-gloss plastic
+	m.metallic = 0.55                        # metallic-tinted colored surface
+	m.roughness = 0.2
 	m.specular = 0.6
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.rim_enabled = true                     # soft edge sheen
