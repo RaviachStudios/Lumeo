@@ -32,9 +32,10 @@ const EMIT_OFF := 0.0
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
 
-# Camera framing (slight tilt for a 3D feel while keeping hit-testing simple)
-const CAM_POS := Vector3(0.0, 3.05, 1.15)
-const CAM_FOV := 30.0
+# Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
+# Distance chosen so the full wheel (radius ~1.14) fits with margin for glow.
+const CAM_POS := Vector3(0.0, 4.6, 1.7)
+const CAM_FOV := 34.0
 
 var _colors: Array = []
 var _count: int = 0
@@ -110,6 +111,9 @@ func _build_shell() -> void:
 	_sync_viewport_size()
 
 func _sync_viewport_size() -> void:
+	if _vpc:
+		_vpc.position = Vector2.ZERO
+		_vpc.size = size
 	if _vp:
 		_vp.size = Vector2i(maxi(2, int(size.x)), maxi(2, int(size.y)))
 
