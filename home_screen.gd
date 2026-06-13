@@ -91,6 +91,7 @@ void fragment() {
 }
 "
 
+var _bg: ColorRect
 var _bg_mat: ShaderMaterial
 var _orbit: Node2D
 var _ring_glow: Line2D
@@ -124,16 +125,17 @@ func _ready() -> void:
 # ---------------- background ----------------
 
 func _build_background() -> void:
-	var bg := ColorRect.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bg.color = Color(0.02, 0.03, 0.09)   # dark fallback if the shader ever fails (never gray)
+	# NOTE: screens live under a CanvasLayer (not a Control), so anchors give this
+	# screen no size - the background must be sized to the viewport in _layout().
+	_bg = ColorRect.new()
+	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bg.color = Color(0.02, 0.03, 0.09)   # dark fallback if the shader ever fails (never gray)
 	var sh := Shader.new()
 	sh.code = BG_SHADER
 	_bg_mat = ShaderMaterial.new()
 	_bg_mat.shader = sh
-	bg.material = _bg_mat
-	add_child(bg)
+	_bg.material = _bg_mat
+	add_child(_bg)
 
 # ---------------- orbit + orbs ----------------
 
@@ -344,6 +346,9 @@ func _layout() -> void:
 	var sz := get_viewport_rect().size
 	var cx := sz.x * 0.5
 	var cy := sz.y * 0.5
+	if _bg:
+		_bg.position = Vector2.ZERO
+		_bg.size = sz                       # CanvasLayer gives no size; fill explicitly
 	if _bg_mat:
 		_bg_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
 
