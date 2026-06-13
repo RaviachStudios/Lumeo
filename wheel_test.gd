@@ -26,7 +26,7 @@ void fragment() {
 	p.x *= aspect;
 	float d = length(p);
 	col += vec3(0.18, 0.28, 0.6) * smoothstep(0.55, 0.0, d) * 0.30;
-	col *= mix(0.62, 1.0, smoothstep(1.05, 0.4, d));
+	col *= mix(0.84, 1.0, smoothstep(1.05, 0.4, d));
 	COLOR = vec4(col, 1.0);
 }
 "
@@ -38,6 +38,10 @@ var _quit: Button
 var _pill: Panel
 var _count := 5
 var _cycle_idx := 0
+
+# Cycle the displayed level through these to check numeral fit/auto-sizing.
+const TEST_LEVELS := [1, 7, 10, 42, 99, 100, 250, 1000, 10000]
+var _lvl_idx := 0
 
 func _ready() -> void:
 	var bg := ColorRect.new()
@@ -75,6 +79,21 @@ func _ready() -> void:
 	t.autostart = true
 	t.timeout.connect(_cycle)
 	add_child(t)
+
+	# Step the level number through TEST_LEVELS so numeral sizing can be eyeballed.
+	var lt := Timer.new()
+	lt.wait_time = 1.6
+	lt.autostart = true
+	lt.timeout.connect(_next_level)
+	add_child(lt)
+
+func _next_level() -> void:
+	var lvl: int = TEST_LEVELS[_lvl_idx % TEST_LEVELS.size()]
+	_lvl_idx += 1
+	_wheel.set_level(lvl)
+	var lbl := _badge.get_child(0) as Label
+	if lbl:
+		lbl.text = "Level: 🍃 %d" % lvl
 
 func _layout() -> void:
 	var vp := get_viewport_rect().size
