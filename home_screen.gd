@@ -223,9 +223,10 @@ func _build_logo() -> void:
 
 	_logo_box.add_child(_logo_letter("S I M", f, Vector2(x0, 0), Vector2(w_left, th)))
 	var ring := _make_o_ring(dr)
-	# raise the ring to the cap-height center (Label centers the whole line box,
-	# which sits lower than the capitals' optical center)
-	ring.position = Vector2(x0 + w_left + g + dr * 0.5, th * 0.5 - f * 0.085)
+	# Drop the ring slightly below the cap-height center so it visually sits
+	# alongside the lowercase center of the surrounding capitals (the letter "O"
+	# in this font reads optically lower than the cap-tops).
+	ring.position = Vector2(x0 + w_left + g + dr * 0.5, th * 0.6 + f * 0.04)
 	_logo_box.add_child(ring)
 	_logo_box.add_child(_logo_letter("N", f, Vector2(x0 + w_left + g + dr + g, 0), Vector2(w_right, th)))
 
@@ -385,11 +386,13 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(face)
 
-	# colored circular icon - brighter than the button, glowing from within
+	# colored circular icon - brighter than the button, glowing from within.
+	# In RTL the icon mirrors to the trailing edge so it sits opposite the arrow.
+	var rtl_layout := _is_rtl()
 	var icon := Panel.new()
 	var d := 44.0
 	icon.size = Vector2(d, d)
-	icon.position = Vector2(18, (BTN_H - d) * 0.5)
+	icon.position = Vector2(BTN_W - 18 - d if rtl_layout else 18, (BTN_H - d) * 0.5)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var ic := StyleBoxFlat.new()
 	ic.bg_color = icon_col.lightened(0.12)
@@ -405,17 +408,22 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 	lbl.text = txt
 	lbl.add_theme_font_size_override("font_size", 23)
 	lbl.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
-	lbl.position = Vector2(18 + d + 16, 0)
+	lbl.position = Vector2(40 if rtl_layout else 18 + d + 16, 0)
 	lbl.size = Vector2(BTN_W - (18 + d + 16) - 40, BTN_H)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT if rtl_layout else HORIZONTAL_ALIGNMENT_LEFT
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(lbl)
 
 	var arrow := Label.new()
-	arrow.text = "›"                               # ›
+	# Always points right: the button's visible "leading icon → label → arrow"
+	# flow does not mirror on RTL devices (Godot's auto-mirror cancels the manual
+	# position flip), so a "‹" here would be the only RTL-flipped element and
+	# would read as pointing the wrong way against an otherwise LTR-laid row.
+	arrow.text = "›"
 	arrow.add_theme_font_size_override("font_size", 32)
 	arrow.add_theme_color_override("font_color", Color(0.55, 0.66, 0.92))
-	arrow.position = Vector2(BTN_W - 40, 0)
+	arrow.position = Vector2(10 if rtl_layout else BTN_W - 40, 0)
 	arrow.size = Vector2(30, BTN_H)
 	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -428,6 +436,13 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 	btn.button_up.connect(_on_btn_up.bind(btn))
 	btn.pressed.connect(cb)
 	return wrap
+
+# True when the UI is laid out right-to-left (Hebrew, Arabic, …). Used to mirror
+# chevrons/icons so "next" still reads in the natural reading direction.
+# is_layout_rtl() resolves the inherited/locale settings to the final orientation,
+# while get_layout_direction() can still return the symbolic LOCALE value.
+func _is_rtl() -> bool:
+	return is_layout_rtl()
 
 func _on_btn_hover(btn: Button, entered: bool) -> void:
 	var tw := create_tween().set_parallel(true)

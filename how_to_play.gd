@@ -16,9 +16,12 @@ const ORB_COLORS := [
 	Color(0.23, 0.51, 0.96),  # blue
 ]
 
-const CARD_W := 560.0
-const CARD_H := 112.0
-const CARD_GAP := 20.0
+# 2x2 grid of step cards. The card is wide enough that each description wraps
+# onto two short lines without crowding (font_size 16, ~64 chars).
+const CARD_W := 440.0
+const CARD_H := 168.0
+const CARD_GAP_X := 28.0
+const CARD_GAP_Y := 24.0
 const CARD_PAD := 20.0
 
 # Four instructional steps: number, accent color, title, description.
@@ -267,9 +270,9 @@ func _make_card(step: Dictionary) -> Control:
 
 	# circular numbered icon, illuminated from within with the accent color
 	var icon := Panel.new()
-	var d := 60.0
+	var d := 56.0
 	icon.size = Vector2(d, d)
-	icon.position = Vector2(22, (CARD_H - d) * 0.5)
+	icon.position = Vector2(20, 20)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var ic := StyleBoxFlat.new()
 	var icbg := accent.darkened(0.15)
@@ -285,7 +288,7 @@ func _make_card(step: Dictionary) -> Control:
 
 	var num := Label.new()
 	num.text = step["n"]
-	num.add_theme_font_size_override("font_size", 28)
+	num.add_theme_font_size_override("font_size", 26)
 	num.add_theme_color_override("font_color", Color.WHITE)
 	num.set_anchors_preset(Control.PRESET_FULL_RECT)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -293,25 +296,37 @@ func _make_card(step: Dictionary) -> Control:
 	num.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	icon.add_child(num)
 
-	var tx := 22.0 + d + 20.0
+	# Title sits to the right of the icon (top row). Description wraps under both,
+	# spanning the full inner width. Both labels use anchor + offset layout so
+	# their size.x is enforced by the anchor system — setting size directly on a
+	# Label was getting ignored by autowrap (text overflowed past the card edge).
+	var tx := 20.0 + d + 16.0
 	var title := Label.new()
 	title.text = step["title"]
-	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_font_size_override("font_size", 24)
 	title.add_theme_color_override("font_color", accent.lightened(0.15))
-	title.position = Vector2(tx, 18)
-	title.size = Vector2(CARD_W - tx - 24, 32)
+	title.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title.offset_left = tx
+	title.offset_right = -20
+	title.offset_top = 22
+	title.offset_bottom = 22 + 32 - CARD_H
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(title)
 
 	var desc := Label.new()
-	desc.text = step["desc"]
 	desc.add_theme_font_size_override("font_size", 16)
 	desc.add_theme_color_override("font_color", Color(0.74, 0.82, 1.0, 0.8))
-	desc.position = Vector2(tx, 54)
-	desc.size = Vector2(CARD_W - tx - 24, CARD_H - 60)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.clip_text = true                          # safety: never spill past the card
+	desc.set_anchors_preset(Control.PRESET_FULL_RECT)
+	desc.offset_left = 20
+	desc.offset_right = -20
+	desc.offset_top = 20 + d + 10
+	desc.offset_bottom = -16
 	desc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(desc)
+	desc.text = step["desc"]                       # set text last so wrap recalcs
 	return wrap
 
 func _build_back() -> void:
@@ -364,14 +379,20 @@ func _layout() -> void:
 		_line_l.position = Vector2(cx - 200, ly)
 		_line_r.position = Vector2(cx + 200 - _line_r.size.x, ly)
 
-	# card stack, centered horizontally, below the header
-	var total := STEPS.size() * CARD_H + (STEPS.size() - 1) * CARD_GAP
-	var start_y := maxf(top + 150.0, sz.y * 0.52 - total * 0.5)
+	# 2x2 grid of cards, centered horizontally, below the header.
+	var grid_w := 2 * CARD_W + CARD_GAP_X
+	var grid_h := 2 * CARD_H + CARD_GAP_Y
+	var start_x := cx - grid_w * 0.5
+	var start_y := maxf(top + 150.0, sz.y * 0.52 - grid_h * 0.5)
 	for i in _cards.size():
-		_cards[i].position = Vector2(cx - CARD_W * 0.5, start_y + i * (CARD_H + CARD_GAP))
+		var col := i % 2
+		var row := i / 2
+		_cards[i].position = Vector2(start_x + col * (CARD_W + CARD_GAP_X),
+			start_y + row * (CARD_H + CARD_GAP_Y))
 
 	if _back:
-		_back.position = Vector2(cx - _back.size.x * 0.5, minf(sz.y - 72.0, start_y + total + 26.0))
+		_back.position = Vector2(cx - _back.size.x * 0.5,
+			minf(sz.y - 72.0, start_y + grid_h + 26.0))
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()
