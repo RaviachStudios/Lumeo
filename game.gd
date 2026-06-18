@@ -30,6 +30,13 @@ var _status_lbl: Label
 var _level_lbl: Label
 var _quit_btn: Button
 var _watch_ad_btn: Button
+# Coins HUD: a top-center pill showing the live balance. The "+ N" indicator
+# is spawned next to it whenever a level completes; we keep a reference so
+# multiple awards in quick succession don't pile up on top of each other.
+var _coin_panel: Panel
+var _coin_lbl: Label
+var _coin_icon: Control
+var _earn_indicator: Label
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -54,6 +61,10 @@ func _process(_dt: float) -> void:
 		_watch_ad_btn.visible = AdManager.rewarded_ready
 
 func _draw() -> void:
+	# When a shop theme is equipped, BackgroundManager fills the viewport;
+	# drawing our own gradient would obscure it.
+	if BackgroundManager.is_themed():
+		return
 	var sz := get_viewport_rect().size
 	# Background gradient (the wheel composites on top with a transparent backdrop)
 	for y in range(0, int(sz.y), 4):
@@ -139,7 +150,79 @@ func _build_hud() -> void:
 	_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(_status_lbl)
 
+	if FirebaseManager.is_signed_in():
+		_build_coin_hud(sz)
 	_build_quit_dialog(sz)
+
+# Top-center pill: a small gold coin glyph + the live balance. Only shown when
+# signed in (offline users don't accumulate coins). The pill is the anchor for
+# the floating "+ N" earn indicator we spawn after each level.
+func _build_coin_hud(sz: Vector2) -> void:
+	const PW := 150.0
+	const PH := 44.0
+	_coin_panel = Panel.new()
+	_coin_panel.position = Vector2(sz.x * 0.5 - PW * 0.5, 18)
+	_coin_panel.size = Vector2(PW, PH)
+	_coin_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.06, 0.07, 0.18, 0.85)
+	st.set_corner_radius_all(int(PH * 0.5))
+	st.border_color = Color(1.0, 0.78, 0.20, 0.7)
+	st.set_border_width_all(1)
+	st.shadow_color = Color(1.0, 0.78, 0.20, 0.30)
+	st.shadow_size = 8
+	_coin_panel.add_theme_stylebox_override("panel", st)
+	add_child(_coin_panel)
+
+	_coin_icon = _make_coin_icon(22.0)
+	_coin_icon.position = Vector2(14, (PH - 22.0) * 0.5)
+	_coin_panel.add_child(_coin_icon)
+
+	_coin_lbl = Label.new()
+	_coin_lbl.text = str(CoinsManager.balance)
+	_coin_lbl.add_theme_font_size_override("font_size", 22)
+	_coin_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.42))
+	_coin_lbl.position = Vector2(42, 0)
+	_coin_lbl.size = Vector2(PW - 56, PH)
+	_coin_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_coin_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_coin_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coin_panel.add_child(_coin_lbl)
+
+	# Stay in sync if the balance changes from elsewhere (e.g. daily claim)
+	CoinsManager.balance_changed.connect(_on_balance_changed)
+
+# A small coin: gold disc + bright ring + "$" mark, positioned via top-left.
+func _make_coin_icon(d: float) -> Control:
+	var c := Control.new()
+	c.size = Vector2(d, d)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var disc := Panel.new()
+	disc.size = Vector2(d, d)
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(1.0, 0.78, 0.16)
+	ds.set_corner_radius_all(int(d * 0.5))
+	ds.border_color = Color(1.0, 0.92, 0.55)
+	ds.set_border_width_all(2)
+	ds.shadow_color = Color(1.0, 0.6, 0.0, 0.55)
+	ds.shadow_size = 5
+	disc.add_theme_stylebox_override("panel", ds)
+	c.add_child(disc)
+	var glyph := Label.new()
+	glyph.text = "$"
+	glyph.add_theme_font_size_override("font_size", int(d * 0.7))
+	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
+	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disc.add_child(glyph)
+	return c
+
+func _on_balance_changed(new_balance: int) -> void:
+	if _coin_lbl:
+		_coin_lbl.text = str(new_balance)
 
 func _build_quit_dialog(sz: Vector2) -> void:
 	var overlay := Panel.new()
@@ -210,6 +293,7 @@ func _start_game() -> void:
 	player_seq = []
 	level = 0
 	replays = 0
+	CoinsManager.start_game_session()
 	_update_hud()
 	_next_round()
 
@@ -265,6 +349,11 @@ func _player_pressed(idx: int) -> void:
 	if player_seq.size() == sequence.size():
 		_state = "idle"
 		_status_lbl.text = "Correct! Get ready..."
+		# Award coins for this completed level and float a "+ N" indicator
+		# next to the balance pill. Returns 0 if not signed in.
+		var earned := CoinsManager.award_for_level(GameState.difficulty, level)
+		if earned > 0:
+			_show_earn_indicator(earned)
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 
@@ -313,3 +402,41 @@ func _update_hud() -> void:
 		_wheel.set_level(level)
 	if _watch_ad_btn:
 		_watch_ad_btn.visible = AdManager.rewarded_ready
+
+# Float a gold "+ N" beside the coin pill, drifting up and fading out. Replaces
+# any indicator still in flight (rapid awards shouldn't pile up).
+func _show_earn_indicator(amount: int) -> void:
+	if _coin_panel == null:
+		return
+	if _earn_indicator and is_instance_valid(_earn_indicator):
+		_earn_indicator.queue_free()
+	var lbl := Label.new()
+	lbl.text = "+ %d" % amount
+	lbl.add_theme_font_size_override("font_size", 22)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	lbl.add_theme_color_override("font_shadow_color", Color(0.5, 0.32, 0.0, 0.7))
+	lbl.add_theme_constant_override("shadow_offset_x", 0)
+	lbl.add_theme_constant_override("shadow_offset_y", 2)
+	lbl.add_theme_constant_override("shadow_outline_size", 6)
+	lbl.size = Vector2(90, 36)
+	# Anchor immediately to the RIGHT of the coin pill, vertically centered.
+	lbl.position = _coin_panel.position + Vector2(_coin_panel.size.x + 6, (_coin_panel.size.y - 36) * 0.5)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(lbl)
+	_earn_indicator = lbl
+
+	# Quick scale-pop on the coin pill itself, so the change feels punchy.
+	_coin_panel.pivot_offset = _coin_panel.size * 0.5
+	var pop := create_tween()
+	pop.tween_property(_coin_panel, "scale", Vector2.ONE * 1.12, 0.10) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	pop.tween_property(_coin_panel, "scale", Vector2.ONE, 0.18) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(lbl, "position:y", lbl.position.y - 36.0, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.85).set_delay(0.25)
+	tw.chain().tween_callback(lbl.queue_free)

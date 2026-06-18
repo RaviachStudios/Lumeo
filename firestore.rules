@@ -25,5 +25,37 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isUser(uid) && scoreOk();
     }
+
+    // Private wallet doc: coin balance, owned/equipped theme, login streak
+    // (streak_days + first_login_at), display name, last claim date.
+    // Owner-only. Fields are validated only when present so partial (merge)
+    // writes don't have to set every field at once.
+    match /users/{uid} {
+      allow read:  if isUser(uid);
+      allow write: if isUser(uid)
+        && (!('coins' in request.resource.data)
+            || (request.resource.data.coins is int
+                && request.resource.data.coins >= 0
+                && request.resource.data.coins <= 100000000))
+        && (!('streak_days' in request.resource.data)
+            || (request.resource.data.streak_days is int
+                && request.resource.data.streak_days >= 0
+                && request.resource.data.streak_days <= 1000000))
+        && (!('last_claim_date' in request.resource.data)
+            || (request.resource.data.last_claim_date is string
+                && request.resource.data.last_claim_date.size() <= 10))
+        && (!('first_login_at' in request.resource.data)
+            || (request.resource.data.first_login_at is string
+                && request.resource.data.first_login_at.size() <= 32))
+        && (!('name' in request.resource.data)
+            || (request.resource.data.name is string
+                && request.resource.data.name.size() <= 32))
+        && (!('selected_theme' in request.resource.data)
+            || (request.resource.data.selected_theme is string
+                && request.resource.data.selected_theme.size() <= 32))
+        && (!('owned_themes' in request.resource.data)
+            || (request.resource.data.owned_themes is map
+                && request.resource.data.owned_themes.size() <= 64));
+    }
   }
 }

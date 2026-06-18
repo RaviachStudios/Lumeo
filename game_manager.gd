@@ -7,6 +7,7 @@ const GameScreen := preload("res://game.gd")
 const GameOverScreen := preload("res://game_over.gd")
 const NamePickerScreen := preload("res://name_picker_screen.gd")
 const LeaderboardsScreen := preload("res://leaderboards_screen.gd")
+const ShopScreen := preload("res://shop_screen.gd")
 
 var _current: Control = null
 var _canvas: CanvasLayer
@@ -37,6 +38,9 @@ func show_name_picker() -> void:
 
 func show_leaderboards() -> void:
 	_swap(LeaderboardsScreen.new())
+
+func show_shop() -> void:
+	_swap(ShopScreen.new())
 
 func show_home() -> void:
 	_swap(HomeScreen.new())

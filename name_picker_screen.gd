@@ -15,6 +15,9 @@ func _ready() -> void:
 	_build_ui()
 
 func _draw() -> void:
+	# Skip when a shop theme is equipped — the global background already fills.
+	if BackgroundManager.is_themed():
+		return
 	var sz := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, sz), BG_TOP)
 	for y in range(0, int(sz.y), 4):

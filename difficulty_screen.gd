@@ -4,7 +4,7 @@ extends Control
 # shader background (nebula + tiny particles + glow + vignette), a slowly
 # rotating orbit with five glowing orbs, a glowing header with side-lined
 # subtitle, three interactive dark-glass difficulty cards with accent neon
-# rims / icons / arrows, and a bottom "Beat your best" card. Nodes + shaders +
+# rims / icons, and a bottom "Beat your best" card. Nodes + shaders +
 # tweens. Selecting a card sets the difficulty and starts the game.
 
 var game_manager: Node
@@ -133,6 +133,10 @@ func _ready() -> void:
 # ---------------- background ----------------
 
 func _build_background() -> void:
+	# Skip when a shop theme is equipped — BackgroundManager renders that
+	# globally beneath us.
+	if BackgroundManager.is_themed():
+		return
 	_bg = ColorRect.new()
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bg.color = Color(0.02, 0.02, 0.10)
@@ -344,8 +348,8 @@ func _make_card(d: Dictionary) -> Control:
 	sym.position = Vector2(dia * 0.5, dia * 0.5)
 	icon.add_child(sym)
 
-	# Title sits centered between the icon (leading edge) and the arrow (trailing
-	# edge); sides flip in RTL so the icon stays opposite the chevron.
+	# Title sits next to the icon (leading edge); sides flip in RTL so the icon
+	# stays on the visual leading side.
 	var title := Label.new()
 	title.text = d["title"]
 	title.add_theme_font_size_override("font_size", 28)
@@ -359,25 +363,6 @@ func _make_card(d: Dictionary) -> Control:
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(title)
-
-	# Always points right: the card's visible "leading icon → title → arrow" flow
-	# does not mirror on RTL devices (Godot's auto-mirror cancels the manual
-	# position flip), so a "‹" here would be the only RTL-flipped element and
-	# would read as pointing the wrong way against an otherwise LTR-laid card.
-	var arrow := Label.new()
-	arrow.text = "›"
-	arrow.add_theme_font_size_override("font_size", 34)
-	arrow.add_theme_color_override("font_color", accent.lightened(0.2))
-	arrow.add_theme_color_override("font_shadow_color", Color(accent.r, accent.g, accent.b, 0.6))
-	arrow.add_theme_constant_override("shadow_offset_x", 0)
-	arrow.add_theme_constant_override("shadow_offset_y", 0)
-	arrow.add_theme_constant_override("shadow_outline_size", 6)
-	arrow.position = Vector2(12 if rtl else CARD_W - 46, 0)
-	arrow.size = Vector2(34, CARD_H)
-	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(arrow)
 
 	btn.mouse_entered.connect(_on_hover.bind(btn, true))
 	btn.mouse_exited.connect(_on_hover.bind(btn, false))

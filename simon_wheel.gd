@@ -32,7 +32,7 @@ const BEVEL := 0.085         # rounded-bevel drop around the whole segment edge
 const BEVEL_ZONE := 0.3      # fraction of each half-extent occupied by the bevel
 
 const EMIT_ON := 1.3         # emission when lit: lit from within, not overexposed
-const EMIT_OFF := 0.22       # idle self-illumination — bumped from 0.14 so the
+const EMIT_OFF := 0.40       # idle self-illumination — bumped from 0.14 so the
 							 # button colors read vivid even before being lit.
 							 # Still well under the 1.1 bloom threshold.
 const GLOW_LERP := 14.0      # how fast glow rises/falls
@@ -46,8 +46,8 @@ const BTN_RAD_MARGIN := 0.06 # radial inset
 const BTN_RAISE := 0.09      # how far the button sits above the frame plate
 # Side walls kept fairly bright so buttons never read as near-black; inner/cap
 # walls only a little darker for a soft seam (gentle AO, not heavy shadow).
-const SIDE_DARK := 0.15      # outer side-wall brightness vs the top
-const SIDE_DARK_IN := 0.58   # inner/recessed walls a touch darker
+const SIDE_DARK := 0.7      # outer side-wall brightness vs the top
+const SIDE_DARK_IN := 0.95   # inner/recessed walls a touch darker
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Pulled in so the wheel fills most of the widget (large, prominent).

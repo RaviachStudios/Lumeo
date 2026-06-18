@@ -123,6 +123,9 @@ func _ready() -> void:
 # ---------------- background ----------------
 
 func _build_background() -> void:
+	# Skip when a shop theme is equipped — BackgroundManager handles it globally.
+	if BackgroundManager.is_themed():
+		return
 	# Screens live under a CanvasLayer (no size), so size the bg in _layout().
 	_bg = ColorRect.new()
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE

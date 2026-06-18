@@ -25,6 +25,8 @@ AdManager="*res://ad_manager.gd"
 Firebase="*uid://byskkw8tp58n0"
 FirebaseManager="*res://firebase_manager.gd"
 LeaderboardManager="*res://leaderboard_manager.gd"
+CoinsManager="*res://coins_manager.gd"
+BackgroundManager="*res://background_manager.gd"
 
 [display]
 

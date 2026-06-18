@@ -140,6 +140,9 @@ func _is_rtl() -> bool:
 # ---------------- background ----------------
 
 func _build_background() -> void:
+	# Skip when a shop theme is equipped — BackgroundManager handles it globally.
+	if BackgroundManager.is_themed():
+		return
 	_bg = ColorRect.new()
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bg.color = Color(0.008, 0.020, 0.10)

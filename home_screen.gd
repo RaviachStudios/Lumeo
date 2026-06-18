@@ -6,6 +6,8 @@ extends Control
 # buttons with hover / press / float micro-animations. Everything is built from
 # Godot nodes + shaders + tweens (no static images).
 
+const DailyClaimPopup := preload("res://daily_claim_popup.gd")
+
 var game_manager: Node
 
 const GOLD := Color(1.0, 0.85, 0.2)
@@ -19,12 +21,13 @@ const ORB_COLORS := [
 	Color(0.23, 0.51, 0.96),  # blue
 ]
 
-const BTN_W := 360.0
-const BTN_H := 74.0
+const BTN_W := 440.0
+const BTN_H := 78.0
 const BTN_GAP := 22.0
 const ICON_BLUE := Color(0.23, 0.51, 0.96)
 const ICON_GREEN := Color(0.18, 0.78, 0.39)
 const ICON_PURPLE := Color(0.55, 0.36, 0.96)
+const ICON_GOLD := Color(1.00, 0.78, 0.22)
 
 const BG_SHADER := "
 shader_type canvas_item;
@@ -102,6 +105,14 @@ var _logo_box: Control
 var _btn_wrappers: Array[Control] = []
 var _btn_face_mat: ShaderMaterial
 var _signing_in := false
+# Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
+# at a fixed corner here. Daily-claim button sits just under the sign-in row.
+var _coin_pill: Panel
+var _coin_lbl: Label
+var _coin_loading_tween: Tween   # animates "." -> ".." -> "..." while CoinsManager loads
+var _coin_loading_idx: int = 0
+var _daily_btn: Button
+var _daily_badge: Panel
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -116,6 +127,15 @@ func _ready() -> void:
 	_build_logo()
 	_build_buttons()
 	_build_account_corner()
+	if FirebaseManager.is_signed_in():
+		_build_coin_pill()
+		_build_daily_claim_button()
+		# Opening the home screen is the heartbeat of the login-streak system.
+		# If the wallet hasn't finished loading yet, deferred call once it does.
+		if CoinsManager.is_loaded():
+			CoinsManager.register_login()
+		else:
+			CoinsManager.loaded.connect(CoinsManager.register_login, CONNECT_ONE_SHOT)
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)
@@ -125,6 +145,11 @@ func _ready() -> void:
 # ---------------- background ----------------
 
 func _build_background() -> void:
+	# When the player owns and has equipped a shop theme, BackgroundManager
+	# already fills the viewport beneath us — skip the per-screen bg so the
+	# theme isn't hidden.
+	if BackgroundManager.is_themed():
+		return
 	# NOTE: screens live under a CanvasLayer (not a Control), so anchors give this
 	# screen no size - the background must be sized to the viewport in _layout().
 	_bg = ColorRect.new()
@@ -353,6 +378,10 @@ func _build_buttons() -> void:
 	_btn_wrappers.clear()
 	_btn_wrappers.append(_make_menu_button("START GAME", ICON_BLUE, _on_start))
 	_btn_wrappers.append(_make_menu_button("LEADERBOARDS", ICON_GREEN, _on_leaderboards))
+	# SHOP sits just above HOW TO PLAY per the product spec. Only the signed-in
+	# player has a wallet to spend, so we hide it otherwise.
+	if FirebaseManager.is_signed_in():
+		_btn_wrappers.append(_make_menu_button("SHOP", ICON_GOLD, _on_shop))
 	_btn_wrappers.append(_make_menu_button("HOW TO PLAY", ICON_PURPLE, _on_how))
 
 # A dark navy-glass pill (shader face: gradient + top highlight + blue rim + inner
@@ -387,10 +416,10 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 	btn.add_child(face)
 
 	# colored circular icon - brighter than the button, glowing from within.
-	# In RTL the icon mirrors to the trailing edge so it sits opposite the arrow.
+	# In RTL the icon mirrors to the trailing edge so it leads the label.
 	var rtl_layout := _is_rtl()
 	var icon := Panel.new()
-	var d := 44.0
+	var d := 56.0
 	icon.size = Vector2(d, d)
 	icon.position = Vector2(BTN_W - 18 - d if rtl_layout else 18, (BTN_H - d) * 0.5)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -406,7 +435,7 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 
 	var lbl := Label.new()
 	lbl.text = txt
-	lbl.add_theme_font_size_override("font_size", 23)
+	lbl.add_theme_font_size_override("font_size", 28)
 	lbl.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
 	lbl.position = Vector2(40 if rtl_layout else 18 + d + 16, 0)
 	lbl.size = Vector2(BTN_W - (18 + d + 16) - 40, BTN_H)
@@ -414,21 +443,6 @@ func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(lbl)
-
-	var arrow := Label.new()
-	# Always points right: the button's visible "leading icon → label → arrow"
-	# flow does not mirror on RTL devices (Godot's auto-mirror cancels the manual
-	# position flip), so a "‹" here would be the only RTL-flipped element and
-	# would read as pointing the wrong way against an otherwise LTR-laid row.
-	arrow.text = "›"
-	arrow.add_theme_font_size_override("font_size", 32)
-	arrow.add_theme_color_override("font_color", Color(0.55, 0.66, 0.92))
-	arrow.position = Vector2(10 if rtl_layout else BTN_W - 40, 0)
-	arrow.size = Vector2(30, BTN_H)
-	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(arrow)
 
 	btn.mouse_entered.connect(_on_btn_hover.bind(btn, true))
 	btn.mouse_exited.connect(_on_btn_hover.bind(btn, false))
@@ -483,9 +497,14 @@ func _layout() -> void:
 	if _logo_box:
 		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.16)
 
-	# buttons: stacked, centered, lower portion
+	# Button group sits lower than the visual center and is clamped to stay
+	# below the logo subtitle ("MEMORY CHALLENGE") with a guaranteed gap.
+	# Without the clamp, on short / landscape viewports the top button can
+	# climb over the subtitle.
 	var total := _btn_wrappers.size() * BTN_H + (_btn_wrappers.size() - 1) * BTN_GAP
-	var start_y := sz.y * 0.60 - total * 0.5
+	var preferred_start := sz.y * 0.66 - total * 0.5
+	var logo_bottom := (_logo_box.position.y + _logo_box.size.y) if _logo_box else sz.y * 0.35
+	var start_y := maxf(preferred_start, logo_bottom + 18.0)
 	for i in _btn_wrappers.size():
 		_btn_wrappers[i].position = Vector2(cx - BTN_W * 0.5, start_y + i * (BTN_H + BTN_GAP))
 
@@ -557,6 +576,161 @@ func _build_account_corner() -> void:
 		_add_corner_btn("Sign in", Vector2(sz.x - 136, 16), Vector2(120, 44),
 			Color(0.15, 0.6, 0.95), _on_sign_in)
 
+# Gold coin pill anchored at the top-LEFT (the account chip lives top-right).
+# Stays live via CoinsManager.balance_changed — buying / claiming / earning
+# during a game all update it on return.
+func _build_coin_pill() -> void:
+	const PW := 160.0
+	const PH := 44.0
+	_coin_pill = Panel.new()
+	_coin_pill.position = Vector2(16, 16)
+	_coin_pill.size = Vector2(PW, PH)
+	_coin_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.06, 0.07, 0.18, 0.88)
+	st.set_corner_radius_all(int(PH * 0.5))
+	st.border_color = Color(1.0, 0.78, 0.22, 0.85)
+	st.set_border_width_all(2)
+	st.shadow_color = Color(1.0, 0.78, 0.22, 0.35)
+	st.shadow_size = 10
+	_coin_pill.add_theme_stylebox_override("panel", st)
+	add_child(_coin_pill)
+
+	# Tiny gold disc + "$" — same shape as the in-game HUD icon for consistency.
+	var disc := Panel.new()
+	var d := 24.0
+	disc.size = Vector2(d, d)
+	disc.position = Vector2(10, (PH - d) * 0.5)
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(1.0, 0.78, 0.16)
+	ds.set_corner_radius_all(int(d * 0.5))
+	ds.border_color = Color(1.0, 0.92, 0.55)
+	ds.set_border_width_all(2)
+	disc.add_theme_stylebox_override("panel", ds)
+	_coin_pill.add_child(disc)
+	var glyph := Label.new()
+	glyph.text = "$"
+	glyph.add_theme_font_size_override("font_size", 18)
+	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
+	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disc.add_child(glyph)
+
+	_coin_lbl = Label.new()
+	_coin_lbl.add_theme_font_size_override("font_size", 22)
+	_coin_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	_coin_lbl.position = Vector2(40, 0)
+	_coin_lbl.size = Vector2(PW - 50, PH)
+	_coin_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_coin_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_coin_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coin_pill.add_child(_coin_lbl)
+
+	# Until the wallet doc lands from Firestore, show animated dots instead of
+	# the placeholder "0" — otherwise the pill flashes "0" for a beat then snaps
+	# to the real balance, which reads as "you have nothing" on every open.
+	if CoinsManager.is_loaded():
+		_coin_lbl.text = str(CoinsManager.balance)
+	else:
+		_start_coin_loading_anim()
+
+	CoinsManager.balance_changed.connect(_on_balance_changed)
+	# After sign-in CoinsManager may load asynchronously; reflect the final value.
+	CoinsManager.loaded.connect(func() -> void: _on_balance_changed(CoinsManager.balance))
+
+func _on_balance_changed(new_balance: int) -> void:
+	if _coin_lbl:
+		_stop_coin_loading_anim()
+		_coin_lbl.text = str(new_balance)
+
+func _start_coin_loading_anim() -> void:
+	if not _coin_lbl:
+		return
+	_coin_loading_idx = 0
+	_coin_lbl.text = "."
+	_coin_loading_tween = create_tween().set_loops()
+	_coin_loading_tween.tween_interval(0.35)
+	_coin_loading_tween.tween_callback(_tick_coin_loading)
+
+func _tick_coin_loading() -> void:
+	if not _coin_lbl:
+		return
+	_coin_loading_idx = (_coin_loading_idx + 1) % 3
+	_coin_lbl.text = ".".repeat(_coin_loading_idx + 1)
+
+func _stop_coin_loading_anim() -> void:
+	if _coin_loading_tween and _coin_loading_tween.is_valid():
+		_coin_loading_tween.kill()
+	_coin_loading_tween = null
+
+# Daily claim button — anchored on the LEFT, directly under the coin pill, so
+# the wallet-related controls are grouped together. Opens a modal popup with
+# the 14-day streak grid (or the endless-streak view past day 14). A small
+# gold dot badges the button when a claim is available.
+func _build_daily_claim_button() -> void:
+	const W := 200.0
+	var x := 16.0
+	var y := 78.0                                      # 16 (pill y) + 44 (pill h) + ~18 gap
+
+	_daily_btn = Button.new()
+	_daily_btn.text = "🎁  Daily Claim"
+	_daily_btn.position = Vector2(x, y)
+	_daily_btn.size = Vector2(W, 44)
+	_daily_btn.focus_mode = Control.FOCUS_NONE
+	_daily_btn.add_theme_font_size_override("font_size", 17)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.06, 0.07, 0.18, 0.88)
+	s.set_corner_radius_all(22)
+	s.border_color = Color(1.0, 0.78, 0.22, 0.85)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(1.0, 0.78, 0.22, 0.30)
+	s.shadow_size = 10
+	_daily_btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(0.10, 0.12, 0.26, 0.95)
+	_daily_btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.04, 0.05, 0.14, 1.0)
+	_daily_btn.add_theme_stylebox_override("pressed", sp)
+	_daily_btn.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	_daily_btn.pressed.connect(_open_daily_popup)
+	add_child(_daily_btn)
+
+	# Small pulsing "claim available" badge.
+	_daily_badge = Panel.new()
+	_daily_badge.size = Vector2(14, 14)
+	_daily_badge.position = Vector2(x + W - 18, y + 4)
+	_daily_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bs := StyleBoxFlat.new()
+	bs.bg_color = Color(1.0, 0.32, 0.22)
+	bs.set_corner_radius_all(7)
+	bs.shadow_color = Color(1.0, 0.32, 0.22, 0.7)
+	bs.shadow_size = 8
+	_daily_badge.add_theme_stylebox_override("panel", bs)
+	add_child(_daily_badge)
+
+	# Gentle infinite pulse so the badge catches the eye.
+	var pulse := create_tween().set_loops()
+	pulse.tween_property(_daily_badge, "scale", Vector2.ONE * 1.25, 0.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pulse.tween_property(_daily_badge, "scale", Vector2.ONE, 0.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	_refresh_daily_badge()
+	CoinsManager.daily_claim_changed.connect(_refresh_daily_badge)
+	CoinsManager.loaded.connect(_refresh_daily_badge)
+
+func _refresh_daily_badge() -> void:
+	if _daily_badge:
+		_daily_badge.visible = CoinsManager.can_claim_today()
+
+func _open_daily_popup() -> void:
+	var popup := DailyClaimPopup.new()
+	add_child(popup)
+
 func _add_corner_btn(txt: String, pos: Vector2, size: Vector2, col: Color, cb: Callable) -> void:
 	var btn := Button.new()
 	btn.text = txt
@@ -587,6 +761,9 @@ func _on_start() -> void:
 
 func _on_how() -> void:
 	game_manager.show_how_to_play()
+
+func _on_shop() -> void:
+	game_manager.show_shop()
 
 func _on_leaderboards() -> void:
 	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():

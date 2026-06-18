@@ -3,6 +3,10 @@ extends Node
 signal signed_in(uid: String, display_name: String)
 signal sign_in_failed(error: String)
 signal signed_out
+# Emitted on any change to the canonical display name (name-picker submit,
+# or a sign-out that clears it). Subscribers persist it (CoinsManager) and
+# propagate it (LeaderboardManager rename).
+signal display_name_changed(new_name: String)
 
 const SAVE_PATH := "user://user_profile.cfg"
 
@@ -12,7 +16,6 @@ var _is_editor := OS.get_name() != "Android"
 var uid: String = ""
 var display_name: String = ""   # the name the user explicitly chose
 var google_name: String = ""    # the name Google reports (used only as a suggestion)
-var id_token: String = ""       # Firebase ID token for authenticated REST calls
 
 func _ready() -> void:
 	_load_profile()
@@ -46,8 +49,11 @@ func sign_in() -> void:
 	Firebase.auth.sign_in_with_google()
 
 func set_display_name(name: String) -> void:
+	if name == display_name:
+		return
 	display_name = name
 	_save_profile()
+	display_name_changed.emit(display_name)
 
 func sign_out_user() -> void:
 	if _is_editor:
@@ -60,7 +66,6 @@ func sign_out_user() -> void:
 func _apply_user(user_data: Dictionary) -> void:
 	var new_uid: String = user_data.get("uid", "")
 	google_name = user_data.get("name", "")
-	id_token = user_data.get("idtoken", user_data.get("id_token", ""))
 	if new_uid != uid:
 		# Different account than the one cached locally: drop the old chosen name.
 		display_name = ""

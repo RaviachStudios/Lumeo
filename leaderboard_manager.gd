@@ -16,8 +16,35 @@ var _sim_global := {"easy": {}, "moderate": {}, "hard": {}}
 func _uid() -> String:  return FirebaseManager.uid
 func _name() -> String: return FirebaseManager.display_name
 
+func _ready() -> void:
+	FirebaseManager.display_name_changed.connect(_on_display_name_changed)
+
 func reset_session() -> void:
 	pass
+
+# A rename only needs to touch existing leaderboard rows — we MUST NOT create
+# empty rows (no score) for a user just because they picked a name. So for
+# each difficulty we read first, and only write if the row already exists.
+func _on_display_name_changed(new_name: String) -> void:
+	var uid := _uid()
+	if uid.is_empty() or new_name.is_empty():
+		return
+	if _is_editor:
+		for diff in DIFFS:
+			var g: Dictionary = _sim_global.get(diff, {})
+			if g.has(uid):
+				var e: Dictionary = g[uid]
+				e["name"] = new_name
+				g[uid] = e
+				_sim_global[diff] = g
+		return
+	for diff in DIFFS:
+		var coll := "global_" + diff
+		var existing := await _rest_get(coll, uid)
+		if not bool(existing.get("exists", false)):
+			continue
+		Firebase.firestore.set_document(coll, uid, {"name": new_name}, true)
+		await Firebase.firestore.write_task_completed
 
 # ---- REST helpers ----
 
@@ -25,11 +52,9 @@ func _http_get(url: String) -> Array:
 	var http := HTTPRequest.new()
 	http.timeout = 6.0
 	add_child(http)
-	var headers: PackedStringArray = []
-	var token: String = FirebaseManager.id_token
-	if not token.is_empty():
-		headers = ["Authorization: Bearer " + token]
-	if http.request(url, headers) != OK:
+	# All collections read here have `allow read: if true` in firestore.rules,
+	# so no Authorization header is needed.
+	if http.request(url) != OK:
 		http.queue_free()
 		return [0, 0, [], PackedByteArray()]
 	var r: Array = await http.request_completed
@@ -85,6 +110,19 @@ func _fields(f: Dictionary) -> Dictionary:
 	return out
 
 # ---- public API ----
+
+# Reads the signed-in user's stored score for one difficulty. Returns 0 when
+# the user has no row yet, isn't signed in, or the read fails — callers treat
+# "no leaderboard row" and "score 0" identically, so a quiet 0 is the right
+# default. Used by GameState to hydrate the in-memory high-score cache.
+func get_my_score(difficulty: String) -> int:
+	if _uid().is_empty():
+		return 0
+	if _is_editor:
+		var g: Dictionary = _sim_global.get(difficulty, {})
+		return int(g.get(_uid(), {}).get("score", 0))
+	var existing := await _rest_get("global_" + difficulty, _uid())
+	return int(existing.get("data", {}).get("score", 0))
 
 func submit_score(difficulty: String, score: int) -> void:
 	if _uid().is_empty(): return
