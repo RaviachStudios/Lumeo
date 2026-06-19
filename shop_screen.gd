@@ -116,6 +116,11 @@ func _ready() -> void:
 	# Keep cards + coin pill in sync if the player buys / equips while open.
 	CoinsManager.balance_changed.connect(_on_balance_changed)
 	CoinsManager.themes_changed.connect(_refresh_cards)
+	# Equipping from inside the shop flips BackgroundManager.is_themed() under
+	# us — without this, the shop's own deep-space bg stays in place over the
+	# new global theme (or vanishes to grey when the player re-equips default),
+	# and the change only becomes visible after navigating back to home.
+	CoinsManager.themes_changed.connect(_sync_local_background)
 	_render_category(_current_cat)
 
 # ---------------- background ----------------
@@ -132,6 +137,18 @@ func _build_background() -> void:
 	_bg_mat.shader = sh
 	_bg.material = _bg_mat
 	add_child(_bg)
+
+func _sync_local_background() -> void:
+	var themed := BackgroundManager.is_themed()
+	if themed and _bg:
+		_bg.queue_free()
+		_bg = null
+		_bg_mat = null
+	elif not themed and not _bg:
+		_build_background()
+		# Built after the rest of the UI in this case — push it under everything.
+		move_child(_bg, 0)
+		_layout()
 
 # ---------------- orbit ----------------
 
