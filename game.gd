@@ -30,9 +30,10 @@ var _status_lbl: Label
 var _level_lbl: Label
 var _quit_btn: Button
 var _watch_ad_btn: Button
-# Coins HUD: a top-center pill showing the live balance. The "+ N" indicator
-# is spawned next to it whenever a level completes; we keep a reference so
-# multiple awards in quick succession don't pile up on top of each other.
+# Coins HUD: a top-center pill showing the coins earned THIS session (starts at
+# 0). The "+ N" indicator is spawned next to it whenever a level completes; we
+# keep a reference so multiple awards in quick succession don't pile up on top
+# of each other. The session total is banked into the wallet at game over.
 var _coin_panel: Panel
 var _coin_lbl: Label
 var _coin_icon: Control
@@ -50,6 +51,7 @@ func _ready() -> void:
 	add_child(_wheel)
 	_layout_wheel()
 	_wheel.configure(num_buttons, BUTTON_COLORS)
+	_apply_simon_skin()
 	get_viewport().size_changed.connect(_layout_wheel)
 	_build_hud()
 	await get_tree().process_frame
@@ -84,6 +86,28 @@ func _layout_wheel() -> void:
 	var s: float = minf(sz.x, sz.y) * 0.92
 	_wheel.size = Vector2(s, s)
 	_wheel.position = (sz - _wheel.size) * 0.5
+
+# Apply the player's equipped Simon customization (shop "SIMON" tab) to the
+# wheel. CoinsManager is already loaded by the time a game starts (the home
+# screen waits on CoinsManager.loaded), so the equipped colours are available
+# immediately. In skin mode there are no skins yet, so the wheel keeps its stock
+# look (all-null) for now.
+func _apply_simon_skin() -> void:
+	if _wheel == null:
+		return
+	_wheel.apply_skin(
+		_resolved_simon_tint("outer_circle"),
+		_resolved_simon_tint("inner_circle"),
+		_resolved_simon_tint("level_number"))
+
+# Returns the Color tint for a category, or null to keep the stock look.
+func _resolved_simon_tint(category: String) -> Variant:
+	if not CoinsManager.is_simon_manual():
+		return null
+	var id := CoinsManager.equipped_simon_color(category)
+	if id == CoinsManager.SIMON_DEFAULT_COLOR:
+		return null
+	return CoinsManager.simon_color_value(id)
 
 func _input(event: InputEvent) -> void:
 	if _state != "input" or get_node("QuitDialog").visible:
@@ -154,9 +178,10 @@ func _build_hud() -> void:
 		_build_coin_hud(sz)
 	_build_quit_dialog(sz)
 
-# Top-center pill: a small gold coin glyph + the live balance. Only shown when
-# signed in (offline users don't accumulate coins). The pill is the anchor for
-# the floating "+ N" earn indicator we spawn after each level.
+# Top-center pill: a small gold coin glyph + the coins earned this session
+# (starts at 0). Only shown when signed in (offline users don't accumulate
+# coins). The pill is the anchor for the floating "+ N" earn indicator we spawn
+# after each level.
 func _build_coin_hud(sz: Vector2) -> void:
 	const PW := 150.0
 	const PH := 44.0
@@ -179,7 +204,7 @@ func _build_coin_hud(sz: Vector2) -> void:
 	_coin_panel.add_child(_coin_icon)
 
 	_coin_lbl = Label.new()
-	_coin_lbl.text = str(CoinsManager.balance)
+	_coin_lbl.text = "0"
 	_coin_lbl.add_theme_font_size_override("font_size", 22)
 	_coin_lbl.add_theme_color_override("font_color", Color(1.0, 0.88, 0.42))
 	_coin_lbl.position = Vector2(42, 0)
@@ -189,8 +214,9 @@ func _build_coin_hud(sz: Vector2) -> void:
 	_coin_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_coin_panel.add_child(_coin_lbl)
 
-	# Stay in sync if the balance changes from elsewhere (e.g. daily claim)
-	CoinsManager.balance_changed.connect(_on_balance_changed)
+	# Track coins earned this session (not the wallet total) — the running sum
+	# is added to the balance at game over.
+	CoinsManager.session_earned_changed.connect(_on_session_changed)
 
 # A small coin: gold disc + bright ring + "$" mark, positioned via top-left.
 func _make_coin_icon(d: float) -> Control:
@@ -220,9 +246,9 @@ func _make_coin_icon(d: float) -> Control:
 	disc.add_child(glyph)
 	return c
 
-func _on_balance_changed(new_balance: int) -> void:
+func _on_session_changed(session_total: int) -> void:
 	if _coin_lbl:
-		_coin_lbl.text = str(new_balance)
+		_coin_lbl.text = str(session_total)
 
 func _build_quit_dialog(sz: Vector2) -> void:
 	var overlay := Panel.new()
@@ -389,6 +415,8 @@ func _replay_after_countdown() -> void:
 
 func _game_over() -> void:
 	_state = "gameover"
+	# Bank the coins earned this session into the persistent wallet.
+	CoinsManager.commit_session()
 	AudioManager.play_lose_sound()
 	_status_lbl.text = "Game Over!"
 	if level > 5:

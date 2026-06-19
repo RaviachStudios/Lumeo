@@ -117,6 +117,11 @@ var _cards: Array[Control] = []     # difficulty card wrappers
 var _back: Button
 var _selecting := false
 
+# Unlock-confirm popup (only present while a locked card is being purchased).
+var _popup: Control
+var _popup_dialog: Panel
+var _popup_backdrop: ColorRect
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_orb_tex = _make_radial_texture()
@@ -127,8 +132,17 @@ func _ready() -> void:
 	_build_cards()
 	_layout()
 	get_viewport().size_changed.connect(_layout)
+	# If the wallet doc lands after this screen is built, drop the lock on any
+	# difficulty the player already owns.
+	CoinsManager.levels_changed.connect(_on_levels_changed)
 	_start_animations()
 	_intro()
+
+func _on_levels_changed() -> void:
+	for d in DIFFS:
+		var diff: String = d["diff"]
+		if CoinsManager.is_level_unlocked(diff):
+			_unlock_card_visual(diff)
 
 # ---------------- background ----------------
 
@@ -291,6 +305,8 @@ func _build_cards() -> void:
 
 func _make_card(d: Dictionary) -> Control:
 	var accent: Color = d["accent"]
+	var diff: String = d["diff"]
+	var locked := not CoinsManager.is_level_unlocked(diff)
 	var rtl := is_layout_rtl()
 	var wrap := Control.new()
 	wrap.custom_minimum_size = Vector2(CARD_W, CARD_H)
@@ -327,26 +343,24 @@ func _make_card(d: Dictionary) -> Control:
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(face)
 
-	# circular icon container, illuminated in the accent color
+	# circular icon container. A bought difficulty glows in its accent color; a
+	# locked one is muted with no glow, so the eye isn't drawn to an option the
+	# player can't pick yet (the styling is swapped back on purchase).
 	var dia := 52.0
 	var icon := Panel.new()
 	icon.size = Vector2(dia, dia)
 	icon.position = Vector2(CARD_W - 22 - dia if rtl else 22, (CARD_H - dia) * 0.5)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ic := StyleBoxFlat.new()
-	var icbg := accent.darkened(0.2)
-	icbg.a = 0.28
-	ic.bg_color = icbg
-	ic.set_corner_radius_all(int(dia * 0.5))
-	ic.border_color = accent.lightened(0.2)
-	ic.set_border_width_all(2)
-	ic.shadow_color = Color(accent.r, accent.g, accent.b, 0.5)
-	ic.shadow_size = 14
-	icon.add_theme_stylebox_override("panel", ic)
+	icon.add_theme_stylebox_override("panel", _icon_stylebox(accent, dia, locked))
 	btn.add_child(icon)
 	var sym := _make_icon(d["icon"], dia * 0.36, accent.lightened(0.45))
 	sym.position = Vector2(dia * 0.5, dia * 0.5)
+	if locked:
+		sym.modulate = Color(0.58, 0.61, 0.70)   # desaturate the glyph while locked
 	icon.add_child(sym)
+	btn.set_meta("icon_panel", icon)
+	btn.set_meta("icon_sym", sym)
+	btn.set_meta("icon_dia", dia)
 
 	# Title sits next to the icon (leading edge); sides flip in RTL so the icon
 	# stays on the visual leading side.
@@ -363,11 +377,137 @@ func _make_card(d: Dictionary) -> Control:
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(title)
+	btn.set_meta("title", title)
+	btn.set_meta("diff", diff)
+
+	# Locked difficulty: dim the title, stamp a price badge (coin cost) on the
+	# trailing edge, and pin a padlock to the top-right corner (overhanging the
+	# card a touch so it reads as a "locked" seal). Both are removed on purchase.
+	if locked:
+		title.add_theme_color_override("font_color", Color(0.62, 0.66, 0.78))
+		title.add_theme_color_override("font_outline_color", Color(0.62, 0.66, 0.78))
+		var badge := _make_price_badge(CoinsManager.level_price(diff))
+		var bw: float = badge.size.x
+		badge.position = Vector2(22 if rtl else CARD_W - 22 - bw, (CARD_H - badge.size.y) * 0.5)
+		btn.add_child(badge)
+		btn.set_meta("lock_badge", badge)
+		var seal := _make_lock_seal()
+		var sd: float = seal.size.x
+		# Top corner, exceeding slightly past the card edge on the trailing side.
+		seal.position = Vector2(-sd * 0.40 if rtl else CARD_W - sd * 0.60, -sd * 0.40)
+		btn.add_child(seal)
+		btn.set_meta("lock_seal", seal)
 
 	btn.mouse_entered.connect(_on_hover.bind(btn, true))
 	btn.mouse_exited.connect(_on_hover.bind(btn, false))
-	btn.pressed.connect(_on_select.bind(d))
+	btn.pressed.connect(_on_card_pressed.bind(d))
 	return wrap
+
+# Trailing-edge badge for a locked card: a gold coin disc and the price. The
+# padlock that used to live here now sits in the card's top-right corner (see
+# _make_lock_seal). Returned as a fixed-size Control so the caller can position it.
+func _make_price_badge(price: int) -> Control:
+	var badge := Control.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var h := 40.0
+
+	# Gold coin disc with "$"
+	var dia := 26.0
+	var disc := Panel.new()
+	disc.size = Vector2(dia, dia)
+	disc.position = Vector2(0.0, (h - dia) * 0.5)
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(1.0, 0.78, 0.16)
+	ds.set_corner_radius_all(int(dia * 0.5))
+	ds.border_color = Color(1.0, 0.92, 0.55)
+	ds.set_border_width_all(2)
+	disc.add_theme_stylebox_override("panel", ds)
+	badge.add_child(disc)
+	var glyph := Label.new()
+	glyph.text = "$"
+	glyph.add_theme_font_size_override("font_size", 18)
+	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
+	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disc.add_child(glyph)
+
+	# Price number
+	var price_lbl := Label.new()
+	price_lbl.text = str(price)
+	price_lbl.add_theme_font_size_override("font_size", 24)
+	price_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	price_lbl.position = Vector2(dia + 6.0, 0)
+	price_lbl.size = Vector2(64, h)
+	price_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	price_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_child(price_lbl)
+
+	badge.size = Vector2(dia + 6.0 + 64.0, h)
+	return badge
+
+# Accent-lit circular icon backing for a difficulty card. Locked cards get a flat
+# muted disc with no glow; unlocked cards glow in their accent color.
+func _icon_stylebox(accent: Color, dia: float, locked: bool) -> StyleBoxFlat:
+	var ic := StyleBoxFlat.new()
+	ic.set_corner_radius_all(int(dia * 0.5))
+	ic.set_border_width_all(2)
+	if locked:
+		ic.bg_color = Color(0.16, 0.18, 0.24, 0.45)
+		ic.border_color = Color(0.42, 0.45, 0.55)
+		ic.shadow_size = 0                                   # no glow while locked
+	else:
+		var icbg := accent.darkened(0.2)
+		icbg.a = 0.28
+		ic.bg_color = icbg
+		ic.border_color = accent.lightened(0.2)
+		ic.shadow_color = Color(accent.r, accent.g, accent.b, 0.5)
+		ic.shadow_size = 14
+	return ic
+
+# Round padlock "seal" pinned to a locked card's top-right corner. Dark glass
+# disc with a padlock glyph; sized so the caller can overhang the card edge.
+func _make_lock_seal() -> Control:
+	var d := 38.0
+	var seal := Panel.new()
+	seal.size = Vector2(d, d)
+	seal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.10, 0.12, 0.20, 0.96)
+	s.set_corner_radius_all(int(d * 0.5))
+	s.border_color = Color(0.60, 0.63, 0.75)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(0, 0, 0, 0.55)
+	s.shadow_size = 7
+	seal.add_theme_stylebox_override("panel", s)
+	var lk := _lock_icon(7.5, Color(0.90, 0.92, 1.0))
+	lk.position = Vector2(d * 0.5, d * 0.5 - 1.0)
+	seal.add_child(lk)
+	return seal
+
+# Minimal padlock: a rounded body rect + a semicircular shackle. `s` is roughly
+# the body half-width. Centered on the node's origin.
+func _lock_icon(s: float, col: Color) -> Node2D:
+	var n := Node2D.new()
+	var body := Polygon2D.new()
+	body.polygon = PackedVector2Array([
+		Vector2(-s, 0), Vector2(s, 0),
+		Vector2(s, s * 1.3), Vector2(-s, s * 1.3)])
+	body.color = col
+	n.add_child(body)
+	var shackle := Line2D.new()
+	shackle.width = maxf(2.0, s * 0.32)
+	shackle.default_color = col
+	var pts := PackedVector2Array()
+	var r := s * 0.62
+	for i in 13:
+		var a: float = PI + float(i) / 12.0 * PI
+		pts.append(Vector2(cos(a) * r, -s * 0.05 + sin(a) * r))
+	shackle.points = pts
+	n.add_child(shackle)
+	return n
 
 func _on_hover(btn: Button, entered: bool) -> void:
 	if _selecting:
@@ -379,6 +519,16 @@ func _on_hover(btn: Button, entered: bool) -> void:
 	tw.tween_property(btn, "position:y", -3.0 if entered else 0.0, 0.16) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw.tween_property(mat, "shader_parameter/rim_boost", 1.6 if entered else 1.0, 0.16)
+
+# Tapping a card either starts the game (unlocked) or opens the buy-confirm
+# popup (locked). The popup, not the card, completes a purchase.
+func _on_card_pressed(d: Dictionary) -> void:
+	if _selecting or _popup:
+		return
+	if not CoinsManager.is_level_unlocked(String(d["diff"])):
+		_show_unlock_popup(d)
+		return
+	_on_select(d)
 
 func _on_select(d: Dictionary) -> void:
 	if _selecting:
@@ -396,6 +546,238 @@ func _on_select(d: Dictionary) -> void:
 	await get_tree().create_timer(0.25).timeout
 	GameState.set_difficulty(d["diff"])
 	game_manager.show_game()
+
+# ---------------- unlock (buy) popup ----------------
+
+const POPUP_W := 440.0
+const POPUP_H := 250.0
+
+func _show_unlock_popup(d: Dictionary) -> void:
+	if _popup:
+		return
+	var diff: String = d["diff"]
+	var accent: Color = d["accent"]
+	var price := CoinsManager.level_price(diff)
+	var sz := get_viewport_rect().size
+
+	_popup = Control.new()
+	_popup.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_popup.size = sz
+	add_child(_popup)
+
+	_popup_backdrop = ColorRect.new()
+	_popup_backdrop.color = Color(0, 0, 0, 0.0)
+	_popup_backdrop.size = sz
+	_popup_backdrop.gui_input.connect(func(ev: InputEvent) -> void:
+		if (ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed) \
+				or (ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed):
+			_close_popup())
+	_popup.add_child(_popup_backdrop)
+
+	_popup_dialog = Panel.new()
+	_popup_dialog.size = Vector2(POPUP_W, POPUP_H)
+	_popup_dialog.position = (sz - Vector2(POPUP_W, POPUP_H)) * 0.5
+	_popup_dialog.pivot_offset = Vector2(POPUP_W, POPUP_H) * 0.5
+	var ps := StyleBoxFlat.new()
+	ps.bg_color = Color(0.08, 0.10, 0.22, 0.98)
+	ps.set_corner_radius_all(26)
+	ps.border_color = Color(accent.r, accent.g, accent.b, 0.7)
+	ps.set_border_width_all(2)
+	ps.shadow_color = Color(0, 0, 0, 0.5)
+	ps.shadow_size = 22
+	_popup_dialog.add_theme_stylebox_override("panel", ps)
+	_popup.add_child(_popup_dialog)
+
+	# Heading
+	var head := Label.new()
+	head.text = "Unlock %s?" % String(d["title"])
+	head.add_theme_font_size_override("font_size", 30)
+	head.add_theme_color_override("font_color", accent.lightened(0.25))
+	head.position = Vector2(0, 28)
+	head.size = Vector2(POPUP_W, 40)
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_popup_dialog.add_child(head)
+
+	# Price row: coin disc + "for N coins"
+	var row := Control.new()
+	row.size = Vector2(POPUP_W, 40)
+	row.position = Vector2(0, 84)
+	_popup_dialog.add_child(row)
+	var dia := 30.0
+	var price_text := "for %d coins" % price
+	var text_lbl := Label.new()
+	text_lbl.text = price_text
+	text_lbl.add_theme_font_size_override("font_size", 24)
+	text_lbl.add_theme_color_override("font_color", Color(0.90, 0.92, 1.0))
+	# Approx-center the disc+text group.
+	var est_text_w := 11.0 * price_text.length()
+	var group_w := dia + 10.0 + est_text_w
+	var gx := (POPUP_W - group_w) * 0.5
+	var disc := Panel.new()
+	disc.size = Vector2(dia, dia)
+	disc.position = Vector2(gx, (40 - dia) * 0.5)
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(1.0, 0.78, 0.16)
+	ds.set_corner_radius_all(int(dia * 0.5))
+	ds.border_color = Color(1.0, 0.92, 0.55)
+	ds.set_border_width_all(2)
+	disc.add_theme_stylebox_override("panel", ds)
+	row.add_child(disc)
+	var dglyph := Label.new()
+	dglyph.text = "$"
+	dglyph.add_theme_font_size_override("font_size", 20)
+	dglyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	dglyph.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dglyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dglyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	disc.add_child(dglyph)
+	text_lbl.position = Vector2(gx + dia + 10.0, 0)
+	text_lbl.size = Vector2(est_text_w + 20.0, 40)
+	text_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(text_lbl)
+
+	# Feedback line (e.g. "Not enough coins") — hidden until needed.
+	var feedback := Label.new()
+	feedback.name = "Feedback"
+	feedback.text = ""
+	feedback.add_theme_font_size_override("font_size", 18)
+	feedback.add_theme_color_override("font_color", Color(1.0, 0.45, 0.45))
+	feedback.position = Vector2(0, 130)
+	feedback.size = Vector2(POPUP_W, 24)
+	feedback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_popup_dialog.add_child(feedback)
+
+	# Confirm (✓) and cancel (✗) round buttons.
+	var by := POPUP_H - 28.0 - 72.0
+	var yes := _make_choice_button("check", Color(0.24, 0.74, 0.40))
+	yes.position = Vector2(POPUP_W * 0.5 - 72.0 - 18.0, by)
+	yes.pressed.connect(_on_confirm_purchase.bind(d, feedback))
+	_popup_dialog.add_child(yes)
+	var no := _make_choice_button("cross", Color(0.82, 0.30, 0.34))
+	no.position = Vector2(POPUP_W * 0.5 + 18.0, by)
+	no.pressed.connect(_close_popup)
+	_popup_dialog.add_child(no)
+
+	# Pop-in animation.
+	_popup_dialog.scale = Vector2.ONE * 0.85
+	_popup_dialog.modulate.a = 0.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_popup_backdrop, "color", Color(0, 0, 0, 0.55), 0.16)
+	tw.tween_property(_popup_dialog, "scale", Vector2.ONE, 0.20) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_popup_dialog, "modulate:a", 1.0, 0.16)
+
+# 72x72 circular button containing a drawn check or cross, so the glyphs always
+# render regardless of font coverage.
+func _make_choice_button(kind: String, accent: Color) -> Button:
+	var btn := Button.new()
+	btn.size = Vector2(72, 72)
+	btn.focus_mode = Control.FOCUS_NONE
+	var s := StyleBoxFlat.new()
+	s.bg_color = accent
+	s.set_corner_radius_all(36)
+	s.border_color = accent.lightened(0.3)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(accent.r, accent.g, accent.b, 0.45)
+	s.shadow_size = 12
+	btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = accent.lightened(0.12)
+	btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = accent.darkened(0.15)
+	btn.add_theme_stylebox_override("pressed", sp)
+
+	var mark := Line2D.new()
+	mark.width = 7.0
+	mark.default_color = Color.WHITE
+	mark.joint_mode = Line2D.LINE_JOINT_ROUND
+	mark.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	mark.end_cap_mode = Line2D.LINE_CAP_ROUND
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if kind == "check":
+		mark.points = PackedVector2Array([
+			Vector2(22, 38), Vector2(32, 48), Vector2(52, 24)])
+		btn.add_child(mark)
+	else:
+		mark.points = PackedVector2Array([Vector2(24, 24), Vector2(48, 48)])
+		btn.add_child(mark)
+		var mark2 := Line2D.new()
+		mark2.width = 7.0
+		mark2.default_color = Color.WHITE
+		mark2.begin_cap_mode = Line2D.LINE_CAP_ROUND
+		mark2.end_cap_mode = Line2D.LINE_CAP_ROUND
+		mark2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		mark2.points = PackedVector2Array([Vector2(48, 24), Vector2(24, 48)])
+		btn.add_child(mark2)
+	return btn
+
+func _on_confirm_purchase(d: Dictionary, feedback: Label) -> void:
+	var diff: String = d["diff"]
+	if CoinsManager.purchase_level(diff):
+		AudioManager.play_button_tone(int(d["orb"]), 0.2)
+		_unlock_card_visual(diff)
+		_close_popup()
+	else:
+		# Almost always: can't afford. Surface it and shake the dialog.
+		feedback.text = "Not enough coins"
+		if is_instance_valid(_popup_dialog):
+			var base_x := _popup_dialog.position.x
+			var sh := create_tween()
+			for off: float in [-10.0, 9.0, -7.0, 5.0, 0.0]:
+				sh.tween_property(_popup_dialog, "position:x", base_x + off, 0.05)
+
+# Strip the lock badge + restore the title color on a card that was just bought.
+func _unlock_card_visual(diff: String) -> void:
+	for wrap in _cards:
+		var btn := wrap.get_child(0) as Button
+		if btn == null or String(btn.get_meta("diff", "")) != diff:
+			continue
+		if btn.has_meta("lock_badge"):
+			var badge: Control = btn.get_meta("lock_badge")
+			if is_instance_valid(badge):
+				badge.queue_free()
+			btn.remove_meta("lock_badge")
+		if btn.has_meta("lock_seal"):
+			var seal: Control = btn.get_meta("lock_seal")
+			if is_instance_valid(seal):
+				seal.queue_free()
+			btn.remove_meta("lock_seal")
+		var accent := _accent_for(diff)
+		# Light the icon back up now that it's owned.
+		if btn.has_meta("icon_panel"):
+			var icon: Panel = btn.get_meta("icon_panel")
+			var dia: float = btn.get_meta("icon_dia")
+			if is_instance_valid(icon):
+				icon.add_theme_stylebox_override("panel", _icon_stylebox(accent, dia, false))
+		if btn.has_meta("icon_sym"):
+			var sym: Node2D = btn.get_meta("icon_sym")
+			if is_instance_valid(sym):
+				sym.modulate = Color.WHITE
+		var title: Label = btn.get_meta("title")
+		if title:
+			title.add_theme_color_override("font_color", accent.lightened(0.2))
+			title.add_theme_color_override("font_outline_color", accent.lightened(0.2))
+		return
+
+func _accent_for(diff: String) -> Color:
+	for d in DIFFS:
+		if String(d["diff"]) == diff:
+			var c: Color = d["accent"]
+			return c
+	return Color.WHITE
+
+func _close_popup() -> void:
+	if not _popup:
+		return
+	var popup := _popup
+	_popup = null
+	_popup_dialog = null
+	_popup_backdrop = null
+	var tw := create_tween()
+	tw.tween_property(popup, "modulate:a", 0.0, 0.14)
+	tw.tween_callback(popup.queue_free)
 
 func _pulse_orb(idx: int) -> void:
 	if idx < 0 or idx >= _orbs.size():
@@ -549,6 +931,14 @@ func _layout() -> void:
 	var start_y := maxf(top + 170.0, sz.y * 0.55 - total * 0.5)
 	for i in _cards.size():
 		_cards[i].position = Vector2(cx - CARD_W * 0.5, start_y + i * (CARD_H + CARD_GAP))
+
+	# Keep an open buy-popup centered if the viewport changes under it.
+	if _popup:
+		_popup.size = sz
+		if _popup_backdrop:
+			_popup_backdrop.size = sz
+		if _popup_dialog:
+			_popup_dialog.position = (sz - Vector2(POPUP_W, POPUP_H)) * 0.5
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()

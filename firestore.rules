@@ -55,7 +55,10 @@ service cloud.firestore {
                 && request.resource.data.selected_theme.size() <= 32))
         && (!('owned_themes' in request.resource.data)
             || (request.resource.data.owned_themes is map
-                && request.resource.data.owned_themes.size() <= 64));
+                && request.resource.data.owned_themes.size() <= 64))
+        && (!('owned_levels' in request.resource.data)
+            || (request.resource.data.owned_levels is map
+                && request.resource.data.owned_levels.size() <= 16));
     }
   }
 }

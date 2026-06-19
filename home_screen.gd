@@ -139,8 +139,21 @@ func _ready() -> void:
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)
+	# The wallet doc (and with it the equipped theme) usually finishes loading
+	# AFTER this screen is built on a fresh launch. When it lands, BackgroundManager
+	# flips is_themed() — without this, our own deep-space bg stays painted over the
+	# global theme the player equipped, so the game opens on the default sky instead
+	# of their theme. Re-sync whenever the equipped theme changes.
+	CoinsManager.themes_changed.connect(_sync_local_background)
 	_start_animations()
 	AudioManager.play_bg_music()
+
+	# On the first home open of this launch, a signed-out player is asked whether
+	# to sign in or continue as a guest. The flag lives on the (persistent)
+	# GameManager so returning home later in the same session won't re-prompt.
+	if not FirebaseManager.is_signed_in() and not game_manager.welcome_prompt_shown:
+		game_manager.welcome_prompt_shown = true
+		_show_welcome_popup()
 
 # ---------------- background ----------------
 
@@ -161,6 +174,20 @@ func _build_background() -> void:
 	_bg_mat.shader = sh
 	_bg.material = _bg_mat
 	add_child(_bg)
+
+# Equipping a theme (or the wallet loading after launch) flips
+# BackgroundManager.is_themed() under us. Drop our own bg so the global theme
+# shows through; rebuild it (under everything) when the player goes back to default.
+func _sync_local_background() -> void:
+	var themed := BackgroundManager.is_themed()
+	if themed and _bg:
+		_bg.queue_free()
+		_bg = null
+		_bg_mat = null
+	elif not themed and not _bg:
+		_build_background()
+		move_child(_bg, 0)
+		_layout()
 
 # ---------------- orbit + orbs ----------------
 
@@ -730,6 +757,103 @@ func _refresh_daily_badge() -> void:
 func _open_daily_popup() -> void:
 	var popup := DailyClaimPopup.new()
 	add_child(popup)
+
+# ---------------- welcome popup (sign in / play as guest) ----------------
+
+# Modal shown on the first home open of a launch when signed out. A dimmed
+# backdrop blocks the menu behind it; the player must choose. "Sign In" runs the
+# same flow as the corner sign-in button; "Play as Guest" just dismisses, leaving
+# the corner sign-in button in place exactly as before.
+func _show_welcome_popup() -> void:
+	var sz := get_viewport_rect().size
+	var overlay := Control.new()
+	overlay.name = "WelcomePopup"
+	overlay.position = Vector2.ZERO
+	overlay.size = sz
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP   # eat clicks meant for the menu
+	add_child(overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.01, 0.04, 0.66)
+	dim.position = Vector2.ZERO
+	dim.size = sz
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+
+	const PW := 480.0
+	const PH := 340.0
+	var panel := Panel.new()
+	panel.position = (sz - Vector2(PW, PH)) * 0.5
+	panel.size = Vector2(PW, PH)
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.05, 0.06, 0.16, 0.98)
+	st.set_corner_radius_all(24)
+	st.border_color = Color(0.40, 0.50, 1.0, 0.55)
+	st.set_border_width_all(2)
+	st.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	st.shadow_size = 22
+	panel.add_theme_stylebox_override("panel", st)
+	overlay.add_child(panel)
+
+	var title := Label.new()
+	title.text = "Welcome to Simon"
+	title.add_theme_font_size_override("font_size", 34)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.45))
+	title.add_theme_constant_override("shadow_offset_x", 0)
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	title.add_theme_constant_override("shadow_outline_size", 9)
+	title.position = Vector2(20, 40)
+	title.size = Vector2(PW - 40, 44)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(title)
+
+	var sub := Label.new()
+	sub.text = "Sign in to save your coins, climb the leaderboards and claim daily rewards — or jump straight in as a guest."
+	sub.add_theme_font_size_override("font_size", 17)
+	sub.add_theme_color_override("font_color", Color(0.76, 0.80, 1.0, 0.90))
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.position = Vector2(40, 100)
+	sub.size = Vector2(PW - 80, 80)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(sub)
+
+	var bw := PW - 80.0
+	var sign_in_btn := _make_popup_button(panel, "Sign In", Vector2(40, 196), Vector2(bw, 56),
+		Color(0.15, 0.6, 0.95), _welcome_sign_in.bind(overlay))
+	sign_in_btn.add_theme_font_size_override("font_size", 22)
+
+	_make_popup_button(panel, "Play as Guest", Vector2(40, 264), Vector2(bw, 56),
+		Color(0.16, 0.18, 0.34), overlay.queue_free)
+
+	# Gentle entrance: fade + scale-pop on the panel.
+	panel.pivot_offset = panel.size * 0.5
+	panel.scale = Vector2(0.92, 0.92)
+	overlay.modulate.a = 0.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(overlay, "modulate:a", 1.0, 0.22).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.30) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+# Dismiss the welcome popup and run the normal sign-in flow.
+func _welcome_sign_in(overlay: Control) -> void:
+	overlay.queue_free()
+	_on_sign_in()
+
+func _make_popup_button(parent: Control, txt: String, pos: Vector2, size: Vector2, col: Color, cb: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = txt
+	btn.position = pos
+	btn.size = size
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.add_theme_font_size_override("font_size", 19)
+	_style(btn, col)
+	btn.pressed.connect(cb)
+	parent.add_child(btn)
+	return btn
 
 func _add_corner_btn(txt: String, pos: Vector2, size: Vector2, col: Color, cb: Callable) -> void:
 	var btn := Button.new()

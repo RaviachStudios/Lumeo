@@ -16,8 +16,13 @@ extends Node
 
 signal balance_changed(new_balance: int)
 signal themes_changed
+signal simon_changed
+signal levels_changed
 signal daily_claim_changed
 signal loaded
+# Running total of coins earned in the current game session (resets to 0 on
+# start_game_session). The in-game HUD tracks this instead of the wallet total.
+signal session_earned_changed(session_total: int)
 
 const _COLL := "users"
 
@@ -29,6 +34,41 @@ const THEMES := {
 	"default":  {"name": "Default",  "price": 0,    "category": "themes"},
 	"skybound": {"name": "Skybound", "price": 2000, "category": "themes"},
 	"inferno":  {"name": "Inferno",  "price": 5000, "category": "themes"},
+}
+
+# Difficulty unlocks. "easy" is always playable; "moderate" and "hard" are
+# locked until bought with coins. A purchase is permanent and persists on
+# /users/{uid} as a map (owned_levels: {moderate: true, hard: true}) — same
+# storage shape as owned_themes (see _owned_levels_map_for_save).
+const LEVEL_PRICES := {
+	"moderate": 50,
+	"hard": 80,
+}
+
+# Simon-wheel customization. Three independently-coloured parts of the wheel
+# (the metallic rim rings, the centre hub, and the level numeral), each able to
+# equip exactly one colour from a shared catalog. "default" keeps the stock
+# graphite/white look and is always owned & free; SimonWheel treats it specially
+# (no tint applied), so its catalog `color` below is only a swatch placeholder.
+#
+# simon_mode chooses whether the game applies these manual per-part colours or a
+# complete pre-made skin. It is set implicitly — equipping a colour switches to
+# manual; equipping a skin (ships later) will switch to skin — so the shop needs
+# no separate mode toggle. Skin storage (selected_skin / owned_skins) exists later.
+const SIMON_CATEGORIES := ["outer_circle", "inner_circle", "level_number"]
+const SIMON_DEFAULT_COLOR := "default"
+const SIMON_MODE_MANUAL := "manual"
+const SIMON_MODE_SKIN := "skin"
+const SIMON_COLORS := {
+	"default":  {"name": "Default",  "price": 0,   "color": Color(0.55, 0.57, 0.62)},
+	"crimson":  {"name": "Crimson",  "price": 80,  "color": Color(0.86, 0.16, 0.20)},
+	"emerald":  {"name": "Emerald",  "price": 80,  "color": Color(0.13, 0.72, 0.40)},
+	"azure":    {"name": "Azure",    "price": 80,  "color": Color(0.20, 0.52, 0.95)},
+	"amethyst": {"name": "Amethyst", "price": 80,  "color": Color(0.60, 0.34, 0.92)},
+	"amber":    {"name": "Amber",    "price": 80,  "color": Color(0.97, 0.62, 0.13)},
+	"rose":     {"name": "Rose",     "price": 80,  "color": Color(0.95, 0.36, 0.62)},
+	"silver":   {"name": "Silver",   "price": 200, "color": Color(0.80, 0.82, 0.87)},
+	"gold":     {"name": "Gold",     "price": 350, "color": Color(0.95, 0.78, 0.26)},
 }
 
 # Daily-claim curve: day 1 = 30, +5 per consecutive day, capped at day 14 = 95.
@@ -83,6 +123,13 @@ var _loaded_for_uid := ""
 var balance: int = 0
 var owned_themes: Array[String] = [DEFAULT_THEME]
 var selected_theme: String = DEFAULT_THEME
+var owned_levels: Array[String] = []     # purchased difficulties; "easy" is implicit
+# Simon-wheel customization (see SIMON_* constants):
+var simon_mode: String = SIMON_MODE_MANUAL          # manual | skin — set implicitly by what you equip
+var equipped_simon: Dictionary = _default_equipped_simon()   # category -> color_id
+var owned_simon: Dictionary = _default_owned_simon()         # category -> Array[String]
+var selected_skin: String = ""           # equipped complete skin ("" = none yet)
+var owned_skins: Array[String] = []      # purchased complete skins (none yet)
 var last_claim_date: String = ""         # "YYYY-MM-DD" UTC; "" = never claimed
 var streak_days: int = 0                 # consecutive days the user has opened the
                                           # app (1 on the first day, resets to 1 if
@@ -113,19 +160,32 @@ func is_loaded() -> bool:
 
 func start_game_session() -> void:
 	session_earned = 0
+	session_earned_changed.emit(session_earned)
 
 # Award coins for completing a level on this difficulty. Returns the amount
 # awarded so the caller can drive a "+ N" animation. 0 if not signed in or
 # the curve says nothing.
+#
+# The coins only accrue into session_earned here; they are NOT added to the
+# persistent wallet until commit_session() runs at game over. This is why a
+# quit mid-run (progress lost) grants nothing.
 func award_for_level(diff: String, level: int) -> int:
 	var amount := coins_for_level(diff, level)
 	if amount <= 0 or not FirebaseManager.is_signed_in():
 		return 0
-	balance += amount
 	session_earned += amount
+	session_earned_changed.emit(session_earned)
+	return amount
+
+# Bank the current session's earnings into the persistent balance. Called once
+# at game over. session_earned is left intact so the game-over screen can still
+# display the amount; it resets on the next start_game_session().
+func commit_session() -> void:
+	if session_earned <= 0 or not FirebaseManager.is_signed_in():
+		return
+	balance += session_earned
 	balance_changed.emit(balance)
 	_save_partial({"coins": balance})
-	return amount
 
 # --- login-streak + daily-claim API ---
 
@@ -228,6 +288,141 @@ func select_theme(theme_id: String) -> bool:
 	_save_partial({"selected_theme": selected_theme})
 	return true
 
+# --- simon-customization API ---
+
+func _default_equipped_simon() -> Dictionary:
+	var d := {}
+	for cat in SIMON_CATEGORIES:
+		d[cat] = SIMON_DEFAULT_COLOR
+	return d
+
+func _default_owned_simon() -> Dictionary:
+	var d := {}
+	for cat in SIMON_CATEGORIES:
+		d[cat] = [SIMON_DEFAULT_COLOR] as Array[String]
+	return d
+
+func is_simon_manual() -> bool:
+	return simon_mode == SIMON_MODE_MANUAL
+
+func simon_color_price(color_id: String) -> int:
+	return int(SIMON_COLORS.get(color_id, {}).get("price", 0))
+
+# Catalog swatch / in-game tint for a colour. Callers must special-case
+# SIMON_DEFAULT_COLOR (the wheel keeps its stock look) — this just returns the
+# placeholder swatch colour for it.
+func simon_color_value(color_id: String) -> Color:
+	return SIMON_COLORS.get(color_id, {}).get("color", Color.GRAY)
+
+func can_afford_simon(color_id: String) -> bool:
+	return balance >= simon_color_price(color_id)
+
+func owns_simon_color(category: String, color_id: String) -> bool:
+	return owned_simon.get(category, [] as Array[String]).has(color_id)
+
+# The colour currently equipped for a category (a SIMON_COLORS id).
+func equipped_simon_color(category: String) -> String:
+	return String(equipped_simon.get(category, SIMON_DEFAULT_COLOR))
+
+# Buy a colour for a category. Returns true on success (deducts coins, adds to
+# owned_<category>). Mirrors purchase_theme.
+func purchase_simon_color(category: String, color_id: String) -> bool:
+	if not FirebaseManager.is_signed_in(): return false
+	if not SIMON_CATEGORIES.has(category): return false
+	if not SIMON_COLORS.has(color_id): return false
+	if owns_simon_color(category, color_id): return false
+	var price := simon_color_price(color_id)
+	if balance < price: return false
+	balance -= price
+	(owned_simon[category] as Array[String]).append(color_id)
+	balance_changed.emit(balance)
+	simon_changed.emit()
+	_save_partial({"coins": balance, _owned_simon_field(category): _owned_simon_map_for_save(category)})
+	return true
+
+# Equip an owned colour for a category. Returns true if the selection changed.
+func equip_simon_color(category: String, color_id: String) -> bool:
+	if not SIMON_CATEGORIES.has(category): return false
+	if not owns_simon_color(category, color_id): return false
+	# Equipping a per-part colour IS the act of choosing the manual look, so it
+	# implicitly puts the wheel into manual mode — there is no separate toggle.
+	var changed := false
+	if simon_mode != SIMON_MODE_MANUAL:
+		simon_mode = SIMON_MODE_MANUAL
+		changed = true
+	if equipped_simon_color(category) != color_id:
+		equipped_simon[category] = color_id
+		changed = true
+	if not changed:
+		return false
+	simon_changed.emit()
+	_save_partial({
+		"simon_mode": simon_mode,
+		_equipped_simon_field(category): color_id,
+	})
+	return true
+
+# Flip the equip: toggle between manual per-part colours and a complete skin.
+func set_simon_mode(mode: String) -> bool:
+	if mode != SIMON_MODE_MANUAL and mode != SIMON_MODE_SKIN: return false
+	if simon_mode == mode: return false
+	simon_mode = mode
+	simon_changed.emit()
+	_save_partial({"simon_mode": simon_mode})
+	return true
+
+# Firestore field names, e.g. "owned_outer_circle" / "equipped_inner_circle".
+func _owned_simon_field(category: String) -> String:
+	return "owned_" + category
+
+func _equipped_simon_field(category: String) -> String:
+	return "equipped_" + category
+
+# Owned colours stored as a Firestore *map* ({color_id: true}), not a list —
+# same Android-SDK reasoning as _owned_themes_map_for_save. "default" is omitted
+# (re-added on load) so the stored map stays minimal.
+func _owned_simon_map_for_save(category: String) -> Dictionary:
+	var out := {}
+	for c in owned_simon.get(category, [] as Array[String]):
+		if c != SIMON_DEFAULT_COLOR:
+			out[c] = true
+	return out
+
+# --- difficulty-unlock API ---
+
+# Easy is always playable; everything in LEVEL_PRICES needs a purchase first.
+func is_level_unlocked(diff: String) -> bool:
+	if not LEVEL_PRICES.has(diff):
+		return true
+	return owned_levels.has(diff)
+
+func level_price(diff: String) -> int:
+	return int(LEVEL_PRICES.get(diff, 0))
+
+func can_afford_level(diff: String) -> bool:
+	return balance >= level_price(diff)
+
+# Buy a locked difficulty. Returns true on success (deducts coins, unlocks it).
+func purchase_level(diff: String) -> bool:
+	if not FirebaseManager.is_signed_in(): return false
+	if not LEVEL_PRICES.has(diff): return false
+	if is_level_unlocked(diff): return false
+	var price := level_price(diff)
+	if balance < price: return false
+	balance -= price
+	owned_levels.append(diff)
+	balance_changed.emit(balance)
+	levels_changed.emit()
+	_save_partial({"coins": balance, "owned_levels": _owned_levels_map_for_save()})
+	return true
+
+# Same map-not-array reasoning as _owned_themes_map_for_save.
+func _owned_levels_map_for_save() -> Dictionary:
+	var out := {}
+	for d in owned_levels:
+		out[d] = true
+	return out
+
 # --- internal: load / save ---
 
 func _on_signed_in(_uid: String, _name: String) -> void:
@@ -237,6 +432,12 @@ func _on_signed_out() -> void:
 	balance = 0
 	owned_themes = [DEFAULT_THEME]
 	selected_theme = DEFAULT_THEME
+	owned_levels = []
+	simon_mode = SIMON_MODE_MANUAL
+	equipped_simon = _default_equipped_simon()
+	owned_simon = _default_owned_simon()
+	selected_skin = ""
+	owned_skins = []
 	last_claim_date = ""
 	streak_days = 0
 	first_login_at = ""
@@ -245,6 +446,8 @@ func _on_signed_out() -> void:
 	_loaded_for_uid = ""
 	balance_changed.emit(balance)
 	themes_changed.emit()
+	simon_changed.emit()
+	levels_changed.emit()
 	daily_claim_changed.emit()
 
 # FirebaseManager owns the canonical display name; we mirror it onto /users
@@ -291,6 +494,8 @@ func _emit_all() -> void:
 	loaded.emit()
 	balance_changed.emit(balance)
 	themes_changed.emit()
+	simon_changed.emit()
+	levels_changed.emit()
 	daily_claim_changed.emit()
 
 func _apply_doc(doc: Dictionary) -> void:
@@ -315,6 +520,21 @@ func _apply_doc(doc: Dictionary) -> void:
 	selected_theme = String(doc.get("selected_theme", DEFAULT_THEME))
 	if not owned_themes.has(selected_theme):
 		selected_theme = DEFAULT_THEME
+	# Purchased difficulties — stored as a map ({moderate: true}); the Array
+	# branch only covers a hand-edited doc, same as owned_themes.
+	owned_levels = []
+	var raw_lv: Variant = doc.get("owned_levels", {})
+	if raw_lv is Dictionary:
+		for k in raw_lv.keys():
+			var s := String(k)
+			if LEVEL_PRICES.has(s) and not owned_levels.has(s):
+				owned_levels.append(s)
+	elif raw_lv is Array:
+		for t in raw_lv:
+			var s := String(t)
+			if LEVEL_PRICES.has(s) and not owned_levels.has(s):
+				owned_levels.append(s)
+	_apply_simon_doc(doc)
 	last_claim_date = String(doc.get("last_claim_date", ""))
 	streak_days = int(doc.get("streak_days", 0))
 	first_login_at = String(doc.get("first_login_at", ""))
@@ -326,6 +546,42 @@ func _apply_doc(doc: Dictionary) -> void:
 	if not auth_name.is_empty() and auth_name != player_name:
 		player_name = auth_name
 		_save_partial({"name": player_name})
+
+# Load the Simon-customization fields. Each owned set is stored as a map
+# ({color_id: true}); the Array branch only covers a hand-edited doc, same
+# tolerance as owned_themes / owned_levels. equipped_<category> is clamped to an
+# owned id (falling back to "default" so an equipped colour can never be one the
+# player doesn't own).
+func _apply_simon_doc(doc: Dictionary) -> void:
+	simon_mode = String(doc.get("simon_mode", SIMON_MODE_MANUAL))
+	if simon_mode != SIMON_MODE_MANUAL and simon_mode != SIMON_MODE_SKIN:
+		simon_mode = SIMON_MODE_MANUAL
+	owned_simon = _default_owned_simon()
+	equipped_simon = _default_equipped_simon()
+	for cat in SIMON_CATEGORIES:
+		var owned: Array[String] = owned_simon[cat]
+		var raw: Variant = doc.get(_owned_simon_field(cat), {})
+		if raw is Dictionary:
+			for k in raw.keys():
+				var s := String(k)
+				if SIMON_COLORS.has(s) and not owned.has(s):
+					owned.append(s)
+		elif raw is Array:
+			for t in raw:
+				var s := String(t)
+				if SIMON_COLORS.has(s) and not owned.has(s):
+					owned.append(s)
+		var eq := String(doc.get(_equipped_simon_field(cat), SIMON_DEFAULT_COLOR))
+		equipped_simon[cat] = eq if owned.has(eq) else SIMON_DEFAULT_COLOR
+	selected_skin = String(doc.get("selected_skin", ""))
+	owned_skins = []
+	var raw_sk: Variant = doc.get("owned_skins", {})
+	if raw_sk is Dictionary:
+		for k in raw_sk.keys():
+			owned_skins.append(String(k))
+	elif raw_sk is Array:
+		for t in raw_sk:
+			owned_skins.append(String(t))
 
 # Owned themes are persisted as a Firestore *map* ({theme_id: true}), not a
 # list. WHY: the Firebase Android Firestore SDK (25.1.4) rejects raw Java

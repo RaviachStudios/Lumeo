@@ -35,6 +35,26 @@ const CATEGORIES := [
 		# handles it without special casing.
 		"items": ["default", "skybound", "inferno"],
 	},
+	# Wheel colour customization. No flat `items` list — its content (live wheel
+	# preview + the three per-part colour tiles) is built specially in
+	# _render_category / _build_simon_panel.
+	{
+		"key": "simon", "label": "SIMON", "icon": "diamond",
+		"accent": Color(0.58, 0.46, 1.00),
+	},
+	# Complete pre-made wheel skins, as their own category. Empty for now (a
+	# placeholder panel); ships later. See _build_skins_panel.
+	{
+		"key": "skins", "label": "SPECIAL SKINS", "icon": "diamond",
+		"accent": Color(0.92, 0.45, 0.78),
+	},
+]
+
+# Display order + pretty labels for the three customizable wheel parts.
+const SIMON_TILES := [
+	{"cat": "outer_circle", "label": "OUTER CIRCLE"},
+	{"cat": "inner_circle", "label": "INNER CIRCLE"},
+	{"cat": "level_number", "label": "LEVEL NUMBER"},
 ]
 
 # Reused shader from leaderboards_screen so the entire app feels like one place.
@@ -67,7 +87,7 @@ const HEADER_W := 720.0
 const HEADER_H := 150.0
 
 const TAB_SEP := 28
-const TAB_W := 168.0
+const TAB_W := 188.0          # wide enough for the longest label ("SPECIAL SKINS")
 const TAB_H := 44.0
 
 # Card grid sizing — three columns at the default 1280-wide viewport. Width is
@@ -99,6 +119,18 @@ var _grid: GridContainer
 var _cards_by_id: Dictionary = {}        # theme_id -> { root, btn, btn_label, price_label, badge }
 var _current_cat: String = "themes"
 
+# --- SIMON tab ---
+const SIMON_ACCENT := Color(0.58, 0.46, 1.00)
+var _simon_root: Control                 # SIMON colour panel (built lazily)
+var _simon_preview: SimonWheel           # live wheel reflecting the equipped colours
+var _simon_tiles_box: Control            # holds the three colour tiles
+var _simon_tiles: Dictionary = {}        # category -> {swatch, value_lbl}
+var _skins_root: Control                 # SPECIAL SKINS placeholder panel (built lazily)
+# Colour popup (opened from a tile):
+var _color_popup: Control
+var _popup_category: String = ""
+var _popup_cards: Dictionary = {}        # color_id -> {btn, price_row, accent}
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -116,6 +148,10 @@ func _ready() -> void:
 	# Keep cards + coin pill in sync if the player buys / equips while open.
 	CoinsManager.balance_changed.connect(_on_balance_changed)
 	CoinsManager.themes_changed.connect(_refresh_cards)
+	# Buying / equipping / toggling on the SIMON tab refreshes its tiles and any
+	# open colour popup, the same way themes_changed refreshes the theme cards.
+	CoinsManager.simon_changed.connect(_refresh_simon_panel)
+	CoinsManager.simon_changed.connect(_refresh_color_cards)
 	# Equipping from inside the shop flips BackgroundManager.is_themed() under
 	# us — without this, the shop's own deep-space bg stays in place over the
 	# new global theme (or vanishes to grey when the player re-equips default),
@@ -375,6 +411,7 @@ func _on_balance_changed(new_balance: int) -> void:
 		_coin_lbl.text = str(new_balance)
 	# Card affordability changes with balance too.
 	_refresh_cards()
+	_refresh_color_cards()
 
 # ---------------- category tabs ----------------
 
@@ -476,6 +513,29 @@ func _build_grid() -> void:
 	add_child(_grid)
 
 func _render_category(key: String) -> void:
+	# THEMES uses the card grid; SIMON and SPECIAL SKINS each have a bespoke panel.
+	# Hide them all, then show the one for this category.
+	_grid.visible = false
+	if _simon_root:
+		_simon_root.visible = false
+	if _skins_root:
+		_skins_root.visible = false
+
+	if key == "simon":
+		if _simon_root == null:
+			_build_simon_panel()
+		_simon_root.visible = true
+		_refresh_simon_panel()
+		_layout()
+		return
+	if key == "skins":
+		if _skins_root == null:
+			_build_skins_panel()
+		_skins_root.visible = true
+		_layout()
+		return
+
+	_grid.visible = true
 	for c in _grid.get_children():
 		c.queue_free()
 	_cards_by_id.clear()
@@ -640,6 +700,419 @@ func _on_action(theme_id: String) -> void:
 	# immediately the next time they leave the shop.
 	CoinsManager.select_theme(theme_id)
 
+# ---------------- SIMON panel ----------------
+
+const SIMON_PANEL_W := 700.0
+const SIMON_TILE_W := 210.0
+const SIMON_TILE_H := 196.0
+const SIMON_TILE_GAP := 34.0
+const SIMON_SWATCH := 96.0
+const PREVIEW_WHEEL := 168.0          # displayed size of the live wheel preview
+# SimonWheel's centre overlay (numeral + status dot) is sized in fixed pixels tuned
+# for the large in-game wheel, so we render the preview at this larger logical size
+# and scale it down — keeping the numeral/hub proportions correct at preview scale.
+const PREVIEW_WHEEL_LOGICAL := 340.0
+
+# Segment colours for the preview wheel — a fixed slice of game.gd's BUTTON_COLORS
+# (the preview only demonstrates the equipped rim/hub/numeral tints, so the button
+# colours themselves are arbitrary but should look like a real round).
+const PREVIEW_COLORS := [
+	Color(0.9, 0.15, 0.15), Color(0.15, 0.8, 0.15), Color(0.15, 0.35, 0.95),
+	Color(0.95, 0.85, 0.1), Color(0.95, 0.5, 0.1),
+]
+
+func _build_simon_panel() -> void:
+	_simon_root = Control.new()
+	_simon_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_simon_root.custom_minimum_size = Vector2(SIMON_PANEL_W, 400)
+	_simon_root.size = Vector2(SIMON_PANEL_W, 400)
+	add_child(_simon_root)
+
+	# Live wheel preview — equipping a colour is itself what the wheel wears, and
+	# this preview shows that look in real time. Updated by _refresh_simon_preview.
+	_simon_preview = SimonWheel.new()
+	_simon_preview.size = Vector2(PREVIEW_WHEEL_LOGICAL, PREVIEW_WHEEL_LOGICAL)
+	var pscale := PREVIEW_WHEEL / PREVIEW_WHEEL_LOGICAL
+	_simon_preview.scale = Vector2(pscale, pscale)   # scales toward the top-left pivot
+	_simon_preview.position = Vector2((SIMON_PANEL_W - PREVIEW_WHEEL) * 0.5, 0)
+	_simon_root.add_child(_simon_preview)
+	_simon_preview.configure(5, PREVIEW_COLORS)
+	_simon_preview.set_level(3)
+
+	# The three per-part colour tiles, directly below the preview.
+	var content_y := PREVIEW_WHEEL + 30.0
+	_simon_tiles_box = Control.new()
+	_simon_tiles_box.position = Vector2(0, content_y)
+	_simon_tiles_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_simon_root.add_child(_simon_tiles_box)
+	var tiles_total := SIMON_TILES.size() * SIMON_TILE_W + (SIMON_TILES.size() - 1) * SIMON_TILE_GAP
+	var tx := (SIMON_PANEL_W - tiles_total) * 0.5
+	for i in SIMON_TILES.size():
+		var def: Dictionary = SIMON_TILES[i]
+		var tile := _make_simon_tile(def["cat"], def["label"], Vector2(tx + i * (SIMON_TILE_W + SIMON_TILE_GAP), 0))
+		_simon_tiles_box.add_child(tile)
+
+# SPECIAL SKINS category — a placeholder until complete skins ship.
+func _build_skins_panel() -> void:
+	_skins_root = Control.new()
+	_skins_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skins_root.custom_minimum_size = Vector2(SIMON_PANEL_W, 200)
+	_skins_root.size = Vector2(SIMON_PANEL_W, 200)
+	add_child(_skins_root)
+	var soon := Label.new()
+	soon.text = "Complete skins coming soon"
+	soon.add_theme_font_size_override("font_size", 24)
+	soon.add_theme_color_override("font_color", Color(0.78, 0.72, 0.90, 0.9))
+	soon.position = Vector2(0, 70)
+	soon.size = Vector2(SIMON_PANEL_W, 44)
+	soon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	soon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skins_root.add_child(soon)
+
+func _make_simon_tile(category: String, label: String, pos: Vector2) -> Button:
+	var root := Button.new()
+	root.position = pos
+	root.size = Vector2(SIMON_TILE_W, SIMON_TILE_H)
+	root.focus_mode = Control.FOCUS_NONE
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.06, 0.08, 0.20, 0.92)
+	cs.set_corner_radius_all(18)
+	cs.border_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.7)
+	cs.set_border_width_all(2)
+	cs.shadow_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.30)
+	cs.shadow_size = 12
+	root.add_theme_stylebox_override("normal", cs)
+	var ch := cs.duplicate() as StyleBoxFlat
+	ch.bg_color = Color(0.09, 0.11, 0.26, 0.95)
+	root.add_theme_stylebox_override("hover", ch)
+	var cp := cs.duplicate() as StyleBoxFlat
+	cp.bg_color = Color(0.05, 0.06, 0.16, 0.95)
+	root.add_theme_stylebox_override("pressed", cp)
+
+	# Round colour swatch showing the equipped colour for this part.
+	var swatch := Panel.new()
+	swatch.size = Vector2(SIMON_SWATCH, SIMON_SWATCH)
+	swatch.position = Vector2((SIMON_TILE_W - SIMON_SWATCH) * 0.5, 18)
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(swatch)
+
+	var name_lbl := Label.new()
+	name_lbl.text = label
+	name_lbl.add_theme_font_size_override("font_size", 17)
+	name_lbl.add_theme_color_override("font_color", Color.WHITE)
+	name_lbl.position = Vector2(8, 18 + SIMON_SWATCH + 12)
+	name_lbl.size = Vector2(SIMON_TILE_W - 16, 26)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(name_lbl)
+
+	var value_lbl := Label.new()
+	value_lbl.add_theme_font_size_override("font_size", 15)
+	value_lbl.add_theme_color_override("font_color", Color(0.74, 0.78, 1.0, 0.9))
+	value_lbl.position = Vector2(8, 18 + SIMON_SWATCH + 38)
+	value_lbl.size = Vector2(SIMON_TILE_W - 16, 24)
+	value_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	value_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(value_lbl)
+
+	root.pressed.connect(func() -> void: _open_color_popup(category))
+	_simon_tiles[category] = {"swatch": swatch, "value_lbl": value_lbl}
+	return root
+
+func _style_swatch(swatch: Panel, color_id: String) -> void:
+	var st := StyleBoxFlat.new()
+	st.bg_color = CoinsManager.simon_color_value(color_id)
+	st.set_corner_radius_all(int(SIMON_SWATCH * 0.5))
+	st.border_color = Color(1, 1, 1, 0.35)
+	st.set_border_width_all(2)
+	# Default reads as the "stock" look — give it a muted ring so it's clearly
+	# the no-tint option rather than a real colour.
+	if color_id == CoinsManager.SIMON_DEFAULT_COLOR:
+		st.border_color = Color(1, 1, 1, 0.15)
+	swatch.add_theme_stylebox_override("panel", st)
+
+func _refresh_simon_panel() -> void:
+	if _simon_root == null:
+		return
+	# tile swatches + equipped colour names.
+	for cat in _simon_tiles:
+		var t: Dictionary = _simon_tiles[cat]
+		var id: String = CoinsManager.equipped_simon_color(cat)
+		_style_swatch(t["swatch"], id)
+		t["value_lbl"].text = String(CoinsManager.SIMON_COLORS.get(id, {}).get("name", id.capitalize()))
+	# Live preview mirrors what the wheel actually wears right now.
+	_refresh_simon_preview()
+
+# Re-tint the preview wheel to match the equipped colours.
+func _refresh_simon_preview() -> void:
+	if _simon_preview == null:
+		return
+	_simon_preview.apply_skin(
+		_simon_tint("outer_circle"),
+		_simon_tint("inner_circle"),
+		_simon_tint("level_number"))
+
+# The Color tint a part wears right now, or null for the stock look — mirrors
+# game.gd._resolved_simon_tint so the preview matches the real in-game wheel.
+func _simon_tint(category: String) -> Variant:
+	if not CoinsManager.is_simon_manual():
+		return null
+	var id := CoinsManager.equipped_simon_color(category)
+	if id == CoinsManager.SIMON_DEFAULT_COLOR:
+		return null
+	return CoinsManager.simon_color_value(id)
+
+# ---------------- colour popup ----------------
+
+const POPUP_W := 640.0
+const POPUP_H := 520.0
+const SWATCH_CARD_W := 168.0
+const SWATCH_CARD_H := 168.0
+const SWATCH_GAP := 22.0
+const SWATCH_COLS := 3
+
+func _open_color_popup(category: String) -> void:
+	_close_color_popup()
+	_popup_category = category
+	_popup_cards.clear()
+	var sz := get_viewport_rect().size
+
+	var overlay := Control.new()
+	overlay.name = "ColorPopup"
+	overlay.position = Vector2.ZERO
+	overlay.size = sz
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
+	_color_popup = overlay
+
+	# Dim backdrop — tapping it closes the popup.
+	var dim := Button.new()
+	dim.flat = true
+	dim.position = Vector2.ZERO
+	dim.size = sz
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus"]:
+		dim.add_theme_stylebox_override(st, empty)
+	var dim_rect := ColorRect.new()
+	dim_rect.color = Color(0.0, 0.01, 0.04, 0.66)
+	dim_rect.position = Vector2.ZERO
+	dim_rect.size = sz
+	dim_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(dim_rect)
+	dim.pressed.connect(_close_color_popup)
+	overlay.add_child(dim)
+
+	var panel := Panel.new()
+	panel.position = (sz - Vector2(POPUP_W, POPUP_H)) * 0.5
+	panel.size = Vector2(POPUP_W, POPUP_H)
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.05, 0.06, 0.16, 0.99)
+	st.set_corner_radius_all(22)
+	st.border_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.7)
+	st.set_border_width_all(2)
+	st.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	st.shadow_size = 22
+	panel.add_theme_stylebox_override("panel", st)
+	overlay.add_child(panel)
+
+	var pretty := "PART"
+	for d in SIMON_TILES:
+		if d["cat"] == category:
+			pretty = d["label"]
+			break
+	var title := Label.new()
+	title.text = pretty
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.position = Vector2(24, 18)
+	title.size = Vector2(POPUP_W - 48, 38)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(title)
+
+	var close := Button.new()
+	close.text = "✕"
+	close.size = Vector2(40, 40)
+	close.position = Vector2(POPUP_W - 50, 12)
+	close.focus_mode = Control.FOCUS_NONE
+	close.add_theme_font_size_override("font_size", 20)
+	var clo := StyleBoxFlat.new()
+	clo.bg_color = Color(0.10, 0.12, 0.26, 0.9)
+	clo.set_corner_radius_all(20)
+	close.add_theme_stylebox_override("normal", clo)
+	close.add_theme_color_override("font_color", Color(0.85, 0.88, 1.0))
+	close.pressed.connect(_close_color_popup)
+	panel.add_child(close)
+
+	# Scroll the cards so extra rows never spill past the popup. The region runs
+	# from below the title to just above the bottom edge; its width leaves room
+	# for the scrollbar so the grid itself stays centred.
+	const SCROLLBAR_W := 14.0
+	var grid_w := SWATCH_COLS * SWATCH_CARD_W + (SWATCH_COLS - 1) * SWATCH_GAP
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size = Vector2(grid_w + SCROLLBAR_W, POPUP_H - 68 - 20)
+	scroll.position = Vector2((POPUP_W - (grid_w + SCROLLBAR_W)) * 0.5, 68)
+	panel.add_child(scroll)
+
+	var grid := GridContainer.new()
+	grid.columns = SWATCH_COLS
+	grid.add_theme_constant_override("h_separation", int(SWATCH_GAP))
+	grid.add_theme_constant_override("v_separation", int(SWATCH_GAP))
+	scroll.add_child(grid)
+	for color_id in CoinsManager.SIMON_COLORS.keys():
+		var card := _make_color_card(category, color_id)
+		grid.add_child(card["root"])
+		_popup_cards[color_id] = card
+	_refresh_color_cards()
+
+	# Gentle entrance.
+	panel.pivot_offset = panel.size * 0.5
+	panel.scale = Vector2(0.93, 0.93)
+	overlay.modulate.a = 0.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(overlay, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.26).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _make_color_card(category: String, color_id: String) -> Dictionary:
+	var meta: Dictionary = CoinsManager.SIMON_COLORS.get(color_id, {})
+	var pretty: String = meta.get("name", color_id.capitalize())
+
+	var root := Panel.new()
+	root.custom_minimum_size = Vector2(SWATCH_CARD_W, SWATCH_CARD_H)
+	root.size = Vector2(SWATCH_CARD_W, SWATCH_CARD_H)
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.07, 0.09, 0.22, 0.92)
+	cs.set_corner_radius_all(16)
+	cs.border_color = Color(1, 1, 1, 0.10)
+	cs.set_border_width_all(1)
+	root.add_theme_stylebox_override("panel", cs)
+
+	# Colour swatch.
+	var sw := 64.0
+	var swatch := Panel.new()
+	swatch.size = Vector2(sw, sw)
+	swatch.position = Vector2((SWATCH_CARD_W - sw) * 0.5, 12)
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ss := StyleBoxFlat.new()
+	ss.bg_color = CoinsManager.simon_color_value(color_id)
+	ss.set_corner_radius_all(int(sw * 0.5))
+	ss.border_color = Color(1, 1, 1, 0.30 if color_id != CoinsManager.SIMON_DEFAULT_COLOR else 0.12)
+	ss.set_border_width_all(2)
+	swatch.add_theme_stylebox_override("panel", ss)
+	root.add_child(swatch)
+
+	var name_lbl := Label.new()
+	name_lbl.text = pretty
+	name_lbl.add_theme_font_size_override("font_size", 16)
+	name_lbl.add_theme_color_override("font_color", Color.WHITE)
+	name_lbl.position = Vector2(6, 12 + sw + 4)
+	name_lbl.size = Vector2(SWATCH_CARD_W - 12, 22)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(name_lbl)
+
+	# Price row (coin + number), hidden once owned.
+	var price_row := Control.new()
+	price_row.position = Vector2(0, 12 + sw + 28)
+	price_row.size = Vector2(SWATCH_CARD_W, 22)
+	price_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(price_row)
+	var price_coin := _make_big_coin(9.0)
+	price_coin.position = Vector2(SWATCH_CARD_W * 0.5 - 22, 11)
+	price_row.add_child(price_coin)
+	var price_lbl := Label.new()
+	price_lbl.text = str(CoinsManager.simon_color_price(color_id))
+	price_lbl.add_theme_font_size_override("font_size", 16)
+	price_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	price_lbl.position = Vector2(SWATCH_CARD_W * 0.5 - 8, 0)
+	price_lbl.size = Vector2(60, 22)
+	price_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	price_row.add_child(price_lbl)
+
+	var btn := Button.new()
+	btn.size = Vector2(SWATCH_CARD_W - 20, 36)
+	btn.position = Vector2(10, SWATCH_CARD_H - 36 - 10)
+	btn.add_theme_font_size_override("font_size", 16)
+	btn.focus_mode = Control.FOCUS_NONE
+	root.add_child(btn)
+	btn.pressed.connect(func() -> void: _on_color_action(category, color_id))
+
+	return {"root": root, "btn": btn, "price_row": price_row, "accent": SIMON_ACCENT}
+
+func _refresh_color_cards() -> void:
+	if _popup_category.is_empty():
+		return
+	for color_id in _popup_cards:
+		_apply_color_card_state(_popup_category, color_id, _popup_cards[color_id])
+
+func _apply_color_card_state(category: String, color_id: String, c: Dictionary) -> void:
+	var btn: Button = c["btn"]
+	var accent: Color = c["accent"]
+	var price_row: Control = c["price_row"]
+	var owned := CoinsManager.owns_simon_color(category, color_id)
+	var equipped := CoinsManager.equipped_simon_color(category) == color_id
+	var affordable := CoinsManager.can_afford_simon(color_id)
+
+	price_row.visible = not owned
+	btn.disabled = false
+
+	var label_text := ""
+	var bg_col: Color
+	var fg_col := Color.WHITE
+	if equipped:
+		label_text = "EQUIPPED"
+		bg_col = Color(0.18, 0.45, 0.28)
+		btn.disabled = true
+	elif owned:
+		label_text = "EQUIP"
+		bg_col = Color(0.20, 0.55, 0.95)
+	elif affordable:
+		label_text = "BUY"
+		bg_col = Color(1.00, 0.66, 0.10)
+		fg_col = Color(0.18, 0.10, 0.0)
+	else:
+		label_text = "need %d" % (CoinsManager.simon_color_price(color_id) - CoinsManager.balance)
+		bg_col = Color(0.30, 0.30, 0.40)
+		fg_col = Color(0.85, 0.85, 0.95, 0.7)
+		btn.disabled = true
+
+	btn.text = label_text
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg_col
+	s.set_corner_radius_all(12)
+	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
+	s.set_border_width_all(2 if equipped else 0)
+	btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = bg_col.lightened(0.12)
+	btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = bg_col.darkened(0.20)
+	btn.add_theme_stylebox_override("pressed", sp)
+	var sd := s.duplicate() as StyleBoxFlat
+	sd.bg_color = bg_col.darkened(0.05)
+	btn.add_theme_stylebox_override("disabled", sd)
+	btn.add_theme_color_override("font_color", fg_col)
+	btn.add_theme_color_override("font_disabled_color", fg_col)
+
+func _on_color_action(category: String, color_id: String) -> void:
+	if CoinsManager.owns_simon_color(category, color_id):
+		CoinsManager.equip_simon_color(category, color_id)
+		return
+	if not CoinsManager.purchase_simon_color(category, color_id):
+		return
+	# Auto-equip a freshly bought colour so the choice takes effect at once.
+	CoinsManager.equip_simon_color(category, color_id)
+
+func _close_color_popup() -> void:
+	if _color_popup and is_instance_valid(_color_popup):
+		_color_popup.queue_free()
+	_color_popup = null
+	_popup_category = ""
+	_popup_cards.clear()
+
 # ---------------- layout ----------------
 
 func _layout() -> void:
@@ -671,9 +1144,14 @@ func _layout() -> void:
 		var row_w := CATEGORIES.size() * TAB_W + maxi(0, CATEGORIES.size() - 1) * TAB_SEP
 		_tab_row.position = Vector2(cx - row_w * 0.5, top + HEADER_H + 8.0)
 
+	var content_y := top + HEADER_H + 8.0 + TAB_H + 28.0
 	if _grid:
 		var grid_w := GRID_COLS * CARD_W + (GRID_COLS - 1) * CARD_GAP_X
-		_grid.position = Vector2(cx - grid_w * 0.5, top + HEADER_H + 8.0 + TAB_H + 28.0)
+		_grid.position = Vector2(cx - grid_w * 0.5, content_y)
+	if _simon_root:
+		_simon_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
+	if _skins_root:
+		_skins_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()

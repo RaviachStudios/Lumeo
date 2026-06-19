@@ -11,6 +11,10 @@ const ShopScreen := preload("res://shop_screen.gd")
 
 var _current: Control = null
 var _canvas: CanvasLayer
+# Set once the home screen has shown the "sign in or play as guest" welcome
+# prompt. Lives here (the persistent root) so it survives home-screen rebuilds
+# and the prompt only appears on the first home open of an app launch.
+var welcome_prompt_shown := false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)

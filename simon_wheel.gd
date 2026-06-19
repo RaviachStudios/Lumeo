@@ -74,6 +74,15 @@ var _glow_tex: Texture2D
 var _level_num: Label
 var _num_labels: Array[Label] = []   # stacked layers (glow / main / highlight)
 
+# Equipped Simon customization (set via apply_skin). Each is a Color tint or
+# null = keep the stock graphite/white look:
+#   _outer_tint -> the metallic rim/frame rings around the buttons
+#   _inner_tint -> the centre hub disc
+#   _num_tint   -> the level numeral
+var _outer_tint: Variant = null
+var _inner_tint: Variant = null
+var _num_tint: Variant = null
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_shell()
@@ -317,7 +326,7 @@ func _rebuild() -> void:
 	# Graphite (never pure black), satin metal so it catches soft reflections.
 	# Semi-metallic graphite: enough diffuse to read as a lit gray metal surface
 	# (pure metal would only show dim reflections and look black).
-	var base := _disc(BASE_R, BASE_H, Color(0.15, 0.155, 0.17), 0.45)
+	var base := _disc(BASE_R, BASE_H, _outer(Color(0.15, 0.155, 0.17)), 0.45)
 	(base.material_override as StandardMaterial3D).metallic = 0.4
 	_wheel_root.add_child(base)
 
@@ -332,18 +341,18 @@ func _rebuild() -> void:
 	var ring_a := MeshInstance3D.new()
 	ring_a.mesh = _ring_mesh(OUTER_R + 0.035, OUTER_R + 0.10, 0.22, 0.05)
 	ring_a.position.y = 0.05
-	ring_a.material_override = _metal_mat(Color(0.19, 0.195, 0.22), 0.45, 0.32)
+	ring_a.material_override = _metal_mat(_outer(Color(0.19, 0.195, 0.22)), 0.45, 0.32)
 	_wheel_root.add_child(ring_a)
 
 	# outer rounded rim ring (catches the soft top highlight); thin overall frame
 	var ring_b := MeshInstance3D.new()
 	ring_b.mesh = _ring_mesh(OUTER_R + 0.095, OUTER_R + 0.16, 0.2, 0.07)
 	ring_b.position.y = 0.03
-	ring_b.material_override = _metal_mat(Color(0.23, 0.235, 0.26), 0.5, 0.26)
+	ring_b.material_override = _metal_mat(_outer(Color(0.23, 0.235, 0.26)), 0.5, 0.26)
 	_wheel_root.add_child(ring_b)
 
 	# smaller glossy graphite center hub
-	var hub := _disc(HUB_R, HUB_H, Color(0.11, 0.11, 0.14), 0.3)
+	var hub := _disc(HUB_R, HUB_H, _inner(Color(0.11, 0.11, 0.14)), 0.3)
 	(hub.material_override as StandardMaterial3D).metallic = 0.5
 	hub.position.y = 0.06
 	_wheel_root.add_child(hub)
@@ -439,6 +448,44 @@ func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
 	m.roughness = rough
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
+
+# ---------------- customization (shop "SIMON" colours) ----------------
+
+# Equip the player's chosen colours. Each argument is a Color or null (= keep the
+# stock graphite/white look). Rebuilds the wheel meshes and recolours the
+# numeral so the change shows immediately. See game.gd for who supplies these.
+func apply_skin(outer: Variant, inner: Variant, number: Variant) -> void:
+	_outer_tint = outer
+	_inner_tint = inner
+	_num_tint = number
+	if _wheel_root != null:
+		_rebuild()
+	_apply_num_tint()
+
+# Resolve a rim mesh's stock graphite colour through the equipped outer tint.
+func _outer(gray: Color) -> Color:
+	return _tint_metal(gray, _outer_tint) if _outer_tint is Color else gray
+
+# Resolve the hub's stock graphite colour through the equipped inner tint.
+func _inner(gray: Color) -> Color:
+	return _tint_metal(gray, _inner_tint) if _inner_tint is Color else gray
+
+# A metallic shade of `tint` whose brightness tracks the part's original graphite
+# value (so the rings keep their relative light-to-dark relationship), lifted into
+# a visible range. Saturation is eased back slightly for a metallic, premium feel —
+# silver/gold read naturally because their catalog colours are near-neutral/warm.
+func _tint_metal(gray: Color, tint: Color) -> Color:
+	var v := clampf(gray.v * 2.2 + 0.30, 0.0, 1.0)
+	var s := clampf(tint.s * 0.85, 0.0, 1.0)
+	return Color.from_hsv(tint.h, s, v)
+
+# Recolour the main numeral; null tint = the stock pure white. The glow and
+# highlight layers are left untouched.
+func _apply_num_tint() -> void:
+	if _level_num == null:
+		return
+	var col: Color = _num_tint if _num_tint is Color else Color.WHITE
+	_level_num.add_theme_color_override("font_color", col)
 
 func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstance3D:
 	var cyl := CylinderMesh.new()

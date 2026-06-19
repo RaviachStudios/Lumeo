@@ -15,8 +15,6 @@ var game_manager: Node
 var rounds: int = 0
 
 const GOLD := Color(1.0, 0.85, 0.2)
-const ICON_BLUE := Color(0.23, 0.51, 0.96)
-const ICON_GREEN := Color(0.18, 0.78, 0.39)
 
 # Mirror of home_screen's background — same palette so the screen reads as part
 # of the same world, not a popup.
@@ -40,17 +38,21 @@ void fragment() {
 }
 "
 
-# Same dark navy-glass face used by the home menu pills (gradient + top
-# highlight + blue rim + soft drop shadow). The +pad/-pad inset is what gives
-# the shadow room to breathe outside the pill's footprint.
-const BTN_PAD := 20.0
+# Glass pill face shared by both game-over buttons (gradient body + top highlight
+# + tunable accent rim glow + soft drop shadow). Mirrors the difficulty screen's
+# card face so the whole game reads as one design language. The +pad/-pad inset
+# gives the shadow room to breathe outside the pill's footprint. The primary
+# (PLAY AGAIN) button drives the rim/fill hot; HOME stays a subdued glass pill.
+const BTN_PAD := 22.0
 const BTN_SHADER := "
 shader_type canvas_item;
 uniform vec2 rect_size = vec2(400.0, 114.0);
-uniform float pad = 20.0;
-uniform float radius = 30.0;
+uniform float pad = 22.0;
+uniform float radius = 32.0;
 uniform vec3 top_col = vec3(0.118, 0.153, 0.369);
 uniform vec3 bot_col = vec3(0.078, 0.102, 0.259);
+uniform vec3 rim_col = vec3(0.35, 0.55, 1.0);
+uniform float rim_boost = 1.0;
 float sdf_round_box(vec2 pp, vec2 b, float r) {
 	vec2 q = abs(pp) - b + vec2(r);
 	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
@@ -61,13 +63,13 @@ void fragment() {
 	vec2 hb = (rect_size - vec2(pad * 2.0)) * 0.5;
 	float d = sdf_round_box(p, hb, radius);
 	float body = smoothstep(1.0, -1.0, d);
-	float sd = sdf_round_box(p - vec2(0.0, 7.0), hb, radius);
-	float shadow = smoothstep(pad, 0.0, sd) * 0.45;
+	float sd = sdf_round_box(p - vec2(0.0, 8.0), hb, radius);
+	float shadow = smoothstep(pad, 0.0, sd) * 0.50;
 	float ty = clamp((px.y - pad) / (rect_size.y - pad * 2.0), 0.0, 1.0);
 	vec3 base = mix(top_col, bot_col, ty);
-	base += vec3(0.55, 0.65, 0.95) * smoothstep(0.16, 0.0, ty) * 0.10;
-	base += vec3(0.35, 0.55, 1.0) * smoothstep(-7.0, -0.5, d) * 0.16;
-	base += vec3(0.20, 0.35, 0.80) * smoothstep(95.0, 0.0, length(p)) * 0.05;
+	base += vec3(0.65, 0.75, 1.0) * smoothstep(0.18, 0.0, ty) * 0.12;          // top sheen
+	base += rim_col * smoothstep(-7.0, -0.5, d) * 0.34 * rim_boost;            // accent rim
+	base += rim_col * smoothstep(120.0, 0.0, length(p)) * 0.06 * rim_boost;    // inner glow
 	float a = max(shadow, body);
 	vec3 rgb = mix(vec3(0.0, 0.01, 0.04), base, body);
 	COLOR = vec4(rgb, a);
@@ -75,7 +77,7 @@ void fragment() {
 "
 
 const BTN_W := 280.0
-const BTN_H := 64.0
+const BTN_H := 68.0
 const BTN_GAP := 36.0
 
 var _confetti: Array[Dictionary] = []
@@ -84,7 +86,6 @@ var _is_new_high: bool = false
 
 var _bg: ColorRect
 var _bg_mat: ShaderMaterial
-var _btn_face_mat: ShaderMaterial
 var _score_label: Label
 var _rank_slot: Control               # placeholder; the rank pill is added here once Firestore returns
 var _rank_token := 0                  # bumped on free; awaited callbacks bail when stale
@@ -98,9 +99,12 @@ func _ready() -> void:
 	AudioManager.play_win_sound()
 	if _is_new_high:
 		_pulse_score()
-	# Upload the score and learn the world rank. We wait for submit so the
-	# subsequent load_global reflects this run (no submission/load for guests).
-	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
+	# Upload the score and learn the world rank — but only when this run is a new
+	# personal best. A non-improving run can't change the player's leaderboard
+	# place, so showing it would feel like a hollow "celebration" it didn't earn.
+	# We wait for submit so the subsequent load_global reflects this run (no
+	# submission/load for guests).
+	if _is_new_high and FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
 		_submit_and_show_rank()
 
 func _exit_tree() -> void:
@@ -192,7 +196,6 @@ func _draw() -> void:
 func _build_ui() -> void:
 	var sz := get_viewport_rect().size
 	var cx := sz.x * 0.5
-	var best: int = GameState.get_high_score()
 
 	# --- Heading ------------------------------------------------------------
 	# Style matches the difficulty/leaderboards titles: large white letters with
@@ -258,11 +261,6 @@ func _build_ui() -> void:
 	rounds_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(rounds_lbl)
 
-	# --- Subdued personal-best pill ---------------------------------------
-	# Intentionally lower contrast than the score, so the eye lands on the
-	# score first. Tiny "★ BEST" prefix, then the number — single-line.
-	_build_best_pill(cx, sz.y * 0.60, best)
-
 	# --- Rank slot (filled async on new high + signed in) -----------------
 	_rank_slot = Control.new()
 	_rank_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -275,43 +273,17 @@ func _build_ui() -> void:
 		_build_coins_earned_pill(cx, sz.y * 0.78, CoinsManager.session_earned)
 
 	# --- Buttons (home / play again) --------------------------------------
-	_build_btn_face_material()
+	# HOME is the calm secondary glass pill; PLAY AGAIN is the primary call to
+	# action — brighter fill, a live green rim glow and a replay icon so the eye
+	# lands on it first.
 	var btn_y := sz.y * 0.92 - BTN_H * 0.5
 	var btn_total := BTN_W * 2.0 + BTN_GAP
-	_make_pill_button("HOME", ICON_BLUE,
+	_make_pill_button("HOME", "home", Color(0.40, 0.58, 1.0), false,
 		Vector2(cx - btn_total * 0.5, btn_y),
 		func() -> void: game_manager.show_home())
-	_make_pill_button("PLAY AGAIN", ICON_GREEN,
+	_make_pill_button("PLAY AGAIN", "replay", Color(0.30, 0.80, 0.52), true,
 		Vector2(cx - btn_total * 0.5 + BTN_W + BTN_GAP, btn_y),
 		func() -> void: game_manager.show_difficulty())
-
-# ---------------- personal best pill ----------------
-
-# Thin lavender outline pill, intentionally muted vs. the big score above.
-func _build_best_pill(cx: float, y: float, best: int) -> void:
-	const PW := 220.0
-	const PH := 36.0
-	var pill := Panel.new()
-	pill.position = Vector2(cx - PW * 0.5, y)
-	pill.size = Vector2(PW, PH)
-	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.06, 0.08, 0.20, 0.55)
-	s.set_corner_radius_all(int(PH * 0.5))
-	s.border_color = Color(0.50, 0.55, 1.0, 0.30)
-	s.set_border_width_all(1)
-	pill.add_theme_stylebox_override("panel", s)
-	add_child(pill)
-
-	var lbl := Label.new()
-	lbl.text = "★  Best  %d" % best
-	lbl.add_theme_font_size_override("font_size", 16)
-	lbl.add_theme_color_override("font_color", Color(0.74, 0.78, 1.0, 0.85))
-	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pill.add_child(lbl)
 
 # ---------------- rank pill (new-high celebration payoff) ----------------
 
@@ -331,10 +303,9 @@ func _submit_and_show_rank() -> void:
 		return
 	_show_rank_pill(rank)
 
-# Pill animating in from below with a brief bloom, showing the player's
-# current leaderboard place. Styled gold/celebratory on a new high (visually
-# the loudest element after the score) and muted lavender otherwise so a
-# non-improving run doesn't feel like a celebration it didn't earn.
+# Pill animating in from below with a brief bloom, showing the player's current
+# leaderboard place. Only reached on a new personal best, so it's styled
+# gold/celebratory — visually the loudest element after the score.
 func _show_rank_pill(rank: int) -> void:
 	if not _rank_slot:
 		return
@@ -346,25 +317,18 @@ func _show_rank_pill(rank: int) -> void:
 	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var s := StyleBoxFlat.new()
 	s.set_corner_radius_all(int(slot_sz.y * 0.5))
-	if _is_new_high:
-		s.bg_color = Color(0.18, 0.13, 0.04, 0.70)
-		s.border_color = GOLD
-		s.set_border_width_all(2)
-		s.shadow_color = Color(GOLD.r, GOLD.g, GOLD.b, 0.55)
-		s.shadow_size = 18
-	else:
-		s.bg_color = Color(0.06, 0.08, 0.20, 0.55)
-		s.border_color = Color(0.50, 0.55, 1.0, 0.30)
-		s.set_border_width_all(1)
+	s.bg_color = Color(0.18, 0.13, 0.04, 0.70)
+	s.border_color = GOLD
+	s.set_border_width_all(2)
+	s.shadow_color = Color(GOLD.r, GOLD.g, GOLD.b, 0.55)
+	s.shadow_size = 18
 	pill.add_theme_stylebox_override("panel", s)
 	_rank_slot.add_child(pill)
 
 	var lbl := Label.new()
-	lbl.text = ("🏅  You're #%d on the leaderboard!" % rank) if _is_new_high \
-		else "#%d on the leaderboard" % rank
-	lbl.add_theme_font_size_override("font_size", 20 if _is_new_high else 16)
-	lbl.add_theme_color_override("font_color",
-		Color(1.0, 0.92, 0.55) if _is_new_high else Color(0.74, 0.78, 1.0, 0.85))
+	lbl.text = "🏅  You're #%d on the leaderboard!" % rank
+	lbl.add_theme_font_size_override("font_size", 20)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
 	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -437,22 +401,32 @@ func _build_coins_earned_pill(cx: float, y: float, earned: int) -> void:
 
 # ---------------- pill buttons (home / play again) ----------------
 
-func _build_btn_face_material() -> void:
+# A per-button glass face. `accent` tints the rim; `primary` brightens the fill
+# and the resting rim so PLAY AGAIN reads as the dominant action.
+func _pill_face_material(accent: Color, primary: bool) -> ShaderMaterial:
 	var sh := Shader.new()
 	sh.code = BTN_SHADER
-	_btn_face_mat = ShaderMaterial.new()
-	_btn_face_mat.shader = sh
-	_btn_face_mat.set_shader_parameter("rect_size",
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("rect_size",
 		Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0))
-	_btn_face_mat.set_shader_parameter("pad", BTN_PAD)
-	_btn_face_mat.set_shader_parameter("radius", 30.0)
-	_btn_face_mat.set_shader_parameter("top_col", Vector3(0.118, 0.153, 0.369))
-	_btn_face_mat.set_shader_parameter("bot_col", Vector3(0.078, 0.102, 0.259))
+	mat.set_shader_parameter("pad", BTN_PAD)
+	mat.set_shader_parameter("radius", 32.0)
+	if primary:
+		# A filled, lifted body — distinctly brighter than the navy glass.
+		mat.set_shader_parameter("top_col", Vector3(0.10, 0.34, 0.24))
+		mat.set_shader_parameter("bot_col", Vector3(0.05, 0.20, 0.15))
+	else:
+		mat.set_shader_parameter("top_col", Vector3(0.118, 0.153, 0.369))
+		mat.set_shader_parameter("bot_col", Vector3(0.063, 0.086, 0.227))
+	mat.set_shader_parameter("rim_col", Vector3(accent.r, accent.g, accent.b))
+	mat.set_shader_parameter("rim_boost", 1.5 if primary else 0.9)
+	return mat
 
-# Dark navy-glass pill: shader face + glowing colored icon on the leading edge
-# + light label. Mirrors home_screen's _make_menu_button so the player reads
-# this screen as part of the same UI language.
-func _make_pill_button(txt: String, icon_col: Color, pos: Vector2, cb: Callable) -> Control:
+# Glass pill: shader face + an accent icon + label. PLAY AGAIN (primary) carries
+# a live breathing rim glow so it's clearly the main action.
+func _make_pill_button(txt: String, icon_kind: String, accent: Color,
+		primary: bool, pos: Vector2, cb: Callable) -> Control:
 	var wrap := Control.new()
 	wrap.custom_minimum_size = Vector2(BTN_W, BTN_H)
 	wrap.size = Vector2(BTN_W, BTN_H)
@@ -469,36 +443,38 @@ func _make_pill_button(txt: String, icon_col: Color, pos: Vector2, cb: Callable)
 		btn.add_theme_stylebox_override(st, empty)
 	wrap.add_child(btn)
 
+	var mat := _pill_face_material(accent, primary)
 	var face := ColorRect.new()
-	face.material = _btn_face_mat
+	face.material = mat
 	face.position = Vector2(-BTN_PAD, -BTN_PAD)
 	face.size = Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0)
 	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(face)
 
-	var rtl := is_layout_rtl()
-	var icon := Panel.new()
-	var d := 40.0
-	icon.size = Vector2(d, d)
-	icon.position = Vector2(BTN_W - 18 - d if rtl else 18, (BTN_H - d) * 0.5)
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ic := StyleBoxFlat.new()
-	ic.bg_color = icon_col.lightened(0.12)
-	ic.set_corner_radius_all(int(d * 0.5))
-	ic.border_color = icon_col.lightened(0.45)
-	ic.set_border_width_all(2)
-	ic.shadow_color = Color(icon_col.r, icon_col.g, icon_col.b, 0.6)
-	ic.shadow_size = 12
-	icon.add_theme_stylebox_override("panel", ic)
+	# Icon + label as a centered group. Measure the text with the real font so
+	# the pair sits truly centered — a char-count approximation drifts (e.g. the
+	# short "HOME" ended up hanging right of center), so use get_string_size.
+	var icon_sz := 24.0
+	var gap := 14.0
+	var font_size := 23
+	var font := ThemeDB.fallback_font
+	var text_w := font.get_string_size(
+		txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	var group_w := icon_sz + gap + text_w
+	var gx := (BTN_W - group_w) * 0.5
+	var fg := accent.lightened(0.5) if primary else Color(0.86, 0.90, 1.0)
+
+	var icon := _btn_icon(icon_kind, icon_sz * 0.5, fg)
+	icon.position = Vector2(gx + icon_sz * 0.5, BTN_H * 0.5)
 	btn.add_child(icon)
 
 	var lbl := Label.new()
 	lbl.text = txt
-	lbl.add_theme_font_size_override("font_size", 22)
-	lbl.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
-	lbl.position = Vector2(36 if rtl else 18 + d + 14, 0)
-	lbl.size = Vector2(BTN_W - (18 + d + 14) - 36, BTN_H)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT if rtl else HORIZONTAL_ALIGNMENT_LEFT
+	lbl.add_theme_font_size_override("font_size", font_size)
+	lbl.add_theme_color_override("font_color", Color(0.96, 1.0, 0.97) if primary else Color(0.86, 0.90, 1.0))
+	lbl.position = Vector2(gx + icon_sz + gap, 0)
+	lbl.size = Vector2(text_w + 4.0, BTN_H)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(lbl)
@@ -508,14 +484,91 @@ func _make_pill_button(txt: String, icon_col: Color, pos: Vector2, cb: Callable)
 	btn.button_down.connect(_on_btn_down.bind(btn))
 	btn.button_up.connect(_on_btn_up.bind(btn))
 	btn.pressed.connect(cb)
+
+	# Primary button: a gentle forever-pulse on the rim so it feels alive.
+	if primary:
+		var set_rim := func(v: float) -> void:
+			if is_instance_valid(mat):
+				mat.set_shader_parameter("rim_boost", v)
+		var pulse := create_tween().set_loops()
+		pulse.tween_method(set_rim, 1.5, 2.1, 1.1) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		pulse.tween_method(set_rim, 2.1, 1.5, 1.1) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	return wrap
 
 func _on_btn_hover(btn: Button, entered: bool) -> void:
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(btn, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
+	tw.tween_property(btn, "scale", Vector2.ONE * (1.04 if entered else 1.0), 0.16) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(btn, "modulate",
-		Color(1.10, 1.10, 1.10) if entered else Color.WHITE, 0.16)
+	tw.tween_property(btn, "position:y", -3.0 if entered else 0.0, 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+# ---------------- button icons (procedural) ----------------
+
+func _btn_icon(kind: String, s: float, col: Color) -> Node2D:
+	if kind == "replay":
+		return _replay_icon(s, col)
+	return _home_icon(s, col)
+
+# Little house: roof triangle over a body, with a doorway notched out via the
+# pill's dark fill color so it reads as a home even at small size.
+func _home_icon(s: float, col: Color) -> Node2D:
+	var n := Node2D.new()
+	var roof := Polygon2D.new()
+	roof.polygon = PackedVector2Array([
+		Vector2(0, -s), Vector2(s * 1.05, -s * 0.05), Vector2(-s * 1.05, -s * 0.05)])
+	roof.color = col
+	n.add_child(roof)
+	var w := s * 0.66
+	var body := Polygon2D.new()
+	body.polygon = PackedVector2Array([
+		Vector2(-w, -s * 0.05), Vector2(w, -s * 0.05),
+		Vector2(w, s * 0.85), Vector2(-w, s * 0.85)])
+	body.color = col
+	n.add_child(body)
+	var door := Polygon2D.new()
+	var dw := s * 0.22
+	door.polygon = PackedVector2Array([
+		Vector2(-dw, s * 0.85), Vector2(dw, s * 0.85),
+		Vector2(dw, s * 0.28), Vector2(-dw, s * 0.28)])
+	door.color = Color(0.09, 0.12, 0.26)   # matches the navy pill fill behind it
+	n.add_child(door)
+	return n
+
+# Circular replay arrow: a near-full ring with a gap, capped by an arrowhead.
+func _replay_icon(s: float, col: Color) -> Node2D:
+	var n := Node2D.new()
+	var arc := Line2D.new()
+	arc.width = maxf(2.6, s * 0.30)
+	arc.default_color = col
+	arc.antialiased = true
+	arc.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	arc.end_cap_mode = Line2D.LINE_CAP_ROUND
+	var start := deg_to_rad(-50.0)
+	var end := deg_to_rad(210.0)
+	var pts := PackedVector2Array()
+	var steps := 26
+	for i in steps + 1:
+		var a: float = lerp(start, end, float(i) / steps)
+		pts.append(Vector2(cos(a), sin(a)) * s)
+	arc.points = pts
+	n.add_child(arc)
+	# Arrowhead at the arc's start. The arc sweeps with increasing angle, so the
+	# tip must point *against* that (decreasing angle) to read as the rotation
+	# flowing into the gap — the previous tip pointed the wrong way.
+	var tip := Vector2(cos(start), sin(start)) * s
+	var tangent := Vector2(-sin(start), cos(start))    # direction of increasing angle
+	var radial := Vector2(cos(start), sin(start))
+	var ah := s * 0.62
+	var head := Polygon2D.new()
+	head.color = col
+	head.polygon = PackedVector2Array([
+		tip - tangent * ah * 0.9,
+		tip - radial * ah * 0.7,
+		tip + radial * ah * 0.7])
+	n.add_child(head)
+	return n
 
 func _on_btn_down(btn: Button) -> void:
 	create_tween().tween_property(btn, "scale", Vector2.ONE * 0.98, 0.10) \

@@ -24,6 +24,7 @@ const ENDLESS_DAY := 15
 var _backdrop: ColorRect
 var _dialog: Panel
 var _action_btn: Button
+var _action_lbl: Label
 var _cells: Array[Dictionary] = []   # per cell: { panel, day, reward_lbl }
 var _is_endless := false
 # Endless-view widgets we animate on _ready, kept as members so we can drive
@@ -117,6 +118,18 @@ func _build() -> void:
 	_action_btn.add_theme_font_size_override("font_size", 24)
 	_action_btn.pressed.connect(_on_action)
 	_dialog.add_child(_action_btn)
+
+	# Plain text shown in place of the button once the daily reward has already
+	# been claimed — "come back tomorrow" is information, not an action.
+	_action_lbl = Label.new()
+	_action_lbl.size = Vector2(280, 64)
+	_action_lbl.position = Vector2((DIALOG_W - 280) * 0.5, DIALOG_H - 64 - 28)
+	_action_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_action_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_action_lbl.add_theme_font_size_override("font_size", 22)
+	_action_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.95, 0.7))
+	_action_lbl.visible = false
+	_dialog.add_child(_action_lbl)
 
 	# Light "Close" hint in the corner.
 	var close := Button.new()
@@ -390,13 +403,16 @@ func _refresh_states() -> void:
 
 	# Action button reflects claim state.
 	if can_claim:
+		_action_btn.visible = true
+		_action_lbl.visible = false
 		_action_btn.text = "CLAIM   +%d" % CoinsManager.daily_reward_for_day(next_day)
 		_set_action_style(_action_btn, Color(1.00, 0.66, 0.10), Color(0.18, 0.10, 0.0))
 		_action_btn.disabled = false
 	else:
-		_action_btn.text = "COME BACK TOMORROW"
-		_set_action_style(_action_btn, Color(0.30, 0.30, 0.40), Color(0.85, 0.85, 0.95, 0.7))
-		_action_btn.disabled = true
+		# Already claimed today — show plain text instead of a (dead) button.
+		_action_btn.visible = false
+		_action_lbl.visible = true
+		_action_lbl.text = "COME BACK TOMORROW"
 
 func _set_action_style(btn: Button, bg: Color, fg: Color) -> void:
 	var s := StyleBoxFlat.new()
