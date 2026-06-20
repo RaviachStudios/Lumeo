@@ -111,6 +111,9 @@ func play_replay_sound() -> void:
 	_sfx_player.stream = _make_sequence_wav([659.25, 783.99], 0.12)
 	_sfx_player.play()
 
+func is_music_on() -> bool:
+	return _music_on
+
 func play_bg_music() -> void:
 	if _music_on:
 		return

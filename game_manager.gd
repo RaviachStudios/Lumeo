@@ -1,5 +1,6 @@
 extends Control
 
+const LoadingScreen := preload("res://loading_screen.gd")
 const HomeScreen := preload("res://home_screen.gd")
 const DifficultyScreen := preload("res://difficulty_screen.gd")
 const HowToPlayScreen := preload("res://how_to_play.gd")
@@ -21,7 +22,9 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_canvas = $ScreenCanvas
 	await get_tree().process_frame
-	show_home()
+	# Boot through the loading screen so the wallet/theme/shop data is ready before
+	# home appears. It calls show_home() itself once loading completes.
+	show_loading()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
@@ -35,6 +38,10 @@ func _swap(screen: Control) -> void:
 		_current.queue_free()
 	_current = screen
 	_current.game_manager = self
+	# Equipped shop themes are painted only behind the gameplay screen; every other
+	# screen wears its own background. Toggle BEFORE the screen builds so its _ready()
+	# reads the correct BackgroundManager.is_themed().
+	BackgroundManager.set_active(screen is GameScreen)
 	_canvas.add_child(_current)
 
 func show_name_picker() -> void:
@@ -45,6 +52,9 @@ func show_leaderboards() -> void:
 
 func show_shop() -> void:
 	_swap(ShopScreen.new())
+
+func show_loading() -> void:
+	_swap(LoadingScreen.new())
 
 func show_home() -> void:
 	_swap(HomeScreen.new())

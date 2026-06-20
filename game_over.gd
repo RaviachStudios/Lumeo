@@ -264,13 +264,13 @@ func _build_ui() -> void:
 	# --- Rank slot (filled async on new high + signed in) -----------------
 	_rank_slot = Control.new()
 	_rank_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_rank_slot.position = Vector2(cx - 220, sz.y * 0.69)
+	_rank_slot.position = Vector2(cx - 220, sz.y * 0.65)
 	_rank_slot.size = Vector2(440, 48)
 	add_child(_rank_slot)
 
 	# --- Coins-earned pill (signed-in only) --------------------------------
 	if FirebaseManager.is_signed_in():
-		_build_coins_earned_pill(cx, sz.y * 0.78, CoinsManager.session_earned)
+		_build_coins_earned_pill(cx, sz.y * 0.73, CoinsManager.session_earned)
 
 	# --- Buttons (home / play again) --------------------------------------
 	# HOME is the calm secondary glass pill; PLAY AGAIN is the primary call to
@@ -568,6 +568,10 @@ func _replay_icon(s: float, col: Color) -> Node2D:
 		tip - radial * ah * 0.7,
 		tip + radial * ah * 0.7])
 	n.add_child(head)
+	# Rotate the whole glyph a quarter turn counter-clockwise (negative angle in
+	# Godot's y-down 2D space). Geometry is centred on the node origin, so it
+	# spins in place without shifting off the button.
+	n.rotation = -PI * 0.5
 	return n
 
 func _on_btn_down(btn: Button) -> void:

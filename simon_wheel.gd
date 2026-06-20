@@ -31,14 +31,14 @@ const DOME := 0.045          # gentle central convexity (pillowed top)
 const BEVEL := 0.085         # rounded-bevel drop around the whole segment edge
 const BEVEL_ZONE := 0.3      # fraction of each half-extent occupied by the bevel
 
-const EMIT_ON := 1.3         # emission when lit: lit from within, not overexposed
+const EMIT_ON := 2.0         # emission when lit: lit from within, not overexposed
 const EMIT_OFF := 0.40       # idle self-illumination — bumped from 0.14 so the
 							 # button colors read vivid even before being lit.
 							 # Still well under the 1.1 bloom threshold.
 const GLOW_LERP := 14.0      # how fast glow rises/falls
 const PRESS_DROP := 0.06     # how far a pressed segment sinks (local units)
-const HALO_SIZE := 1.5       # small glow that bleeds just past the segment edges
-const HALO_ALPHA := 0.5      # outer-glow strength when lit (calibrating - tune down)
+const HALO_SIZE := 1.7       # small glow that bleeds just past the segment edges
+const HALO_ALPHA := 0.8      # outer-glow strength when lit (calibrating - tune down)
 # Each colored button is inset inside its slot, leaving a dark frame
 # border around it, and raised so it sits proud of the frame.
 const BTN_ANG_MARGIN := 2.0  # degrees trimmed from each angular side
@@ -73,15 +73,18 @@ var _halo_mats: Array[StandardMaterial3D] = []
 var _glow_tex: Texture2D
 var _level_num: Label
 var _num_labels: Array[Label] = []   # stacked layers (glow / main / highlight)
+var _num_glow: Label                 # the soft outer-glow layer (recoloured by font packs)
+var _num_holder: Control             # holds the numeral layers (scaled for the shop preview)
+var _dot: Panel                      # status light below the numeral
 
 # Equipped Simon customization (set via apply_skin). Each is a Color tint or
 # null = keep the stock graphite/white look:
 #   _outer_tint -> the metallic rim/frame rings around the buttons
 #   _inner_tint -> the centre hub disc
-#   _num_tint   -> the level numeral
+#   _num_pack   -> the level numeral's font package (Dictionary) or null = stock
 var _outer_tint: Variant = null
 var _inner_tint: Variant = null
-var _num_tint: Variant = null
+var _num_pack: Variant = null
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -125,8 +128,8 @@ func _build_shell() -> void:
 	# little colored light onto the surrounding frame. The bloom radius is kept
 	# SMALL (fine glow levels only) so it reads as light bleed, not a neon aura.
 	env.glow_enabled = true
-	env.glow_intensity = 0.45
-	env.glow_strength = 0.9
+	env.glow_intensity = 0.65
+	env.glow_strength = 1.0
 	env.glow_bloom = 0.06
 	env.glow_hdr_threshold = 1.1
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
@@ -188,6 +191,11 @@ const NUM_MAX_W := 104.0     # numeral shrinks to stay within this width (the hu
 const CENTER_LIFT := 20      # px to raise the readout (hub center sits above widget
 							 # center due to the camera tilt)
 const DOT_GAP := 57          # px from the numeral center down to the status light
+# Soft blue halo behind the level numeral (the "glow of the hub"). Lowered from
+# (0.15, 30): raise HUB_GLOW_ALPHA toward ~0.15 for a stronger glow, lower toward
+# 0 to fade it out; HUB_GLOW_SIZE is the halo radius in px.
+const HUB_GLOW_ALPHA := 0.045
+const HUB_GLOW_SIZE := 14
 
 func _build_center_overlay() -> void:
 	# Numeral holder, centered on the hub. This Control is sized to the widget, so
@@ -200,6 +208,7 @@ func _build_center_overlay() -> void:
 	holder.offset_bottom -= CENTER_LIFT
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(holder)
+	_num_holder = holder
 
 	# (1) circular blue-white glow behind the numeral: invisible body, soft halo.
 	var glow := Panel.new()
@@ -210,8 +219,12 @@ func _build_center_overlay() -> void:
 	var gs := StyleBoxFlat.new()
 	gs.bg_color = Color(0.5, 0.68, 1.0, 0.0)
 	gs.set_corner_radius_all(50)
-	gs.shadow_color = Color(0.45, 0.66, 1.0, 0.15)   # low-opacity, soft falloff
-	gs.shadow_size = 30
+	# Hub glow strength. This is the soft blue halo behind the level numeral — the
+	# "glow of the hub". Tune HUB_GLOW_ALPHA (opacity) and HUB_GLOW_SIZE (radius)
+	# to make it stronger/weaker. Lowered from (0.15, 30) so it reads as a gentle
+	# inner light, not a strong bloom.
+	gs.shadow_color = Color(0.45, 0.66, 1.0, HUB_GLOW_ALPHA)
+	gs.shadow_size = HUB_GLOW_SIZE
 	glow.add_theme_stylebox_override("panel", gs)
 	holder.add_child(glow)
 
@@ -224,6 +237,7 @@ func _build_center_overlay() -> void:
 	nglow.add_theme_constant_override("shadow_outline_size", 10)
 	holder.add_child(nglow)
 	_num_labels.append(nglow)
+	_num_glow = nglow
 
 	# (3) main numeral: pure white, thin same-color weight outline (~semi-bold),
 	# and a soft dark drop shadow underneath.
@@ -261,8 +275,19 @@ func _build_center_overlay() -> void:
 	ds.shadow_size = 10
 	dot.add_theme_stylebox_override("panel", ds)
 	add_child(dot)
+	_dot = dot
 
 	set_level(1)
+
+# Shop-preview overlay tweak: shrink the numeral and optionally hide the status
+# dot so the small preview reads at the same proportions as the large in-game
+# wheel. The real game wheel never calls this, so it keeps scale 1 + the dot.
+func set_overlay_compact(numeral_scale: float, show_dot: bool) -> void:
+	if _num_holder != null:
+		_num_holder.pivot_offset = _num_holder.size * 0.5
+		_num_holder.scale = Vector2(numeral_scale, numeral_scale)
+	if _dot != null:
+		_dot.visible = show_dot
 
 # One numeral layer: fills the holder and centers its glyph, so all layers align.
 func _num_label(fsize: int, col: Color) -> Label:
@@ -278,7 +303,10 @@ func _num_label(fsize: int, col: Color) -> Label:
 
 # Largest size (<= NUM_MAX_SIZE) at which the number still fits NUM_MAX_W wide.
 func _fit_num_size(txt: String) -> int:
-	var w := ThemeDB.fallback_font.get_string_size(
+	var font: Font = _level_num.get_theme_font("font") if _level_num != null else ThemeDB.fallback_font
+	if font == null:
+		font = ThemeDB.fallback_font
+	var w := font.get_string_size(
 		txt, HORIZONTAL_ALIGNMENT_LEFT, -1, NUM_MAX_SIZE).x
 	if w <= NUM_MAX_W:
 		return NUM_MAX_SIZE
@@ -451,16 +479,16 @@ func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
 
 # ---------------- customization (shop "SIMON" colours) ----------------
 
-# Equip the player's chosen colours. Each argument is a Color or null (= keep the
-# stock graphite/white look). Rebuilds the wheel meshes and recolours the
-# numeral so the change shows immediately. See game.gd for who supplies these.
+# Equip the player's chosen look. `outer`/`inner` are a Color or null (= stock
+# graphite). `number` is a font-package Dictionary or null (= stock white numeral).
+# Rebuilds the wheel meshes and restyles the numeral so it shows immediately.
 func apply_skin(outer: Variant, inner: Variant, number: Variant) -> void:
 	_outer_tint = outer
 	_inner_tint = inner
-	_num_tint = number
+	_num_pack = number
 	if _wheel_root != null:
 		_rebuild()
-	_apply_num_tint()
+	_apply_num_pack()
 
 # Resolve a rim mesh's stock graphite colour through the equipped outer tint.
 func _outer(gray: Color) -> Color:
@@ -479,13 +507,38 @@ func _tint_metal(gray: Color, tint: Color) -> Color:
 	var s := clampf(tint.s * 0.85, 0.0, 1.0)
 	return Color.from_hsv(tint.h, s, v)
 
-# Recolour the main numeral; null tint = the stock pure white. The glow and
-# highlight layers are left untouched.
-func _apply_num_tint() -> void:
+# Apply the equipped level-number font package (typeface + colour + glow + outline)
+# across the numeral layers; a null/empty package restores the stock white look.
+func _apply_num_pack() -> void:
 	if _level_num == null:
 		return
-	var col: Color = _num_tint if _num_tint is Color else Color.WHITE
-	_level_num.add_theme_color_override("font_color", col)
+	var pack: Dictionary = _num_pack if (_num_pack is Dictionary) else {}
+
+	# Typeface: applied to every layer so glow/main/highlight stay aligned.
+	var font: Font = null
+	var fp := String(pack.get("font", ""))
+	if fp != "" and ResourceLoader.exists(fp):
+		var f := load(fp)
+		if f is Font:
+			font = f
+	for l in _num_labels:
+		if font != null:
+			l.add_theme_font_override("font", font)
+		else:
+			l.remove_theme_font_override("font")
+
+	# Main numeral colour + weight/outline.
+	_level_num.add_theme_color_override("font_color", pack.get("color", Color.WHITE))
+	_level_num.add_theme_color_override("font_outline_color", pack.get("outline", Color(1, 1, 1, 1)))
+	_level_num.add_theme_constant_override("outline_size", int(pack.get("outline_size", 2)))
+
+	# Soft outer glow lives on the dedicated glow layer.
+	if _num_glow != null:
+		_num_glow.add_theme_color_override("font_shadow_color", pack.get("glow", Color(0.45, 0.68, 1.0, 0.5)))
+		_num_glow.add_theme_constant_override("shadow_outline_size", int(pack.get("glow_size", 10)))
+
+	# Re-fit in case the typeface changed the numeral's width.
+	set_level(int(str(_level_num.text)) if _level_num.text.is_valid_int() else 1)
 
 func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstance3D:
 	var cyl := CylinderMesh.new()

@@ -1,10 +1,17 @@
 extends Control
 
-# Premium main menu: shader-driven navy->indigo background (vignette + radial
-# glow + soft blobs, gently breathing), a slowly rotating orbit ring carrying
-# five pulsing colored orbs, a glowing SIMON logo, and three dark navy-glass pill
-# buttons with hover / press / float micro-animations. Everything is built from
-# Godot nodes + shaders + tweens (no static images).
+# Premium main menu — a "magical space" home screen built entirely from Godot
+# nodes + shaders + _draw() + tweens (no static images):
+#   - a deep purple→blue gradient sky with twinkling stars (BG_SHADER)
+#   - one large, thin glowing orbital ring of soft colored orbs behind everything
+#   - the SIMON logo (white, soft-shadowed; the "O" is the 4-colour Simon wheel)
+#     over a "MEMORY CHALLENGE" subtitle
+#   - TOP-LEFT: a gold coin pill + a Daily Claim button (red notification dot)
+#   - TOP-RIGHT: a compact profile card (avatar, username, sign-out, settings gear)
+#   - CENTER: a floating grassy island carrying the big circular START orb
+#   - LEFT / RIGHT: premium Shop and Leaderboard cards (illustration + CTA button)
+#   - BOTTOM-CENTER: a small "How to Play" card
+# Everything is laid out symmetrically and re-flowed in _layout() on resize.
 
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
 
@@ -21,76 +28,53 @@ const ORB_COLORS := [
 	Color(0.23, 0.51, 0.96),  # blue
 ]
 
-const BTN_W := 440.0
-const BTN_H := 78.0
-const BTN_GAP := 22.0
+# Simon accent colors, reused to tint the scattered landmarks.
 const ICON_BLUE := Color(0.23, 0.51, 0.96)
 const ICON_GREEN := Color(0.18, 0.78, 0.39)
 const ICON_PURPLE := Color(0.55, 0.36, 0.96)
 const ICON_GOLD := Color(1.00, 0.78, 0.22)
 
+# Premium-card chrome (shared by the Shop / Leaderboard / How-to cards).
+const CARD_SIZE := Vector2(248.0, 300.0)
+const HOWTO_SIZE := Vector2(396.0, 78.0)
+const CARD_PURPLE := Color(0.26, 0.19, 0.50, 0.66)        # semi-transparent purple
+const CARD_BORDER := Color(0.62, 0.52, 1.0, 0.45)
+const CARD_GLOW := Color(0.40, 0.30, 0.85, 0.45)
+const CTA_PURPLE := Color(0.55, 0.40, 0.95, 0.96)
+
+# Procedural twilight sky for the world map: deep indigo at the top easing into a
+# warm violet/magenta horizon, a big soft moon-aura behind the logo, a sparse
+# twinkling star field that fades out where the island sits, and a vignette.
+# Built with mix()/smoothstep() only (no ternary, which can fail to compile on
+# the Mobile renderer).
 const BG_SHADER := "
 shader_type canvas_item;
 uniform float aspect = 0.5;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void fragment() {
 	vec2 uv = UV;
-	// deep, near-black space gradient (no pure black) - dark like the reference.
-	// Built with mix() only (no ternary, which can fail to compile).
-	vec3 top = vec3(0.012, 0.020, 0.070);
-	vec3 mid = vec3(0.018, 0.035, 0.110);
-	vec3 bot = vec3(0.045, 0.030, 0.105);
-	vec3 col = mix(top, mid, clamp(uv.y / 0.5, 0.0, 1.0));
-	col = mix(col, bot, clamp((uv.y - 0.5) / 0.5, 0.0, 1.0));
+	vec3 top = vec3(0.04, 0.05, 0.16);
+	vec3 mid = vec3(0.16, 0.13, 0.36);
+	vec3 low = vec3(0.34, 0.20, 0.42);
+	vec3 col = mix(top, mid, smoothstep(0.0, 0.60, uv.y));
+	col = mix(col, low, smoothstep(0.60, 1.0, uv.y));
 
-	// soft BLUE glow hugging the left edge, soft RED glow hugging the right edge
-	col += vec3(0.10, 0.22, 0.58) * smoothstep(0.5, 0.0, distance(uv, vec2(0.0, 0.45))) * 0.30;
-	col += vec3(0.55, 0.12, 0.22) * smoothstep(0.5, 0.0, distance(uv, vec2(1.0, 0.50))) * 0.22;
+	vec2 p = (uv - vec2(0.5, 0.32)) * vec2(aspect, 1.0);
+	// big soft moon-aura behind the logo + island, gently breathing
+	float breathe = 0.88 + 0.12 * sin(TIME * 0.5);
+	col += vec3(0.40, 0.34, 0.60) * smoothstep(0.65, 0.0, length(p)) * 0.40 * breathe;
+	// warm glow rising from the lower horizon
+	col += vec3(0.65, 0.32, 0.42) * smoothstep(0.35, 0.0, abs(uv.y - 0.95)) * 0.18;
 
-	vec2 p = (uv - vec2(0.5)) * vec2(aspect, 1.0);
-	// very subtle radial glow behind the logo (upper-center), slowly breathing
-	float breathe = 0.85 + 0.15 * sin(TIME * 0.6);
-	col += vec3(0.10, 0.16, 0.42) * smoothstep(0.5, 0.0, length(p - vec2(0.0, -0.18))) * 0.20 * breathe;
+	// sparse twinkling stars, fading toward the bottom (under the island)
+	vec2 g = floor(uv * vec2(120.0 * aspect, 120.0));
+	float h = hash(g);
+	float tw = 0.6 + 0.4 * sin(TIME * 2.0 + h * 30.0);
+	float star = smoothstep(0.991, 1.0, h) * tw;
+	col += vec3(0.90, 0.92, 1.0) * star * smoothstep(0.75, 0.10, uv.y);
 
-	// gentle vignette to keep the center deep
-	col *= mix(0.6, 1.0, smoothstep(1.1, 0.25, length(p)));
+	col *= mix(0.62, 1.0, smoothstep(1.15, 0.20, length((uv - vec2(0.5)) * vec2(aspect, 1.0))));
 	COLOR = vec4(col, 1.0);
-}
-"
-
-# Dark navy-glass button face (gradient + top highlight + blue rim + inner glow +
-# soft drop shadow), drawn on a ColorRect padded out so the shadow has room.
-const BTN_PAD := 20.0
-const BTN_SHADER := "
-shader_type canvas_item;
-uniform vec2 rect_size = vec2(400.0, 114.0);
-uniform float pad = 20.0;
-uniform float radius = 34.0;
-uniform vec3 top_col = vec3(0.118, 0.153, 0.369);
-uniform vec3 bot_col = vec3(0.078, 0.102, 0.259);
-float sdf_round_box(vec2 pp, vec2 b, float r) {
-	vec2 q = abs(pp) - b + vec2(r);
-	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
-}
-void fragment() {
-	vec2 px = UV * rect_size;
-	vec2 p = px - rect_size * 0.5;
-	vec2 hb = (rect_size - vec2(pad * 2.0)) * 0.5;   // visual half-size
-	float d = sdf_round_box(p, hb, radius);
-	float body = smoothstep(1.0, -1.0, d);           // 1 inside, AA edge
-
-	// soft drop shadow below the panel
-	float sd = sdf_round_box(p - vec2(0.0, 7.0), hb, radius);
-	float shadow = smoothstep(pad, 0.0, sd) * 0.45;
-
-	float ty = clamp((px.y - pad) / (rect_size.y - pad * 2.0), 0.0, 1.0);
-	vec3 base = mix(top_col, bot_col, ty);                       // subtle gradient
-	base += vec3(0.55, 0.65, 0.95) * smoothstep(0.16, 0.0, ty) * 0.10;  // top highlight
-	base += vec3(0.35, 0.55, 1.0) * smoothstep(-7.0, -0.5, d) * 0.16;   // blue rim light
-	base += vec3(0.20, 0.35, 0.80) * smoothstep(95.0, 0.0, length(p)) * 0.05;  // inner glow
-
-	float a = max(shadow, body);
-	vec3 rgb = mix(vec3(0.0, 0.01, 0.04), base, body);
-	COLOR = vec4(rgb, a);
 }
 "
 
@@ -102,17 +86,24 @@ var _ring_line: Line2D
 var _orbs: Array[Node2D] = []
 var _orb_tex: Texture2D
 var _logo_box: Control
-var _btn_wrappers: Array[Control] = []
-var _btn_face_mat: ShaderMaterial
+# The START orb is a clickable landmark widget {wrap, btn, art, drawer} floating in
+# the center. The Shop / Leaderboard / How-to navigation are premium cards
+# ({wrap} dicts) flanking it.
+var _start_lm: Dictionary = {}
+var _shop_card: Dictionary = {}
+var _ranks_card: Dictionary = {}
+var _howto_card: Dictionary = {}
+var _profile_card: Panel
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
-# at a fixed corner here. Daily-claim button sits just under the sign-in row.
+# at a fixed corner here. Daily-claim button sits just under it.
 var _coin_pill: Panel
 var _coin_lbl: Label
 var _coin_loading_tween: Tween   # animates "." -> ".." -> "..." while CoinsManager loads
 var _coin_loading_idx: int = 0
 var _daily_btn: Button
 var _daily_badge: Panel
+var _settings_music_btn: Button
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -125,8 +116,9 @@ func _ready() -> void:
 	_build_background()
 	_build_orbit()
 	_build_logo()
-	_build_buttons()
-	_build_account_corner()
+	_build_cards()
+	_build_start()
+	_build_profile_card()
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
 		_build_daily_claim_button()
@@ -139,12 +131,6 @@ func _ready() -> void:
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)
-	# The wallet doc (and with it the equipped theme) usually finishes loading
-	# AFTER this screen is built on a fresh launch. When it lands, BackgroundManager
-	# flips is_themed() — without this, our own deep-space bg stays painted over the
-	# global theme the player equipped, so the game opens on the default sky instead
-	# of their theme. Re-sync whenever the equipped theme changes.
-	CoinsManager.themes_changed.connect(_sync_local_background)
 	_start_animations()
 	AudioManager.play_bg_music()
 
@@ -157,12 +143,10 @@ func _ready() -> void:
 
 # ---------------- background ----------------
 
+# The home screen always wears its own deep-space sky now: equipped shop themes
+# are painted only behind the gameplay screen (BackgroundManager.is_themed() is
+# false everywhere else), so there's no global theme to defer to here.
 func _build_background() -> void:
-	# When the player owns and has equipped a shop theme, BackgroundManager
-	# already fills the viewport beneath us — skip the per-screen bg so the
-	# theme isn't hidden.
-	if BackgroundManager.is_themed():
-		return
 	# NOTE: screens live under a CanvasLayer (not a Control), so anchors give this
 	# screen no size - the background must be sized to the viewport in _layout().
 	_bg = ColorRect.new()
@@ -174,20 +158,6 @@ func _build_background() -> void:
 	_bg_mat.shader = sh
 	_bg.material = _bg_mat
 	add_child(_bg)
-
-# Equipping a theme (or the wallet loading after launch) flips
-# BackgroundManager.is_themed() under us. Drop our own bg so the global theme
-# shows through; rebuild it (under everything) when the player goes back to default.
-func _sync_local_background() -> void:
-	var themed := BackgroundManager.is_themed()
-	if themed and _bg:
-		_bg.queue_free()
-		_bg = null
-		_bg_mat = null
-	elif not themed and not _bg:
-		_build_background()
-		move_child(_bg, 0)
-		_layout()
 
 # ---------------- orbit + orbs ----------------
 
@@ -388,116 +358,519 @@ func _glow_dot(d: float, col: Color, center: Vector2) -> Panel:
 	p.add_theme_stylebox_override("panel", s)
 	return p
 
-# ---------------- buttons ----------------
+# ---------------- premium navigation cards ----------------
 
-func _build_buttons() -> void:
-	# Shared dark-glass face material (all pills are identical size/colors).
-	var sh := Shader.new()
-	sh.code = BTN_SHADER
-	_btn_face_mat = ShaderMaterial.new()
-	_btn_face_mat.shader = sh
-	_btn_face_mat.set_shader_parameter("rect_size", Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0))
-	_btn_face_mat.set_shader_parameter("pad", BTN_PAD)
-	_btn_face_mat.set_shader_parameter("radius", 34.0)
-	_btn_face_mat.set_shader_parameter("top_col", Vector3(0.118, 0.153, 0.369))  # #1E275E
-	_btn_face_mat.set_shader_parameter("bot_col", Vector3(0.078, 0.102, 0.259))  # #141A42
+# Build the three flanking cards: Shop (left) + Leaderboard (right) + How-to
+# (bottom). Shop is shown even when signed out (its action prompts sign-in) so the
+# layout stays symmetric.
+func _build_cards() -> void:
+	_shop_card = _build_card("SHOP", _draw_shop_card, "Go to Shop", _draw_cart, _on_shop)
+	_ranks_card = _build_card("LEADERBOARD", _draw_ranks_card, "View Leaderboard", _draw_chart, _on_leaderboards)
+	# Podium rank numerals, overlaid on the leaderboard illustration.
+	_card_numeral(_ranks_card, "1", 22, Color(0.34, 0.24, 0.05), Vector2(98, 159), 40)
+	_card_numeral(_ranks_card, "2", 18, Color(0.30, 0.31, 0.36), Vector2(29, 175), 36)
+	_card_numeral(_ranks_card, "3", 18, Color(0.36, 0.24, 0.10), Vector2(167, 189), 36)
+	_build_howto_card()
 
-	_btn_wrappers.clear()
-	_btn_wrappers.append(_make_menu_button("START GAME", ICON_BLUE, _on_start))
-	_btn_wrappers.append(_make_menu_button("LEADERBOARDS", ICON_GREEN, _on_leaderboards))
-	# SHOP sits just above HOW TO PLAY per the product spec. Only the signed-in
-	# player has a wallet to spend, so we hide it otherwise.
-	if FirebaseManager.is_signed_in():
-		_btn_wrappers.append(_make_menu_button("SHOP", ICON_GOLD, _on_shop))
-	_btn_wrappers.append(_make_menu_button("HOW TO PLAY", ICON_PURPLE, _on_how))
-
-# A dark navy-glass pill (shader face: gradient + top highlight + blue rim + inner
-# glow + soft shadow), a glowing colored icon on the left, light label center-left,
-# and a chevron on the right.
-# Wrapped in a Control so layout (wrapper.position) and animation (button.scale /
-# position) never fight each other.
-func _make_menu_button(txt: String, icon_col: Color, cb: Callable) -> Control:
+# A premium navigation card: rounded translucent-purple panel with a title, a
+# procedural illustration, and a bottom call-to-action pill (icon + label). The
+# whole card is tappable (transparent Button overlay) and scales gently on hover.
+func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callable, action: Callable) -> Dictionary:
 	var wrap := Control.new()
-	wrap.custom_minimum_size = Vector2(BTN_W, BTN_H)
-	wrap.size = Vector2(BTN_W, BTN_H)
+	wrap.size = CARD_SIZE
+	wrap.custom_minimum_size = CARD_SIZE
+	wrap.pivot_offset = CARD_SIZE * 0.5
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(wrap)
+
+	# Inner floater carries the whole card so the idle bob (position:y) is free of
+	# the layout (which positions `wrap`) and the hover/press scale (on `wrap`).
+	var floater := Control.new()
+	floater.size = CARD_SIZE
+	floater.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(floater)
+
+	var panel := _card_panel(CARD_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
+	floater.add_child(panel)
+
+	var t := _card_title(title, Vector2(0, 16), CARD_SIZE.x)
+	panel.add_child(t)
+
+	var art := Control.new()
+	art.size = CARD_SIZE
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var drawer := Control.new()
+	drawer.size = CARD_SIZE
+	drawer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drawer.draw.connect(draw_cb.bind(drawer))
+	art.add_child(drawer)
+	panel.add_child(art)
+
+	var pill := _cta_pill(Vector2(CARD_SIZE.x - 32, 42), cta, icon_cb)
+	pill.position = Vector2(16, CARD_SIZE.y - 56)
+	panel.add_child(pill)
+
+	var btn := _overlay_button(CARD_SIZE)
+	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
+	btn.mouse_exited.connect(_on_card_hover.bind(wrap, false))
+	btn.button_down.connect(_on_card_press.bind(wrap, true))
+	btn.button_up.connect(_on_card_press.bind(wrap, false))
+	btn.pressed.connect(action)
+	floater.add_child(btn)
+
+	return {"wrap": wrap, "art": art, "drawer": drawer, "floater": floater}
+
+# The bottom "HOW TO PLAY" strip: a "?" badge, a title + subtitle, and a round
+# arrow affordance on the right. Whole strip is tappable.
+func _build_howto_card() -> void:
+	var wrap := Control.new()
+	wrap.size = HOWTO_SIZE
+	wrap.custom_minimum_size = HOWTO_SIZE
+	wrap.pivot_offset = HOWTO_SIZE * 0.5
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(wrap)
+
+	var panel := _card_panel(HOWTO_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
+	wrap.add_child(panel)
+
+	# "?" badge
+	var badge := _circle_panel(50.0, ICON_PURPLE, Color(0.72, 0.58, 1.0, 0.9))
+	badge.position = Vector2(16, 14)
+	panel.add_child(badge)
+	var q := Label.new()
+	q.text = "?"
+	q.add_theme_font_size_override("font_size", 30)
+	q.add_theme_color_override("font_color", Color.WHITE)
+	q.set_anchors_preset(Control.PRESET_FULL_RECT)
+	q.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	q.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_child(q)
+
+	var title := Label.new()
+	title.text = "HOW TO PLAY"
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.5))
+	title.add_theme_constant_override("shadow_offset_x", 0)
+	title.add_theme_constant_override("shadow_offset_y", 0)
+	title.add_theme_constant_override("shadow_outline_size", 5)
+	title.position = Vector2(80, 12)
+	title.size = Vector2(240, 30)
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(title)
+
+	var sub := Label.new()
+	sub.text = "Learn the rules and start playing"
+	sub.add_theme_font_size_override("font_size", 14)
+	sub.add_theme_color_override("font_color", Color(0.80, 0.78, 1.0, 0.92))
+	sub.position = Vector2(80, 42)
+	sub.size = Vector2(270, 22)
+	sub.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(sub)
+
+	# round arrow affordance on the right
+	var arrow := _circle_panel(40.0, CTA_PURPLE, Color(0.45, 0.30, 0.95, 0.55))
+	arrow.position = Vector2(HOWTO_SIZE.x - 16 - 40, 19)
+	panel.add_child(arrow)
+	var ad := Control.new()
+	ad.size = Vector2(24, 24)
+	ad.position = Vector2(8, 8)
+	ad.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ad.draw.connect(_draw_arrow.bind(ad))
+	arrow.add_child(ad)
+
+	var btn := _overlay_button(HOWTO_SIZE)
+	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
+	btn.mouse_exited.connect(_on_card_hover.bind(wrap, false))
+	btn.button_down.connect(_on_card_press.bind(wrap, true))
+	btn.button_up.connect(_on_card_press.bind(wrap, false))
+	btn.pressed.connect(_on_how)
+	wrap.add_child(btn)
+
+	_howto_card = {"wrap": wrap}
+
+# Rounded translucent panel used as the body of every card.
+func _card_panel(size: Vector2, bg: Color, border: Color, glow: Color) -> Panel:
+	var p := Panel.new()
+	p.size = size
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = bg
+	st.set_corner_radius_all(22)
+	st.border_color = border
+	st.set_border_width_all(2)
+	st.shadow_color = glow
+	st.shadow_size = 16
+	p.add_theme_stylebox_override("panel", st)
+	return p
+
+# A filled circular Panel (used for badges / round buttons).
+func _circle_panel(d: float, col: Color, glow: Color) -> Panel:
+	var p := Panel.new()
+	p.size = Vector2(d, d)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = col
+	st.set_corner_radius_all(int(d * 0.5))
+	st.shadow_color = glow
+	st.shadow_size = 10
+	p.add_theme_stylebox_override("panel", st)
+	return p
+
+func _card_title(txt: String, pos: Vector2, w: float) -> Label:
+	var t := Label.new()
+	t.text = txt
+	t.add_theme_font_size_override("font_size", 28)
+	t.add_theme_color_override("font_color", Color.WHITE)
+	t.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.5))
+	t.add_theme_constant_override("shadow_offset_x", 0)
+	t.add_theme_constant_override("shadow_offset_y", 0)
+	t.add_theme_constant_override("shadow_outline_size", 6)
+	t.position = pos
+	t.size = Vector2(w, 36)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	t.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return t
+
+# Bottom call-to-action pill: a solid purple rounded bar with a left icon + label.
+func _cta_pill(size: Vector2, txt: String, icon_cb: Callable) -> Panel:
+	var pill := Panel.new()
+	pill.size = size
+	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = CTA_PURPLE
+	st.set_corner_radius_all(int(size.y * 0.5))
+	st.shadow_color = Color(0.45, 0.30, 0.95, 0.5)
+	st.shadow_size = 8
+	pill.add_theme_stylebox_override("panel", st)
+
+	var ic := Control.new()
+	ic.size = Vector2(24, 24)
+	ic.position = Vector2(18, (size.y - 24) * 0.5)
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.draw.connect(icon_cb.bind(ic))
+	pill.add_child(ic)
+
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_size_override("font_size", 16)
+	l.add_theme_color_override("font_color", Color.WHITE)
+	l.position = Vector2(48, 0)
+	l.size = Vector2(size.x - 56, size.y)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pill.add_child(l)
+	return pill
+
+# Centered numeral overlaid on the leaderboard card's podium illustration.
+func _card_numeral(card: Dictionary, txt: String, fsize: int, col: Color, pos: Vector2, box: float) -> void:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_size_override("font_size", fsize)
+	l.add_theme_color_override("font_color", col)
+	l.position = pos
+	l.size = Vector2(box, box)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	(card["art"] as Control).add_child(l)
+
+# A full-size transparent Button used to make a whole card tappable.
+func _overlay_button(size: Vector2) -> Button:
+	var btn := Button.new()
+	btn.size = size
+	btn.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for s in ["normal", "hover", "pressed", "focus", "disabled"]:
+		btn.add_theme_stylebox_override(s, empty)
+	return btn
+
+func _on_card_hover(wrap: Control, entered: bool) -> void:
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(wrap, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(wrap, "modulate", Color(1.10, 1.10, 1.10) if entered else Color.WHITE, 0.16)
+
+func _on_card_press(wrap: Control, down: bool) -> void:
+	var tw := create_tween()
+	tw.tween_property(wrap, "scale", Vector2.ONE * (0.97 if down else 1.0), 0.10) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+# ---------------- START orb ----------------
+
+const START_SIZE := Vector2(300.0, 300.0)
+
+func _build_start() -> void:
+	_start_lm = _landmark(START_SIZE, _draw_play_orb, _on_start)
+	_lm_label(_start_lm, "START", 36, Color.WHITE, ICON_BLUE.lightened(0.25), Vector2(0, 272), Vector2(START_SIZE.x, 48))
+
+# Build one clickable landmark: a transparent Button (input) wrapping an `art`
+# Control (scaled on hover/press, breathing while idle) which holds the procedural
+# `drawer`. Returns the pieces so callers can attach labels and the layout can
+# position the wrapper.
+func _landmark(art_size: Vector2, draw_cb: Callable, cb: Callable) -> Dictionary:
+	var wrap := Control.new()
+	wrap.size = art_size
+	wrap.custom_minimum_size = art_size
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(wrap)
 
 	var btn := Button.new()
-	btn.size = Vector2(BTN_W, BTN_H)
-	btn.pivot_offset = Vector2(BTN_W, BTN_H) * 0.5      # scale about the center
+	btn.size = art_size
 	btn.focus_mode = Control.FOCUS_NONE
-	# invisible styleboxes - the dark-glass look comes entirely from the shader face
 	var empty := StyleBoxEmpty.new()
-	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
-		btn.add_theme_stylebox_override(st, empty)
+	for s in ["normal", "hover", "pressed", "focus", "disabled"]:
+		btn.add_theme_stylebox_override(s, empty)
 	wrap.add_child(btn)
 
-	# dark navy-glass face (shader). Padded out so the shadow has room; the visual
-	# pill is inset by BTN_PAD and stays centered under scaling.
-	var face := ColorRect.new()
-	face.material = _btn_face_mat
-	face.position = Vector2(-BTN_PAD, -BTN_PAD)
-	face.size = Vector2(BTN_W + BTN_PAD * 2.0, BTN_H + BTN_PAD * 2.0)
-	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(face)
+	var art := Control.new()
+	art.size = art_size
+	art.pivot_offset = art_size * 0.5
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(art)
 
-	# colored circular icon - brighter than the button, glowing from within.
-	# In RTL the icon mirrors to the trailing edge so it leads the label.
-	var rtl_layout := _is_rtl()
-	var icon := Panel.new()
-	var d := 56.0
-	icon.size = Vector2(d, d)
-	icon.position = Vector2(BTN_W - 18 - d if rtl_layout else 18, (BTN_H - d) * 0.5)
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ic := StyleBoxFlat.new()
-	ic.bg_color = icon_col.lightened(0.12)
-	ic.set_corner_radius_all(int(d * 0.5))
-	ic.border_color = icon_col.lightened(0.45)        # bright inner-lit rim
-	ic.set_border_width_all(2)
-	ic.shadow_color = Color(icon_col.r, icon_col.g, icon_col.b, 0.6)
-	ic.shadow_size = 13                               # soft colored bloom
-	icon.add_theme_stylebox_override("panel", ic)
-	btn.add_child(icon)
+	var drawer := Control.new()
+	drawer.size = art_size
+	drawer.pivot_offset = art_size * 0.5
+	drawer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	drawer.draw.connect(draw_cb.bind(drawer))
+	art.add_child(drawer)
 
-	var lbl := Label.new()
-	lbl.text = txt
-	lbl.add_theme_font_size_override("font_size", 28)
-	lbl.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
-	lbl.position = Vector2(40 if rtl_layout else 18 + d + 16, 0)
-	lbl.size = Vector2(BTN_W - (18 + d + 16) - 40, BTN_H)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT if rtl_layout else HORIZONTAL_ALIGNMENT_LEFT
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(lbl)
-
-	btn.mouse_entered.connect(_on_btn_hover.bind(btn, true))
-	btn.mouse_exited.connect(_on_btn_hover.bind(btn, false))
-	btn.button_down.connect(_on_btn_down.bind(btn))
-	btn.button_up.connect(_on_btn_up.bind(btn))
+	btn.mouse_entered.connect(_on_lm_hover.bind(art, true))
+	btn.mouse_exited.connect(_on_lm_hover.bind(art, false))
+	btn.button_down.connect(_on_lm_press.bind(art))
+	btn.button_up.connect(_on_lm_release.bind(art))
 	btn.pressed.connect(cb)
-	return wrap
+	return {"wrap": wrap, "btn": btn, "art": art, "drawer": drawer}
 
-# True when the UI is laid out right-to-left (Hebrew, Arabic, …). Used to mirror
-# chevrons/icons so "next" still reads in the natural reading direction.
-# is_layout_rtl() resolves the inherited/locale settings to the final orientation,
-# while get_layout_direction() can still return the symbolic LOCALE value.
-func _is_rtl() -> bool:
-	return is_layout_rtl()
+# A centered, softly glowing text label overlaid on a landmark's art.
+func _lm_label(lm: Dictionary, txt: String, fsize: int, col: Color, glow: Color,
+		pos: Vector2, size: Vector2) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_size_override("font_size", fsize)
+	l.add_theme_color_override("font_color", col)
+	if glow.a > 0.0:
+		l.add_theme_color_override("font_shadow_color", glow)
+		l.add_theme_constant_override("shadow_offset_x", 0)
+		l.add_theme_constant_override("shadow_offset_y", 0)
+		l.add_theme_constant_override("shadow_outline_size", 7)
+	l.position = pos
+	l.size = size
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lm["art"].add_child(l)
+	return l
 
-func _on_btn_hover(btn: Button, entered: bool) -> void:
+# ---------------- procedural art ----------------
+
+# Soft layered halo: large faint circle first, smaller brighter ones on top.
+func _glow(c: Control, center: Vector2, radius: float, col: Color, layers: int) -> void:
+	for i in layers:
+		var t := float(i) / float(layers - 1)            # 0 outer .. 1 inner
+		var r: float = lerp(radius, radius * 0.2, t)
+		var a: float = lerp(0.04, 0.16, t)
+		c.draw_circle(center, r, Color(col.r, col.g, col.b, a))
+
+func _ellipse_pts(center: Vector2, rx: float, ry: float, n: int) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		pts.append(center + Vector2(cos(a) * rx, sin(a) * ry))
+	return pts
+
+# Big glossy PLAY orb ringed by the four Simon colors, with a white play triangle.
+# Centered in a 300x300 art box (see START_SIZE).
+func _draw_play_orb(c: Control) -> void:
+	var ctr := Vector2(150.0, 150.0)
+	var rad := 104.0
+	_glow(c, ctr, rad + 60.0, Color(0.35, 0.60, 1.0), 7)
+
+	# four-color Simon ring
+	var ringR := rad + 14.0
+	var cols := [Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
+		Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
+	var gap := deg_to_rad(10.0)
+	for i in 4:
+		var a0 := -PI * 0.75 + i * PI * 0.5 + gap * 0.5
+		var a1 := -PI * 0.75 + (i + 1) * PI * 0.5 - gap * 0.5
+		c.draw_arc(ctr, ringR, a0, a1, 26, cols[i], 12.0, true)
+
+	# orb body (vertical gradient sphere)
+	var body := PackedVector2Array()
+	var bcol := PackedColorArray()
+	var n := 46
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		var p := ctr + Vector2(cos(a), sin(a)) * rad
+		body.append(p)
+		var t: float = clampf((p.y - (ctr.y - rad)) / (2.0 * rad), 0.0, 1.0)
+		bcol.append(Color(0.40, 0.68, 1.0).lerp(Color(0.08, 0.24, 0.62), t))
+	c.draw_polygon(body, bcol)
+
+	# gloss highlight + play triangle (nudged right for optical balance)
+	c.draw_circle(ctr + Vector2(-30, -34), 40.0, Color(1, 1, 1, 0.16))
+	c.draw_circle(ctr + Vector2(-34, -40), 21.0, Color(1, 1, 1, 0.22))
+	var tc := ctr + Vector2(11, 0)
+	c.draw_colored_polygon(PackedVector2Array([
+		tc + Vector2(-29, -40), tc + Vector2(-29, 40), tc + Vector2(40, 0)]), Color(1, 1, 1, 0.96))
+
+# Leaderboard illustration: a 3-tier podium (silver / bronze / gold) with a gold
+# trophy on the winner's block. Drawn into the card; offset to centre in the art.
+func _draw_ranks_card(c: Control) -> void:
+	c.draw_set_transform(Vector2(-12, -9), 0.0, Vector2.ONE)
+	_draw_ranks(c)
+
+func _draw_ranks(c: Control) -> void:
+	_glow(c, Vector2(130, 150), 150.0, Color(1.0, 0.82, 0.35), 6)
+	var base := 232.0
+	_draw_block(c, 28.0, 94.0, 176.0, base, Color(0.78, 0.80, 0.86))   # 2nd - silver
+	_draw_block(c, 166.0, 232.0, 190.0, base, Color(0.82, 0.55, 0.30)) # 3rd - bronze
+	_draw_block(c, 97.0, 163.0, 150.0, base, Color(0.96, 0.80, 0.32))  # 1st - gold (front)
+	_draw_trophy(c, Vector2(130.0, 150.0))
+
+# One pseudo-3D podium block: top face + right side face (receding up-right) + front.
+func _draw_block(c: Control, x0: float, x1: float, top: float, base: float, front: Color) -> void:
+	var dx := 12.0
+	var dy := 12.0
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(x0, top), Vector2(x1, top),
+		Vector2(x1 + dx, top - dy), Vector2(x0 + dx, top - dy)]), front.lightened(0.18))
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(x1, top), Vector2(x1 + dx, top - dy),
+		Vector2(x1 + dx, base - dy), Vector2(x1, base)]), front.darkened(0.22))
+	c.draw_rect(Rect2(x0, top, x1 - x0, base - top), front)
+	c.draw_rect(Rect2(x0, base - 10.0, x1 - x0, 10.0), front.darkened(0.15))
+
+# Gold trophy: pedestal, stem, cup bowl (gradient), two handles, rim shine + gem.
+func _draw_trophy(c: Control, bc: Vector2) -> void:
+	var g_lt := Color(1.0, 0.88, 0.42)
+	var g_md := Color(0.88, 0.66, 0.18)
+	var g_dk := Color(0.62, 0.44, 0.12)
+	c.draw_rect(Rect2(bc.x - 26, bc.y - 10, 52, 10), g_md)        # base tier 1
+	c.draw_rect(Rect2(bc.x - 18, bc.y - 20, 36, 12), g_dk)        # base tier 2
+	c.draw_rect(Rect2(bc.x - 7, bc.y - 34, 14, 16), g_md)         # stem
+
+	var cup_top := bc.y - 78.0
+	var cup_bot := bc.y - 34.0
+	var cup := PackedVector2Array([
+		Vector2(bc.x - 30, cup_top), Vector2(bc.x + 30, cup_top),
+		Vector2(bc.x + 26, cup_top + 18), Vector2(bc.x + 12, cup_bot),
+		Vector2(bc.x - 12, cup_bot), Vector2(bc.x - 26, cup_top + 18)])
+	var ccol := PackedColorArray()
+	for pt in cup:
+		var t: float = clampf((pt.y - cup_top) / (cup_bot - cup_top), 0.0, 1.0)
+		ccol.append(g_lt.lerp(g_dk, t))
+	c.draw_polygon(cup, ccol)
+
+	c.draw_arc(Vector2(bc.x - 26, cup_top + 16), 16.0, PI * 0.5, PI * 1.5, 16, g_md, 6.0, true)
+	c.draw_arc(Vector2(bc.x + 26, cup_top + 16), 16.0, -PI * 0.5, PI * 0.5, 16, g_md, 6.0, true)
+	c.draw_line(Vector2(bc.x - 26, cup_top + 3), Vector2(bc.x + 26, cup_top + 3), g_lt, 3.0, true)
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(bc.x - 15, cup_top + 6), Vector2(bc.x - 7, cup_top + 6),
+		Vector2(bc.x - 10, cup_bot - 6), Vector2(bc.x - 17, cup_bot - 8)]), Color(1, 1, 1, 0.22))
+	var gy := cup_top + 22.0                                     # little gem on the cup
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(bc.x, gy - 8), Vector2(bc.x + 6, gy),
+		Vector2(bc.x, gy + 8), Vector2(bc.x - 6, gy)]), Color(1, 0.97, 0.7))
+
+# Shop illustration: storefront, drawn into the card; offset to centre in the art.
+func _draw_shop_card(c: Control) -> void:
+	c.draw_set_transform(Vector2(-16, -2), 0.0, Vector2.ONE)
+	_draw_shop(c)
+
+# Storefront: walls, a dark sign header, a striped/scalloped awning, two warm
+# display windows and a glowing doorway.
+func _draw_shop(c: Control) -> void:
+	var x0 := 40.0
+	var x1 := 240.0
+	_glow(c, Vector2(140, 150), 130.0, Color(1.0, 0.82, 0.45), 6)
+	c.draw_rect(Rect2(x0, 76, x1 - x0, 146), Color(0.93, 0.90, 0.84))   # walls
+	c.draw_rect(Rect2(x0, 76, x1 - x0, 30), Color(0.20, 0.24, 0.40))    # sign header band
+	_draw_awning(c, x0 + 4.0, x1 - 4.0, 106.0)
+	# doorway
+	c.draw_rect(Rect2(122, 156, 36, 66), Color(0.34, 0.24, 0.20))
+	c.draw_rect(Rect2(126, 160, 28, 30), Color(1.0, 0.80, 0.45, 0.85))
+	c.draw_circle(Vector2(151, 192), 2.5, Color(0.95, 0.86, 0.5))
+	_draw_window(c, Rect2(56, 150, 46, 40))
+	_draw_window(c, Rect2(178, 150, 46, 40))
+	c.draw_rect(Rect2(x0, 220, x1 - x0, 5), Color(0.0, 0.0, 0.0, 0.18))  # ground shadow
+
+# Striped awning with a scalloped lower edge.
+func _draw_awning(c: Control, ax0: float, ax1: float, ay: float) -> void:
+	var h := 26.0
+	var stripes := 8
+	var w := (ax1 - ax0) / float(stripes)
+	var a_cream := Color(0.96, 0.93, 0.88)
+	var a_red := Color(0.86, 0.30, 0.34)
+	for i in stripes:
+		var sx := ax0 + i * w
+		var col := a_red if i % 2 == 0 else a_cream
+		c.draw_rect(Rect2(sx, ay, w, h), col)
+		c.draw_circle(Vector2(sx + w * 0.5, ay + h), 9.0, col)        # scallop
+	c.draw_rect(Rect2(ax0, ay - 4.0, ax1 - ax0, 5.0), Color(0.55, 0.16, 0.20))  # trim
+
+# Warm glowing window with a cross frame.
+func _draw_window(c: Control, r: Rect2) -> void:
+	c.draw_rect(r, Color(1.0, 0.82, 0.5, 0.9))
+	c.draw_rect(r, Color(0.30, 0.22, 0.18), false, 3.0)
+	var mx := r.position.x + r.size.x * 0.5
+	var my := r.position.y + r.size.y * 0.5
+	c.draw_line(Vector2(mx, r.position.y), Vector2(mx, r.position.y + r.size.y), Color(0.30, 0.22, 0.18), 2.0)
+	c.draw_line(Vector2(r.position.x, my), Vector2(r.position.x + r.size.x, my), Color(0.30, 0.22, 0.18), 2.0)
+
+# ---------------- small icons ----------------
+
+func _draw_cart(c: Control) -> void:
+	var col := Color.WHITE
+	c.draw_line(Vector2(1, 3), Vector2(5, 4), col, 2.0)
+	c.draw_polyline(PackedVector2Array([
+		Vector2(5, 5), Vector2(23, 5), Vector2(20, 15), Vector2(8, 15), Vector2(5, 4)]), col, 2.0, true)
+	c.draw_circle(Vector2(9, 20), 1.9, col)
+	c.draw_circle(Vector2(19, 20), 1.9, col)
+
+func _draw_chart(c: Control) -> void:
+	var col := Color.WHITE
+	c.draw_rect(Rect2(2, 13, 5, 9), col)
+	c.draw_rect(Rect2(9, 7, 5, 15), col)
+	c.draw_rect(Rect2(16, 3, 5, 19), col)
+
+func _draw_arrow(c: Control) -> void:
+	c.draw_polyline(PackedVector2Array([Vector2(8, 5), Vector2(16, 12), Vector2(8, 19)]),
+		Color.WHITE, 3.0, true)
+
+func _draw_gear(c: Control) -> void:
+	var col := Color(0.82, 0.84, 0.96)
+	var ctr := Vector2(12, 12)
+	for i in 8:
+		var a := TAU * float(i) / 8.0
+		var d := Vector2(cos(a), sin(a))
+		c.draw_line(ctr + d * 5.0, ctr + d * 9.0, col, 2.6)
+	c.draw_arc(ctr, 6.0, 0.0, TAU, 24, col, 2.4, true)
+	c.draw_circle(ctr, 2.2, col)
+
+func _on_lm_hover(art: Control, entered: bool) -> void:
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(btn, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
+	tw.tween_property(art, "scale", Vector2.ONE * (1.06 if entered else 1.0), 0.16) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(btn, "modulate", Color(1.10, 1.10, 1.10) if entered else Color.WHITE, 0.16)
+	tw.tween_property(art, "modulate", Color(1.12, 1.12, 1.12) if entered else Color.WHITE, 0.16)
 
-func _on_btn_down(btn: Button) -> void:
-	create_tween().tween_property(btn, "scale", Vector2.ONE * 0.98, 0.10) \
+func _on_lm_press(art: Control) -> void:
+	create_tween().tween_property(art, "scale", Vector2.ONE * 0.94, 0.09) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
-func _on_btn_up(btn: Button) -> void:
-	create_tween().tween_property(btn, "scale", Vector2.ONE, 0.20) \
-		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)   # quick bounce back
+func _on_lm_release(art: Control) -> void:
+	# Bounce back to rest (touch has no lingering hover, so settle at 1.0).
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(art, "scale", Vector2.ONE, 0.22) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(art, "modulate", Color.WHITE, 0.18)
 
 # ---------------- layout ----------------
 
@@ -511,7 +884,7 @@ func _layout() -> void:
 	if _bg_mat:
 		_bg_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
 
-	# orbit: centered, radius ~40% of screen width
+	# orbit: centered, radius ~40% of screen width — one large ring behind it all
 	var r := sz.x * 0.40
 	if _orbit:
 		_orbit.position = Vector2(cx, cy)
@@ -520,20 +893,34 @@ func _layout() -> void:
 			var a: float = -PI * 0.5 + i * TAU / _orbs.size()
 			_orbs[i].position = Vector2(cos(a), sin(a)) * r
 
-	# logo: focal point, upper-center
+	# logo: focal point, top-center
 	if _logo_box:
-		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.16)
+		_logo_box.position = Vector2(cx - _logo_box.size.x * 0.5, sz.y * 0.05)
 
-	# Button group sits lower than the visual center and is clamped to stay
-	# below the logo subtitle ("MEMORY CHALLENGE") with a guaranteed gap.
-	# Without the clamp, on short / landscape viewports the top button can
-	# climb over the subtitle.
-	var total := _btn_wrappers.size() * BTN_H + (_btn_wrappers.size() - 1) * BTN_GAP
-	var preferred_start := sz.y * 0.66 - total * 0.5
-	var logo_bottom := (_logo_box.position.y + _logo_box.size.y) if _logo_box else sz.y * 0.35
-	var start_y := maxf(preferred_start, logo_bottom + 18.0)
-	for i in _btn_wrappers.size():
-		_btn_wrappers[i].position = Vector2(cx - BTN_W * 0.5, start_y + i * (BTN_H + BTN_GAP))
+	# the big START orb floats in the center; side cards flank it; the how-to card
+	# sits below (placed last so it always wins overlapping taps).
+	var side_cy := sz.y * 0.57
+	_place_card(_shop_card, Vector2(sz.x * 0.035, side_cy - CARD_SIZE.y * 0.5))
+	_place_card(_ranks_card, Vector2(sz.x - sz.x * 0.035 - CARD_SIZE.x, side_cy - CARD_SIZE.y * 0.5))
+	_place_card(_howto_card, Vector2(cx - HOWTO_SIZE.x * 0.5, sz.y - HOWTO_SIZE.y - sz.y * 0.03))
+
+	_place_lm(_start_lm, Vector2(cx, sz.y * 0.50))
+
+	if _profile_card:
+		_profile_card.position = Vector2(sz.x - _profile_card.size.x - 16.0, 14.0)
+
+# Position a card's wrapper at `pos` (top-left). No-op for an absent card.
+func _place_card(card: Dictionary, pos: Vector2) -> void:
+	if card.is_empty():
+		return
+	(card["wrap"] as Control).position = pos
+
+# Center a landmark's wrapper on `center`.
+func _place_lm(lm: Dictionary, center: Vector2) -> void:
+	if lm.is_empty():
+		return
+	var wrap: Control = lm["wrap"]
+	wrap.position = center - wrap.size * 0.5
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()
@@ -560,50 +947,90 @@ func _start_animations() -> void:
 		pulse.tween_property(_orbs[i], "scale", Vector2.ONE, dur) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-	# buttons: gentle vertical float of 1-2px, each slightly out of phase
-	for i in _btn_wrappers.size():
-		var btn := _btn_wrappers[i].get_child(0)
-		var dur := 2.4 + i * 0.4
+	# the Shop + Leaderboard cards gently bob in place (slightly out of phase) so the
+	# scene feels alive; the bob lives on each card's inner floater.
+	var bob_cards := [_shop_card, _ranks_card]
+	for i in bob_cards.size():
+		var card: Dictionary = bob_cards[i]
+		if card.is_empty():
+			continue
+		var floater: Control = card["floater"]
+		var dur := 2.8 + i * 0.6
+		var amp := -8.0 - i * 2.0
 		var fl := create_tween().set_loops()
-		fl.tween_property(btn, "position:y", -2.0, dur) \
+		fl.tween_property(floater, "position:y", amp, dur) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		fl.tween_property(btn, "position:y", 0.0, dur) \
+		fl.tween_property(floater, "position:y", 0.0, dur) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-# ---------------- account corner ----------------
+	# the PLAY orb breathes — its inner drawer scales, independent of the hover/press
+	# scaling applied to the outer art node, so the two never fight.
+	if not _start_lm.is_empty():
+		var orb: Control = _start_lm["drawer"]
+		var br := create_tween().set_loops()
+		br.tween_property(orb, "scale", Vector2.ONE * 1.05, 1.1) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		br.tween_property(orb, "scale", Vector2.ONE, 1.1) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-func _build_account_corner() -> void:
-	var sz := get_viewport_rect().size
-	const W := 200.0
-	var x := sz.x - W - 16.0
-	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
-		var name_lbl := Label.new()
-		name_lbl.text = FirebaseManager.display_name
-		name_lbl.add_theme_font_size_override("font_size", 22)
-		name_lbl.add_theme_color_override("font_color", GOLD)
-		name_lbl.position = Vector2(x, 14)
-		name_lbl.size = Vector2(W, 32)
-		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		add_child(name_lbl)
+# ---------------- profile card (top-right) ----------------
 
-		var sign_out := Button.new()
-		sign_out.text = "sign out"
-		sign_out.flat = true
-		sign_out.add_theme_font_size_override("font_size", 14)
-		sign_out.add_theme_color_override("font_color", Color(0.55, 0.55, 0.72))
-		sign_out.add_theme_color_override("font_hover_color", Color(1.0, 0.45, 0.45))
-		sign_out.add_theme_color_override("font_pressed_color", Color(0.85, 0.25, 0.25))
-		sign_out.position = Vector2(x, 44)
-		sign_out.size = Vector2(W, 28)
-		sign_out.alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		sign_out.pressed.connect(_on_sign_out)
-		add_child(sign_out)
-	else:
-		_add_corner_btn("Sign in", Vector2(sz.x - 136, 16), Vector2(120, 44),
-			Color(0.15, 0.6, 0.95), _on_sign_in)
+# Compact account card: avatar + username + a sign-in/out action + a settings
+# gear. Shown for both guests and signed-in players so the corner stays balanced.
+func _build_profile_card() -> void:
+	const W := 228.0
+	const H := 84.0
+	_profile_card = _card_panel(Vector2(W, H), Color(0.06, 0.07, 0.18, 0.82),
+		Color(0.45, 0.50, 1.0, 0.40), Color(0.30, 0.34, 0.85, 0.45))
+	add_child(_profile_card)
 
-# Gold coin pill anchored at the top-LEFT (the account chip lives top-right).
+	var signed := FirebaseManager.is_signed_in() and FirebaseManager.has_display_name()
+	var uname := FirebaseManager.display_name if signed else "Guest"
+
+	var nl := Label.new()
+	nl.text = uname
+	nl.add_theme_font_size_override("font_size", 20)
+	nl.add_theme_color_override("font_color", GOLD)
+	nl.position = Vector2(18, 14)
+	nl.size = Vector2(W - 18 - 42, 30)
+	nl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	nl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_profile_card.add_child(nl)
+
+	var act := Button.new()
+	act.text = "sign out" if signed else "sign in"
+	act.flat = true
+	act.focus_mode = Control.FOCUS_NONE
+	act.add_theme_font_size_override("font_size", 14)
+	act.add_theme_color_override("font_color", Color(0.62, 0.64, 0.82) if signed else Color(0.40, 0.78, 1.0))
+	act.add_theme_color_override("font_hover_color", Color(1.0, 0.45, 0.45) if signed else Color(0.62, 0.90, 1.0))
+	act.add_theme_color_override("font_pressed_color", Color(0.85, 0.25, 0.25) if signed else Color(0.30, 0.62, 0.95))
+	act.position = Vector2(14, 46)
+	act.size = Vector2(120, 26)
+	act.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	act.pressed.connect(_on_sign_out if signed else _on_sign_in)
+	_profile_card.add_child(act)
+
+	var gear := Button.new()
+	gear.size = Vector2(30, 30)
+	gear.position = Vector2(W - 38, 12)
+	gear.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for s in ["normal", "hover", "pressed", "focus"]:
+		gear.add_theme_stylebox_override(s, empty)
+	var gd := Control.new()
+	gd.size = Vector2(24, 24)
+	gd.position = Vector2(3, 3)
+	gd.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gd.draw.connect(_draw_gear.bind(gd))
+	gear.add_child(gd)
+	gear.pressed.connect(_show_settings_popup)
+	_profile_card.add_child(gear)
+
+# ---------------- coin pill + daily claim (top-left) ----------------
+
+# Gold coin pill anchored at the top-LEFT (the account card lives top-right).
 # Stays live via CoinsManager.balance_changed — buying / claiming / earning
 # during a game all update it on return.
 func _build_coin_pill() -> void:
@@ -693,10 +1120,9 @@ func _stop_coin_loading_anim() -> void:
 		_coin_loading_tween.kill()
 	_coin_loading_tween = null
 
-# Daily claim button — anchored on the LEFT, directly under the coin pill, so
-# the wallet-related controls are grouped together. Opens a modal popup with
-# the 14-day streak grid (or the endless-streak view past day 14). A small
-# gold dot badges the button when a claim is available.
+# Daily claim button — anchored on the LEFT, directly under the coin pill. Opens a
+# modal popup with the 14-day streak grid. A small red dot badges the button when
+# a claim is available.
 func _build_daily_claim_button() -> void:
 	const W := 200.0
 	var x := 16.0
@@ -726,15 +1152,15 @@ func _build_daily_claim_button() -> void:
 	_daily_btn.pressed.connect(_open_daily_popup)
 	add_child(_daily_btn)
 
-	# Small pulsing "claim available" badge.
+	# Small pulsing red "claim available" notification dot.
 	_daily_badge = Panel.new()
 	_daily_badge.size = Vector2(14, 14)
 	_daily_badge.position = Vector2(x + W - 18, y + 4)
 	_daily_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bs := StyleBoxFlat.new()
-	bs.bg_color = Color(1.0, 0.32, 0.22)
+	bs.bg_color = Color(0.95, 0.18, 0.18)
 	bs.set_corner_radius_all(7)
-	bs.shadow_color = Color(1.0, 0.32, 0.22, 0.7)
+	bs.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
 	bs.shadow_size = 8
 	_daily_badge.add_theme_stylebox_override("panel", bs)
 	add_child(_daily_badge)
@@ -758,12 +1184,81 @@ func _open_daily_popup() -> void:
 	var popup := DailyClaimPopup.new()
 	add_child(popup)
 
+# ---------------- settings popup ----------------
+
+# Minimal settings modal opened by the profile-card gear: a music on/off toggle
+# and a close button. Dismissed by tapping outside or Close.
+func _show_settings_popup() -> void:
+	var sz := get_viewport_rect().size
+	var overlay := Control.new()
+	overlay.name = "SettingsPopup"
+	overlay.position = Vector2.ZERO
+	overlay.size = sz
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.01, 0.04, 0.6)
+	dim.position = Vector2.ZERO
+	dim.size = sz
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(dim)
+
+	# Tapping the dimmed backdrop closes the popup.
+	var close_bg := _overlay_button(sz)
+	close_bg.pressed.connect(overlay.queue_free)
+	overlay.add_child(close_bg)
+
+	const PW := 420.0
+	const PH := 260.0
+	var panel := _card_panel(Vector2(PW, PH), Color(0.05, 0.06, 0.16, 0.98),
+		Color(0.40, 0.50, 1.0, 0.55), Color(0.0, 0.0, 0.0, 0.55))
+	panel.position = (sz - Vector2(PW, PH)) * 0.5
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(panel)
+
+	var title := Label.new()
+	title.text = "Settings"
+	title.add_theme_font_size_override("font_size", 32)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.45))
+	title.add_theme_constant_override("shadow_offset_x", 0)
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	title.add_theme_constant_override("shadow_outline_size", 9)
+	title.position = Vector2(20, 28)
+	title.size = Vector2(PW - 40, 44)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(title)
+
+	var music_on := AudioManager.is_music_on()
+	_settings_music_btn = _make_popup_button(panel, "Music:  %s" % ("On" if music_on else "Off"),
+		Vector2(40, 92), Vector2(PW - 80, 52), Color(0.16, 0.18, 0.34), _toggle_music)
+	_make_popup_button(panel, "Close", Vector2(40, 160), Vector2(PW - 80, 52),
+		Color(0.15, 0.6, 0.95), overlay.queue_free)
+
+	# Gentle entrance: fade + scale-pop on the panel.
+	panel.pivot_offset = panel.size * 0.5
+	panel.scale = Vector2(0.92, 0.92)
+	overlay.modulate.a = 0.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(overlay, "modulate:a", 1.0, 0.20).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.28) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _toggle_music() -> void:
+	if AudioManager.is_music_on():
+		AudioManager.stop_bg_music()
+	else:
+		AudioManager.play_bg_music()
+	if _settings_music_btn and is_instance_valid(_settings_music_btn):
+		_settings_music_btn.text = "Music:  %s" % ("On" if AudioManager.is_music_on() else "Off")
+
 # ---------------- welcome popup (sign in / play as guest) ----------------
 
 # Modal shown on the first home open of a launch when signed out. A dimmed
 # backdrop blocks the menu behind it; the player must choose. "Sign In" runs the
-# same flow as the corner sign-in button; "Play as Guest" just dismisses, leaving
-# the corner sign-in button in place exactly as before.
+# same flow as the profile-card sign-in; "Play as Guest" just dismisses.
 func _show_welcome_popup() -> void:
 	var sz := get_viewport_rect().size
 	var overlay := Control.new()
@@ -855,16 +1350,6 @@ func _make_popup_button(parent: Control, txt: String, pos: Vector2, size: Vector
 	parent.add_child(btn)
 	return btn
 
-func _add_corner_btn(txt: String, pos: Vector2, size: Vector2, col: Color, cb: Callable) -> void:
-	var btn := Button.new()
-	btn.text = txt
-	btn.position = pos
-	btn.size = size
-	btn.add_theme_font_size_override("font_size", 18)
-	_style(btn, col)
-	btn.pressed.connect(cb)
-	add_child(btn)
-
 func _style(btn: Button, col: Color) -> void:
 	var sn := StyleBoxFlat.new()
 	sn.bg_color = col
@@ -887,7 +1372,11 @@ func _on_how() -> void:
 	game_manager.show_how_to_play()
 
 func _on_shop() -> void:
-	game_manager.show_shop()
+	# The shop needs a wallet — guests are routed through sign-in first.
+	if FirebaseManager.is_signed_in():
+		game_manager.show_shop()
+	else:
+		_on_sign_in()
 
 func _on_leaderboards() -> void:
 	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():

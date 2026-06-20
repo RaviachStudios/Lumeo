@@ -32,6 +32,14 @@ const _COLL := "users"
 const DEFAULT_THEME := "default"
 const THEMES := {
 	"default":  {"name": "Default",  "price": 0,    "category": "themes"},
+	# Basic static backgrounds — elegant solid/gradient looks, all 150 coins.
+	"midnight": {"name": "Midnight", "price": 150,  "category": "themes"},
+	"indigo":   {"name": "Indigo",   "price": 150,  "category": "themes"},
+	"sunset":   {"name": "Sunset",   "price": 150,  "category": "themes"},
+	"forest":   {"name": "Forest",   "price": 150,  "category": "themes"},
+	"crimson":  {"name": "Crimson",  "price": 150,  "category": "themes"},
+	"slate":    {"name": "Slate",    "price": 150,  "category": "themes"},
+	# Premium animated backgrounds.
 	"skybound": {"name": "Skybound", "price": 2000, "category": "themes"},
 	"inferno":  {"name": "Inferno",  "price": 5000, "category": "themes"},
 }
@@ -70,6 +78,55 @@ const SIMON_COLORS := {
 	"silver":   {"name": "Silver",   "price": 200, "color": Color(0.80, 0.82, 0.87)},
 	"gold":     {"name": "Gold",     "price": 350, "color": Color(0.95, 0.78, 0.26)},
 }
+
+# The "level_number" category is NOT a flat colour — it's a font *package* (a whole
+# look: typeface + glow + colour + outline). These are its catalog entries; the id
+# stored in equipped_simon["level_number"] / owned_simon refers to one of these.
+# Fields consumed by SimonWheel._apply_num_pack and SimonPartIcon._draw_number:
+#   font         res:// path to a .ttf, or "" = engine default font
+#   color        main numeral colour
+#   glow / glow_size    soft outer-glow colour + blur radius
+#   outline / outline_size   thin weight/stroke colour + size
+const SIMON_DEFAULT_FONT := "classic"
+const SIMON_NUMBER_FONTS := {
+	# The outline is intentionally a CONTRASTING colour to the fill (not a same-hue
+	# weight) so the numeral stays readable even on a hub of the same colour.
+	"classic": {"name": "Classic", "price": 0,   "font": "",
+		"color": Color(1, 1, 1), "glow": Color(0.45, 0.68, 1.0, 0.5), "glow_size": 10,
+		"outline": Color(0.05, 0.07, 0.16, 0.95), "outline_size": 4},
+	"neon":    {"name": "Neon",    "price": 120, "font": "",
+		"color": Color(0.45, 1.0, 0.95), "glow": Color(0.10, 0.95, 0.90, 0.8), "glow_size": 15,
+		"outline": Color(0.0, 0.05, 0.07, 1.0), "outline_size": 4},
+	"inferno": {"name": "Inferno", "price": 150, "font": "",
+		"color": Color(1.0, 0.66, 0.22), "glow": Color(1.0, 0.28, 0.06, 0.75), "glow_size": 15,
+		"outline": Color(0.10, 0.02, 0.0, 1.0), "outline_size": 5},
+	"gold":    {"name": "Gold",    "price": 250, "font": "res://fonts/arial.ttf",
+		"color": Color(1.0, 0.84, 0.32), "glow": Color(1.0, 0.70, 0.16, 0.6), "glow_size": 11,
+		"outline": Color(0, 0, 0, 1), "outline_size": 5},
+	"script":  {"name": "Script",  "price": 180, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.96, 0.86), "glow": Color(0.90, 0.75, 0.50, 0.45), "glow_size": 9,
+		"outline": Color(0.12, 0.07, 0.03, 1.0), "outline_size": 4},
+}
+
+# The catalog backing a category: the font packages for "level_number", flat
+# colours for the ring/hub parts.
+func simon_catalog(category: String) -> Dictionary:
+	return SIMON_NUMBER_FONTS if category == "level_number" else SIMON_COLORS
+
+# The free/stock default id for a category (font "classic" vs colour "default").
+func simon_default_id(category: String) -> String:
+	return SIMON_DEFAULT_FONT if category == "level_number" else SIMON_DEFAULT_COLOR
+
+# Price of any catalog item, looked up in the category's own catalog.
+func simon_item_price(category: String, id: String) -> int:
+	return int(simon_catalog(category).get(id, {}).get("price", 0))
+
+func can_afford_simon_item(category: String, id: String) -> bool:
+	return balance >= simon_item_price(category, id)
+
+# The full font package for a level-number style id (falls back to Classic).
+func simon_number_font(id: String) -> Dictionary:
+	return SIMON_NUMBER_FONTS.get(id, SIMON_NUMBER_FONTS[SIMON_DEFAULT_FONT])
 
 # Daily-claim curve: day 1 = 30, +5 per consecutive day, capped at day 14 = 95.
 # Day 15+ jumps to a flat 100 (where the popup also switches to its
@@ -293,13 +350,13 @@ func select_theme(theme_id: String) -> bool:
 func _default_equipped_simon() -> Dictionary:
 	var d := {}
 	for cat in SIMON_CATEGORIES:
-		d[cat] = SIMON_DEFAULT_COLOR
+		d[cat] = simon_default_id(cat)
 	return d
 
 func _default_owned_simon() -> Dictionary:
 	var d := {}
 	for cat in SIMON_CATEGORIES:
-		d[cat] = [SIMON_DEFAULT_COLOR] as Array[String]
+		d[cat] = [simon_default_id(cat)] as Array[String]
 	return d
 
 func is_simon_manual() -> bool:
@@ -329,9 +386,9 @@ func equipped_simon_color(category: String) -> String:
 func purchase_simon_color(category: String, color_id: String) -> bool:
 	if not FirebaseManager.is_signed_in(): return false
 	if not SIMON_CATEGORIES.has(category): return false
-	if not SIMON_COLORS.has(color_id): return false
+	if not simon_catalog(category).has(color_id): return false
 	if owns_simon_color(category, color_id): return false
-	var price := simon_color_price(color_id)
+	var price := simon_item_price(category, color_id)
 	if balance < price: return false
 	balance -= price
 	(owned_simon[category] as Array[String]).append(color_id)
@@ -559,20 +616,22 @@ func _apply_simon_doc(doc: Dictionary) -> void:
 	owned_simon = _default_owned_simon()
 	equipped_simon = _default_equipped_simon()
 	for cat in SIMON_CATEGORIES:
+		var catalog := simon_catalog(cat)
+		var def_id := simon_default_id(cat)
 		var owned: Array[String] = owned_simon[cat]
 		var raw: Variant = doc.get(_owned_simon_field(cat), {})
 		if raw is Dictionary:
 			for k in raw.keys():
 				var s := String(k)
-				if SIMON_COLORS.has(s) and not owned.has(s):
+				if catalog.has(s) and not owned.has(s):
 					owned.append(s)
 		elif raw is Array:
 			for t in raw:
 				var s := String(t)
-				if SIMON_COLORS.has(s) and not owned.has(s):
+				if catalog.has(s) and not owned.has(s):
 					owned.append(s)
-		var eq := String(doc.get(_equipped_simon_field(cat), SIMON_DEFAULT_COLOR))
-		equipped_simon[cat] = eq if owned.has(eq) else SIMON_DEFAULT_COLOR
+		var eq := String(doc.get(_equipped_simon_field(cat), def_id))
+		equipped_simon[cat] = eq if owned.has(eq) else def_id
 	selected_skin = String(doc.get("selected_skin", ""))
 	owned_skins = []
 	var raw_sk: Variant = doc.get("owned_skins", {})

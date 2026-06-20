@@ -13,6 +13,11 @@ const BUTTON_COLORS := [
 const BG_TOP := Color(0.05, 0.05, 0.15)
 const BG_BOT := Color(0.02, 0.08, 0.22, 1.0)
 
+# Shared width for the top-right Quit button and the coins pill directly beneath
+# it, so their right edges align AND they read as the same-width column.
+const HUD_RIGHT_BTN_W := 114.0
+const HUD_RIGHT_MARGIN := 20.0
+
 var num_buttons: int
 var sequence: Array[int] = []
 var player_seq: Array[int] = []
@@ -27,7 +32,7 @@ var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
 
 var _status_lbl: Label
-var _level_lbl: Label
+var _status_panel: Panel
 var _quit_btn: Button
 var _watch_ad_btn: Button
 # Coins HUD: a top-center pill showing the coins earned THIS session (starts at
@@ -85,7 +90,9 @@ func _layout_wheel() -> void:
 	var sz := get_viewport_rect().size
 	var s: float = minf(sz.x, sz.y) * 0.92
 	_wheel.size = Vector2(s, s)
-	_wheel.position = (sz - _wheel.size) * 0.5
+	# Raise the wheel a little now that the coins HUD has moved out of the top
+	# centre — fills the space the balance pill used to occupy.
+	_wheel.position = Vector2((sz.x - s) * 0.5, (sz.y - s) * 0.5 - sz.y * 0.07)
 
 # Apply the player's equipped Simon customization (shop "SIMON" tab) to the
 # wheel. CoinsManager is already loaded by the time a game starts (the home
@@ -98,7 +105,7 @@ func _apply_simon_skin() -> void:
 	_wheel.apply_skin(
 		_resolved_simon_tint("outer_circle"),
 		_resolved_simon_tint("inner_circle"),
-		_resolved_simon_tint("level_number"))
+		_resolved_simon_number())
 
 # Returns the Color tint for a category, or null to keep the stock look.
 func _resolved_simon_tint(category: String) -> Variant:
@@ -108,6 +115,16 @@ func _resolved_simon_tint(category: String) -> Variant:
 	if id == CoinsManager.SIMON_DEFAULT_COLOR:
 		return null
 	return CoinsManager.simon_color_value(id)
+
+# The equipped level-number font package, or null for the stock white numeral
+# (mirrors _resolved_simon_tint but resolves the font catalog instead of a colour).
+func _resolved_simon_number() -> Variant:
+	if not CoinsManager.is_simon_manual():
+		return null
+	var id := CoinsManager.equipped_simon_color("level_number")
+	if id == CoinsManager.SIMON_DEFAULT_FONT:
+		return null
+	return CoinsManager.simon_number_font(id)
 
 func _input(event: InputEvent) -> void:
 	if _state != "input" or get_node("QuitDialog").visible:
@@ -137,56 +154,120 @@ func _input(event: InputEvent) -> void:
 func _build_hud() -> void:
 	var sz := get_viewport_rect().size
 
-	_level_lbl = Label.new()
-	_level_lbl.add_theme_font_size_override("font_size", 20)
-	_level_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 1.0))
-	_level_lbl.position = Vector2(20, 20)
-	_level_lbl.size = Vector2(180, 36)
-	add_child(_level_lbl)
-
+	# "Watch Ad to Replay" — modern amber glass pill, top-left. (The old "Level:"
+	# caption above it is gone; the level now reads from the wheel's centre.)
 	_watch_ad_btn = Button.new()
-	_watch_ad_btn.text = "Watch Ad to Replay"
-	_watch_ad_btn.position = Vector2(20, 60)
-	_watch_ad_btn.size = Vector2(220, 44)
-	_watch_ad_btn.add_theme_font_size_override("font_size", 15)
-	_flat_btn(_watch_ad_btn, Color(0.75, 0.55, 0.0))
+	_watch_ad_btn.text = "▶  Watch Ad to Replay"
+	_watch_ad_btn.position = Vector2(20, 20)
+	_watch_ad_btn.size = Vector2(244, 48)
+	_watch_ad_btn.focus_mode = Control.FOCUS_NONE
+	_watch_ad_btn.add_theme_font_size_override("font_size", 16)
+	_glass_btn(_watch_ad_btn, Color(0.30, 0.20, 0.02), Color(1.0, 0.74, 0.18), Color(1.0, 0.90, 0.55))
 	_watch_ad_btn.pressed.connect(_on_watch_ad)
 	_watch_ad_btn.visible = false
 	add_child(_watch_ad_btn)
 
+	# Quit — subdued dark-red glass pill, top-right.
 	_quit_btn = Button.new()
-	_quit_btn.text = "Quit"
-	_quit_btn.position = Vector2(sz.x - 120, 20)
-	_quit_btn.size = Vector2(100, 44)
-	_quit_btn.add_theme_font_size_override("font_size", 16)
-	_flat_btn(_quit_btn, Color(0.45, 0.1, 0.1))
+	_quit_btn.text = "✕  Quit"
+	_quit_btn.position = Vector2(sz.x - HUD_RIGHT_BTN_W - HUD_RIGHT_MARGIN, 20)
+	_quit_btn.size = Vector2(HUD_RIGHT_BTN_W, 48)
+	_quit_btn.focus_mode = Control.FOCUS_NONE
+	_quit_btn.add_theme_font_size_override("font_size", 17)
+	_glass_btn(_quit_btn, Color(0.20, 0.05, 0.06), Color(0.85, 0.30, 0.32), Color(1.0, 0.82, 0.82))
 	_quit_btn.pressed.connect(_on_quit)
 	add_child(_quit_btn)
 
-	_status_lbl = Label.new()
-	_status_lbl.add_theme_font_size_override("font_size", 26)
-	_status_lbl.add_theme_color_override("font_color", Color.WHITE)
-	_status_lbl.add_theme_color_override("font_shadow_color", Color(0,0,0,0.5))
-	_status_lbl.add_theme_constant_override("shadow_offset_x", 2)
-	_status_lbl.add_theme_constant_override("shadow_offset_y", 2)
-	_status_lbl.position = Vector2(sz.x * 0.5 - 260, sz.y - 70)
-	_status_lbl.size = Vector2(520, 50)
-	_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(_status_lbl)
+	# Status line below the wheel, set inside an elegant dark-glass pill so the
+	# prompt reads as a deliberate readout instead of floating text.
+	_build_status_bar(sz)
 
 	if FirebaseManager.is_signed_in():
 		_build_coin_hud(sz)
 	_build_quit_dialog(sz)
+
+# Modern rounded-glass button: dark translucent body, a soft accent rim/glow and
+# light label. Replaces the old flat fills on the gameplay HUD buttons.
+func _glass_btn(btn: Button, body: Color, accent: Color, fg: Color) -> void:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(body.r, body.g, body.b, 0.86)
+	s.set_corner_radius_all(24)
+	s.border_color = Color(accent.r, accent.g, accent.b, 0.85)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(accent.r, accent.g, accent.b, 0.30)
+	s.shadow_size = 10
+	s.content_margin_left = 8
+	s.content_margin_right = 8
+	btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(body.r, body.g, body.b, 0.86).lightened(0.12)
+	sh.shadow_size = 14
+	btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(body.r, body.g, body.b, 0.95).darkened(0.18)
+	btn.add_theme_stylebox_override("pressed", sp)
+	var sd := s.duplicate() as StyleBoxFlat
+	sd.bg_color = Color(body.r, body.g, body.b, 0.55)
+	sd.border_color = Color(accent.r, accent.g, accent.b, 0.4)
+	btn.add_theme_stylebox_override("disabled", sd)
+	btn.add_theme_color_override("font_color", fg)
+	btn.add_theme_color_override("font_hover_color", fg.lightened(0.15))
+	btn.add_theme_color_override("font_pressed_color", fg)
+
+# Status prompt below the wheel, housed in a soft dark-glass pill that auto-fits
+# the text width (kept centred). Built once; _set_status() updates the text.
+func _build_status_bar(sz: Vector2) -> void:
+	_status_panel = Panel.new()
+	_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.04, 0.05, 0.13, 0.80)
+	st.set_corner_radius_all(22)
+	st.border_color = Color(0.45, 0.55, 1.0, 0.35)
+	st.set_border_width_all(1)
+	st.shadow_color = Color(0.15, 0.25, 0.7, 0.30)
+	st.shadow_size = 14
+	_status_panel.add_theme_stylebox_override("panel", st)
+	add_child(_status_panel)
+
+	_status_lbl = Label.new()
+	_status_lbl.add_theme_font_size_override("font_size", 26)
+	_status_lbl.add_theme_color_override("font_color", Color(0.93, 0.95, 1.0))
+	_status_lbl.add_theme_color_override("font_shadow_color", Color(0, 0.02, 0.08, 0.6))
+	_status_lbl.add_theme_constant_override("shadow_offset_x", 0)
+	_status_lbl.add_theme_constant_override("shadow_offset_y", 2)
+	_status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_status_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_status_panel.add_child(_status_lbl)
+	_set_status("")
+
+# Update the status text and resize/recentre its pill to fit.
+func _set_status(txt: String) -> void:
+	if _status_lbl == null:
+		return
+	_status_lbl.text = txt
+	var sz := get_viewport_rect().size
+	var font := _status_lbl.get_theme_font("font")
+	var tw: float = font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 26).x
+	var pw: float = maxf(180.0, tw + 56.0)
+	const PH := 52.0
+	_status_panel.size = Vector2(pw, PH)
+	_status_panel.position = Vector2(sz.x * 0.5 - pw * 0.5, sz.y - 84.0)
+	_status_panel.visible = txt != ""
+	_status_lbl.position = Vector2.ZERO
+	_status_lbl.size = Vector2(pw, PH)
 
 # Top-center pill: a small gold coin glyph + the coins earned this session
 # (starts at 0). Only shown when signed in (offline users don't accumulate
 # coins). The pill is the anchor for the floating "+ N" earn indicator we spawn
 # after each level.
 func _build_coin_hud(sz: Vector2) -> void:
-	const PW := 150.0
+	# Same width as the Quit button above it (right edges aligned, matching column).
+	const PW := HUD_RIGHT_BTN_W
 	const PH := 44.0
 	_coin_panel = Panel.new()
-	_coin_panel.position = Vector2(sz.x * 0.5 - PW * 0.5, 18)
+	# Top-right, directly under the Quit button (right edges aligned).
+	_coin_panel.position = Vector2(sz.x - PW - HUD_RIGHT_MARGIN, 78)
 	_coin_panel.size = Vector2(PW, PH)
 	_coin_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
@@ -330,12 +411,12 @@ func _next_round() -> void:
 	flash_time = maxf(0.18, GameState.flash_time - (level - 1) * speed_inc)
 	flash_gap = maxf(0.08, GameState.flash_gap - (level - 1) * speed_inc * 0.5)
 	_update_hud()
-	_status_lbl.text = "Watch carefully..."
+	_set_status("Watch carefully...")
 	_state = "showing"
 	await get_tree().create_timer(0.6).timeout
 	await _play_sequence()
 	_state = "input"
-	_status_lbl.text = "Your turn!"
+	_set_status("Your turn!")
 
 func _play_sequence() -> void:
 	for idx: int in sequence:
@@ -365,7 +446,7 @@ func _player_pressed(idx: int) -> void:
 	if player_seq[step] != sequence[step]:
 		_state = "showing"
 		var correct := sequence[step]
-		_status_lbl.text = "The correct button was..."
+		_set_status("The correct button was...")
 		await get_tree().create_timer(0.35).timeout
 		for _i in 3:
 			await _flash(correct, 0.28)
@@ -374,7 +455,7 @@ func _player_pressed(idx: int) -> void:
 		return
 	if player_seq.size() == sequence.size():
 		_state = "idle"
-		_status_lbl.text = "Correct! Get ready..."
+		_set_status("Correct! Get ready...")
 		# Award coins for this completed level and float a "+ N" indicator
 		# next to the balance pill. Returns 0 if not signed in.
 		var earned := CoinsManager.award_for_level(GameState.difficulty, level)
@@ -390,11 +471,11 @@ func _on_replay() -> void:
 	_update_hud()
 	AudioManager.play_replay_sound()
 	_state = "showing"
-	_status_lbl.text = "Replaying sequence..."
+	_set_status("Replaying sequence...")
 	player_seq = []
 	await _play_sequence()
 	_state = "input"
-	_status_lbl.text = "Your turn!"
+	_set_status("Your turn!")
 
 func _on_quit() -> void:
 	get_node("QuitDialog").visible = true
@@ -407,7 +488,7 @@ func _on_watch_ad() -> void:
 func _replay_after_countdown() -> void:
 	_state = "showing"
 	for n: int in [3, 2, 1]:
-		_status_lbl.text = str(n) + "..."
+		_set_status(str(n) + "...")
 		await get_tree().create_timer(1.0).timeout
 	replays += 1
 	_state = "input"
@@ -418,14 +499,13 @@ func _game_over() -> void:
 	# Bank the coins earned this session into the persistent wallet.
 	CoinsManager.commit_session()
 	AudioManager.play_lose_sound()
-	_status_lbl.text = "Game Over!"
+	_set_status("Game Over!")
 	if level > 5:
 		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)
 
 func _update_hud() -> void:
-	_level_lbl.text = "Level: %d" % level
 	if _wheel:
 		_wheel.set_level(level)
 	if _watch_ad_btn:
@@ -447,9 +527,10 @@ func _show_earn_indicator(amount: int) -> void:
 	lbl.add_theme_constant_override("shadow_offset_y", 2)
 	lbl.add_theme_constant_override("shadow_outline_size", 6)
 	lbl.size = Vector2(90, 36)
-	# Anchor immediately to the RIGHT of the coin pill, vertically centered.
-	lbl.position = _coin_panel.position + Vector2(_coin_panel.size.x + 6, (_coin_panel.size.y - 36) * 0.5)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	# Anchor immediately to the LEFT of the coin pill (it now sits at the top-right
+	# corner, so a right-side float would run off screen), vertically centered.
+	lbl.position = _coin_panel.position + Vector2(-90 - 6, (_coin_panel.size.y - 36) * 0.5)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(lbl)
