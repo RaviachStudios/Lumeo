@@ -29,9 +29,9 @@ extends Node
 # the screen without scrolling at 720h, leaving the neighborhood snippet room.
 const GLOBAL_TOP_N := 20
 # Rows to fetch above + below the player when they're outside the top-N. With
-# 5 above + the player + 5 below, the snippet reads as a clear "where you sit"
+# 3 above + the player + 3 below, the snippet reads as a clear "where you sit"
 # panel without dominating the screen.
-const NEIGHBOR_COUNT := 5
+const NEIGHBOR_COUNT := 3
 const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 
 # REST base for the Firestore project. The runQuery/runAggregationQuery
@@ -411,7 +411,7 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 			var above := await _rest_run_query(
 				_build_score_compare_query(collection, extra_eq, ">", my_score, "ASCENDING", above_limit))
 			above_items = above.get("items", [])
-		# 5 immediately below (score < mine, sorted DESC for the same reason).
+		# 3 immediately below (score < mine, sorted DESC for the same reason).
 		var below := await _rest_run_query(
 			_build_score_compare_query(collection, extra_eq, "<", my_score, "DESCENDING", NEIGHBOR_COUNT))
 		neighborhood = _assemble_neighborhood(my_row, my_rank, above_items, below.get("items", []), my_uid)
@@ -480,7 +480,7 @@ func _compose_where(extra_eq: Dictionary, ineq_field: String, ineq_value: int, i
 		return filters[0]
 	return {"compositeFilter": {"op": "AND", "filters": filters}}
 
-# Stitch the 5-above / 5-below queries + my row into a contiguous neighborhood
+# Stitch the 3-above / 3-below queries + my row into a contiguous neighborhood
 # sequence with ranks attached. Server returned: above (ASC by score) is in
 # order [closest to me ... furthest above me], below (DESC by score) is in
 # order [closest to me ... furthest below me]. We reverse `above` so the

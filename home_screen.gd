@@ -857,7 +857,9 @@ func _draw_gift_icon(c: Control) -> void:
 	var box_w := 18.0
 	var box_h := 14.0
 	var lid_h := 5.0
-	var box_top := ctr.y - box_h * 0.5 + 1.0
+	# Center the whole glyph (bow + lid + body) on the disc, not just the body —
+	# the bow adds ~4px of mass above the lid, so offset box_top down by half of it.
+	var box_top := ctr.y - (box_h - lid_h - 4.0) * 0.5
 	var cream := Color(1.0, 0.96, 0.86)
 	var ribbon := Color(0.95, 0.85, 0.30)
 	# Body + lid
@@ -1238,21 +1240,19 @@ func _build_coin_plus_button(d: float, x_in_pill: float) -> void:
 	_coin_plus_btn.add_theme_font_size_override("font_size", 24)
 	_coin_plus_btn.focus_mode = Control.FOCUS_NONE
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(1.0, 0.78, 0.22)                      # rich gold
+	s.bg_color = Color(0.24, 0.13, 0.04)                     # dark brown inner
 	s.set_corner_radius_all(int(d * 0.5))
-	s.border_color = Color(1.0, 0.94, 0.60)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(1.0, 0.78, 0.22, 0.65)            # golden bloom
-	s.shadow_size = 12
+	s.border_color = Color(1.0, 0.78, 0.22)                  # gold outer ring
+	s.set_border_width_all(3)
 	_coin_plus_btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(1.0, 0.86, 0.36)
+	sh.bg_color = Color(0.34, 0.19, 0.06)
 	_coin_plus_btn.add_theme_stylebox_override("hover", sh)
 	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.86, 0.62, 0.12)
+	sp.bg_color = Color(0.16, 0.08, 0.02)
 	_coin_plus_btn.add_theme_stylebox_override("pressed", sp)
-	_coin_plus_btn.add_theme_color_override("font_color", Color(0.32, 0.18, 0.0))
-	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(0.32, 0.18, 0.0))
+	_coin_plus_btn.add_theme_color_override("font_color", Color(1.0, 0.82, 0.30))  # gold plus
+	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.88, 0.45))
 	_coin_plus_btn.pressed.connect(_open_coins_popup)
 	add_child(_coin_plus_btn)
 
@@ -1346,19 +1346,6 @@ func _build_daily_claim_button() -> void:
 	var arrow_x := x + DAILY_PILL_W - arrow_d - 10.0
 	var arrow_y := y + (ph - arrow_d) * 0.5
 
-	# Soft purple aura behind the gift disc (drawn as an empty panel with shadow).
-	var glow := Panel.new()
-	glow.size = Vector2(d + 12, d + 12)
-	glow.position = Vector2(disc_x - 6, disc_y - 6)
-	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var gs := StyleBoxFlat.new()
-	gs.bg_color = Color(0.55, 0.36, 1.0, 0.0)
-	gs.set_corner_radius_all(int((d + 12) * 0.5))
-	gs.shadow_color = Color(0.62, 0.36, 1.0, 0.55)
-	gs.shadow_size = 10
-	glow.add_theme_stylebox_override("panel", gs)
-	add_child(glow)
-
 	# Purple gift disc — glossy, with a small highlight + the gift glyph inside.
 	var disc := Panel.new()
 	disc.size = Vector2(d, d)
@@ -1418,8 +1405,6 @@ func _build_daily_claim_button() -> void:
 	asx.set_corner_radius_all(int(arrow_d * 0.5))
 	asx.border_color = Color(0.86, 0.66, 1.0)
 	asx.set_border_width_all(2)
-	asx.shadow_color = Color(0.55, 0.30, 0.96, 0.60)
-	asx.shadow_size = 10
 	arrow.add_theme_stylebox_override("panel", asx)
 	add_child(arrow)
 	# Procedurally drawn ">" chevron, centered in the disc — avoids relying on a
