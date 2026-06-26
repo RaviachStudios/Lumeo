@@ -139,8 +139,18 @@ func _build_shell() -> void:
 	_vp = SubViewport.new()
 	_vp.transparent_bg = true
 	_vp.own_world_3d = true
-	_vp.msaa_3d = Viewport.MSAA_4X
-	_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	# MSAA on a render-target SubViewport is a heavy allocation in the GL
+	# Compatibility renderer and leak-prone on some mobile (Mali) drivers. The
+	# wheel's look comes from geometry + lighting, not thin AA edges, so we drop
+	# it — this both lightens the per-frame GPU cost and removes the leaking path.
+	_vp.msaa_3d = Viewport.MSAA_DISABLED
+	# Start idle. The wheel only needs to redraw while something is moving (a flash,
+	# a press, or an animated skin); _process drives the update mode from there via
+	# _update_render_activity, and _kick_render forces a one-off redraw after changes
+	# outside the animation loop (rebuild / skin swap / resize). Continuously
+	# re-rendering a STATIC wheel every frame (the old UPDATE_ALWAYS) is what slowly
+	# exhausted the mobile GL driver's heap and OOM-crashed the game on long sessions.
+	_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_vpc.add_child(_vp)
 
 	# --- environment ---
@@ -176,8 +186,8 @@ func _build_shell() -> void:
 	env.set_glow_level(3, 0.4)
 	env.set_glow_level(4, 0.0)               # zero the wide levels -> small radius
 	env.set_glow_level(5, 0.0)
-	env.set_glow_level(6, 0.0)
-	env.set_glow_level(7, 0.0)
+	env.set_glow_level(6, 0.0)   # levels are indexed 0..6 (MAX_GLOW_LEVELS = 7);
+								 # set_glow_level(7, …) was out of bounds and errored
 	var we := WorldEnvironment.new()
 	we.environment = env
 	_vp.add_child(we)
@@ -365,6 +375,7 @@ func _sync_viewport_size() -> void:
 	if _vp:
 		_vp.size = Vector2i(maxi(2, int(size.x)), maxi(2, int(size.y)))
 	_layout_numeral()   # the volcano lift is a fraction of the widget height
+	_kick_render()      # a resized render target must redraw to fill the new size
 
 # Position the level-numeral overlay (and the status dot below it) for the active
 # skin. Stock skins sit CENTER_LIFT above the widget centre; the Volcano skin lifts
@@ -534,6 +545,9 @@ func _rebuild() -> void:
 		_wheel_root.add_child(halo)
 		_halos.append(halo)
 		_halo_mats.append(gmat)
+	# Geometry/materials just changed — force the (otherwise idle) viewport to draw
+	# at least one frame so the rebuilt wheel actually appears.
+	_kick_render()
 
 # Glossy injection-molded ABS plastic. No textures, no triplanar, no rim - the
 # form is carried entirely by geometry and lighting. A clearcoat gives the thin
@@ -1170,9 +1184,18 @@ func set_press(idx: int, amount: float) -> void:
 	_press[idx] = clampf(amount, 0.0, 1.0)
 
 func _process(dt: float) -> void:
+	# Track whether anything is still moving this frame; when nothing is, the
+	# viewport can stop redrawing (see _update_render_activity below).
+	var animating := false
 	for i in _seg_mats.size():
 		var k := clampf(dt * GLOW_LERP, 0.0, 1.0)
 		_emit_cur[i] = lerp(_emit_cur[i], _emit_tgt[i], k)
+		# lerp never reaches the target exactly — snap once we're within a hair so
+		# the glow truly settles and the wheel is allowed to go idle.
+		if absf(_emit_cur[i] - _emit_tgt[i]) <= 0.003:
+			_emit_cur[i] = _emit_tgt[i]
+		else:
+			animating = true
 		var mat := _seg_mats[i]
 		mat.emission_energy_multiplier = _emit_cur[i]
 		var base: Color = _seg_base[i] if i < _seg_base.size() else Color.GRAY
@@ -1191,6 +1214,40 @@ func _process(dt: float) -> void:
 		# press sink (Volcano keeps the button lifted on its sulfur stone)
 		var stone_lift := STONE_BTN_LIFT if _skin_id == "inferno" else 0.0
 		_segments[i].position.y = BASE_H * 0.5 + BTN_RAISE + stone_lift - _press[i] * PRESS_DROP
+		if _press[i] > 0.0001:
+			animating = true
+	_update_render_activity(animating)
+
+# Animated skins drive their look from shader TIME (the coal cracks / lava flow),
+# so they must keep redrawing every frame. Stock looks are static once the glow
+# has settled, so they can idle the viewport.
+func _animated_skin() -> bool:
+	return _skin_id == "inferno"
+
+# Drive the SubViewport's redraw cadence from whether anything is moving. While a
+# flash/press is animating (or an animated skin is equipped) we render every frame;
+# once everything is still we render one final settling frame (UPDATE_ONCE, which
+# self-disables) and then stop. An idle wheel no longer re-renders ~30×/s — that
+# continuous redraw of static 3D content is what leaked memory in the mobile GL
+# driver until it OOM-crashed mid-game.
+func _update_render_activity(animating: bool) -> void:
+	if _vp == null:
+		return
+	if _animated_skin() or animating:
+		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	elif _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
+		# Draw the final settled frame, then idle.
+		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+# Force at least one redraw of the otherwise-idle viewport after something changed
+# it outside the per-frame animation loop (rebuild, skin swap, resize).
+func _kick_render() -> void:
+	if _vp == null:
+		return
+	if _animated_skin():
+		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	elif _vp.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
+		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 # ---------------- hit testing ----------------
 
