@@ -99,11 +99,15 @@ func _ready() -> void:
 	AudioManager.play_win_sound()
 	if _is_new_high:
 		_pulse_score()
-	# Upload the score and learn the world rank — but only when this run is a new
-	# personal best. A non-improving run can't change the player's leaderboard
-	# place, so showing it would feel like a hollow "celebration" it didn't earn.
-	# We wait for submit so the subsequent load_global reflects this run (no
-	# submission/load for guests).
+	# Daily submit happens on EVERY signed-in finish — the daily best is a
+	# different bar than the all-time best (a "non-personal-best" run can still
+	# be a today's-best), so we don't gate on _is_new_high here. The manager
+	# itself only writes if the score beats today's existing row, so this is
+	# safe to call unconditionally.
+	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
+		LeaderboardManager.submit_score_daily(GameState.difficulty, rounds)
+	# All-time submit + rank pill, only on personal best — see _submit_and_show_rank
+	# for why the rank reveal is gated.
 	if _is_new_high and FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
 		_submit_and_show_rank()
 

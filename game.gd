@@ -94,18 +94,20 @@ func _layout_wheel() -> void:
 	# centre — fills the space the balance pill used to occupy.
 	_wheel.position = Vector2((sz.x - s) * 0.5, (sz.y - s) * 0.5 - sz.y * 0.07)
 
-# Apply the player's equipped Simon customization (shop "SIMON" tab) to the
-# wheel. CoinsManager is already loaded by the time a game starts (the home
-# screen waits on CoinsManager.loaded), so the equipped colours are available
-# immediately. In skin mode there are no skins yet, so the wheel keeps its stock
-# look (all-null) for now.
+# Apply the player's equipped Simon customization (shop "SIMON" tab or SPECIAL
+# SKINS tab) to the wheel. CoinsManager is already loaded by the time a game
+# starts (the home screen waits on CoinsManager.loaded), so the equipped look
+# is available immediately. In skin mode the active skin overrides every per-part
+# colour with its own bespoke palette + overlay (e.g. inferno's ring of flames).
 func _apply_simon_skin() -> void:
 	if _wheel == null:
 		return
+	var skin_id := CoinsManager.selected_skin if not CoinsManager.is_simon_manual() else ""
 	_wheel.apply_skin(
 		_resolved_simon_tint("outer_circle"),
 		_resolved_simon_tint("inner_circle"),
-		_resolved_simon_number())
+		_resolved_simon_number(),
+		skin_id)
 
 # Returns the Color tint for a category, or null to keep the stock look.
 func _resolved_simon_tint(category: String) -> Variant:
@@ -500,7 +502,11 @@ func _game_over() -> void:
 	CoinsManager.commit_session()
 	AudioManager.play_lose_sound()
 	_set_status("Game Over!")
-	if level > 5:
+	# Skip the post-game interstitial for players who bought the remove-ads
+	# entitlement. Rewarded ads (the in-game "watch ad to replay" button) are
+	# user-initiated and unaffected — the purchase only suppresses ads we'd
+	# otherwise force on the player.
+	if level > 5 and not CoinsManager.has_remove_ads:
 		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)

@@ -26,6 +26,35 @@ service cloud.firestore {
       allow write: if isUser(uid) && scoreOk();
     }
 
+    // Daily leaderboards. Same write surface as the all-time boards, plus a
+    // `date` field (UTC YYYY-MM-DD) and an `expires_at` (Firestore Timestamp
+    // OR ISO-8601 string — TTL accepts both as the policy field). The screen
+    // filters reads by `date == today_utc`, so even if TTL hasn't swept
+    // yesterday's rows yet, they don't show up. NOT enforcing date == today
+    // at write time: a player at exactly the midnight tick could write
+    // tomorrow's date a few seconds early — that's strictly fairer than
+    // rejecting their score for clock drift.
+    function dailyRowOk() {
+      return scoreOk()
+          && request.resource.data.date is string
+          && request.resource.data.date.size() == 10
+          && (!('expires_at' in request.resource.data)
+              || request.resource.data.expires_at is timestamp
+              || request.resource.data.expires_at is string);
+    }
+    match /daily_easy/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && dailyRowOk();
+    }
+    match /daily_moderate/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && dailyRowOk();
+    }
+    match /daily_hard/{uid} {
+      allow read: if true;
+      allow write: if isUser(uid) && dailyRowOk();
+    }
+
     // Private wallet doc: coin balance, owned/equipped theme, login streak
     // (streak_days + first_login_at), display name, last claim date.
     // Owner-only. Fields are validated only when present so partial (merge)
@@ -58,7 +87,25 @@ service cloud.firestore {
                 && request.resource.data.owned_themes.size() <= 64))
         && (!('owned_levels' in request.resource.data)
             || (request.resource.data.owned_levels is map
-                && request.resource.data.owned_levels.size() <= 16));
+                && request.resource.data.owned_levels.size() <= 16))
+        // Lifetime coins earned via gameplay + daily claims (excludes IAP).
+        // Same upper bound as `coins` so a bad write can't claim absurd totals.
+        && (!('earned_coins' in request.resource.data)
+            || (request.resource.data.earned_coins is int
+                && request.resource.data.earned_coins >= 0
+                && request.resource.data.earned_coins <= 100000000))
+        // Real-money purchase audit trail. Shape: { sku: { iso_ts: true } }.
+        // Cap the SKU count (32 distinct products is generous) — per-SKU
+        // timestamp count is left unbounded since rules can't recurse into
+        // nested maps, but the wallet doc itself is capped by Firestore's
+        // 1MB document limit, which is plenty for years of normal usage.
+        && (!('purchase_history' in request.resource.data)
+            || (request.resource.data.purchase_history is map
+                && request.resource.data.purchase_history.size() <= 32))
+        // Non-consumable remove-ads entitlement. Bool flag, validated only
+        // when present so other merge writes don't have to set it.
+        && (!('has_remove_ads' in request.resource.data)
+            || request.resource.data.has_remove_ads is bool);
     }
   }
 }

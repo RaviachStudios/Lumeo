@@ -173,6 +173,14 @@ func _run_boot() -> void:
 	if FirebaseManager.is_signed_in():
 		while not CoinsManager.is_loaded() and _elapsed(start) < MAX_SEC:
 			await get_tree().process_frame
+	# Warm Google Play Billing here, while we're already showing a spinner, so
+	# the coin-pack popup opens with prices in place instead of flashing
+	# "LOADING…" buttons. On devices without the billing plugin (editor,
+	# emulator without Play Services) prices_ready stays false — the MAX_SEC
+	# cap below stops us from blocking forever.
+	if PurchaseManager.ensure_initialised():
+		while not PurchaseManager.prices_ready() and _elapsed(start) < MAX_SEC:
+			await get_tree().process_frame
 	var remaining := MIN_SEC - _elapsed(start)
 	if remaining > 0.0:
 		await get_tree().create_timer(remaining).timeout

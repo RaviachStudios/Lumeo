@@ -19,6 +19,7 @@ signal themes_changed
 signal simon_changed
 signal levels_changed
 signal daily_claim_changed
+signal remove_ads_changed
 signal loaded
 # Running total of coins earned in the current game session (resets to 0 on
 # start_game_session). The in-game HUD tracks this instead of the wallet total.
@@ -77,6 +78,18 @@ const SIMON_COLORS := {
 	"rose":     {"name": "Rose",     "price": 80,  "color": Color(0.95, 0.36, 0.62)},
 	"silver":   {"name": "Silver",   "price": 200, "color": Color(0.80, 0.82, 0.87)},
 	"gold":     {"name": "Gold",     "price": 350, "color": Color(0.95, 0.78, 0.26)},
+}
+
+# Complete pre-made wheel skins, each a single bundled look (rings, hub, numeral,
+# plus any procedural overlay like flames). Equipping one switches simon_mode to
+# SKIN and overrides the manual per-part colours; equipping a per-part colour
+# switches simon_mode back to MANUAL. Stock-look behaviour is unchanged when no
+# skin has ever been equipped.
+const SIMON_SKINS := {
+	# Stored id stays "inferno" (selected_skin / owned_skins in Firestore, and the
+	# _skin_id checks in SimonWheel) so existing ownership keeps working; only the
+	# display name changed when the skin was upgraded into the Volcano look.
+	"inferno": {"name": "Volcano", "price": 8000},
 }
 
 # The "level_number" category is NOT a flat colour — it's a font *package* (a whole
@@ -197,6 +210,19 @@ var first_login_at: String = ""           # ISO-8601 UTC ("YYYY-MM-DDTHH:MM:SS")
 var player_name: String = ""              # mirror of FirebaseManager.display_name.
                                           # Kept on /users so a rename can be pushed
                                           # to leaderboards even when offline.
+# Audit trail (added later so old wallets keep working — both default to empty
+# and accumulate forward from the first new event).
+var earned_coins: int = 0                 # lifetime coins earned by gameplay/claims,
+                                          # NOT counting real-money purchases. Allows
+                                          # auditing balance = earned + purchased - spent.
+var purchase_history: Dictionary = {}     # sku -> { iso_timestamp: true }. Stored as
+                                          # a map-of-map (not a list) because the Android
+                                          # Firestore SDK rejects raw arrays — same
+                                          # reasoning as _owned_themes_map_for_save.
+# Non-consumable entitlement: once bought, ads are off forever. The flag is
+# the durable source of truth — PurchaseManager re-acknowledges with Play on
+# every fresh install, but it's CoinsManager that the rest of the app reads.
+var has_remove_ads: bool = false
 
 # --- in-game session ---
 var session_earned: int = 0              # cleared in start_game_session()
@@ -241,8 +267,9 @@ func commit_session() -> void:
 	if session_earned <= 0 or not FirebaseManager.is_signed_in():
 		return
 	balance += session_earned
+	earned_coins += session_earned
 	balance_changed.emit(balance)
-	_save_partial({"coins": balance})
+	_save_partial({"coins": balance, "earned_coins": earned_coins})
 
 # --- login-streak + daily-claim API ---
 
@@ -302,14 +329,71 @@ func claim_daily() -> int:
 	var day := next_claim_day()
 	var reward := daily_reward_for_day(day)
 	balance += reward
+	earned_coins += reward
 	last_claim_date = _today()
 	balance_changed.emit(balance)
 	daily_claim_changed.emit()
 	_save_partial({
 		"coins": balance,
+		"earned_coins": earned_coins,
 		"last_claim_date": last_claim_date,
 	})
 	return reward
+
+# --- real-money coin purchases ---
+
+# Credit coins purchased via Google Play Billing. Called by PurchaseManager
+# after a successful, deduplicated purchase. WHY a dedicated entry-point and
+# not a generic add_coins: when this moves server-side per
+# COINS_PURCHASE_PLAN.md the Cloud Function will own the increment and the
+# client will just _load_user() — having the call site already isolated to
+# one method makes that swap a one-file change.
+#
+# The optional `sku` parameter lets us append a purchase-history entry under
+# /users/{uid}/purchase_history.{sku}.{iso_ts} = true alongside the balance
+# update, so the wallet doc itself carries an auditable list of past purchases.
+# Purchased coins are intentionally NOT added to `earned_coins`; that field
+# tracks gameplay/claim earnings only, so balance can later be audited as
+# earned + purchased − spent.
+func credit_purchased_coins(amount: int, sku: String = "") -> void:
+	if amount <= 0:
+		return
+	if not FirebaseManager.is_signed_in():
+		return
+	balance += amount
+	var fields := {"coins": balance}
+	if not sku.is_empty():
+		var iso := _now_iso(int(Time.get_unix_time_from_system()))
+		var per_sku: Dictionary = purchase_history.get(sku, {})
+		per_sku[iso] = true
+		purchase_history[sku] = per_sku
+		# Firestore merge writes replace the value at a top-level field key (no
+		# nested merge), so we send the entire map back. It's small (a few SKUs
+		# × a handful of timestamps), and _apply_doc reloaded it on sign-in so
+		# we have the full history in memory before mutating.
+		fields["purchase_history"] = purchase_history
+	balance_changed.emit(balance)
+	_save_partial(fields)
+
+# Mark the remove-ads entitlement as owned. Idempotent: a no-op if the flag
+# is already set (PurchaseManager calls this on every replay of the original
+# Play purchase). `sku` is recorded in purchase_history on the first grant so
+# the wallet has a paper trail for support.
+func set_remove_ads_owned(sku: String = "") -> void:
+	if not FirebaseManager.is_signed_in():
+		return
+	if has_remove_ads:
+		return
+	has_remove_ads = true
+	var fields := {"has_remove_ads": true}
+	if not sku.is_empty():
+		var iso := _now_iso(int(Time.get_unix_time_from_system()))
+		var per_sku: Dictionary = purchase_history.get(sku, {})
+		per_sku[iso] = true
+		purchase_history[sku] = per_sku
+		fields["purchase_history"] = purchase_history
+	remove_ads_changed.emit()
+	_save_partial(fields)
 
 # --- theme API ---
 
@@ -428,6 +512,56 @@ func set_simon_mode(mode: String) -> bool:
 	_save_partial({"simon_mode": simon_mode})
 	return true
 
+# --- complete skin API (the SPECIAL SKINS shop tab) ---
+
+func skin_price(skin_id: String) -> int:
+	return int(SIMON_SKINS.get(skin_id, {}).get("price", 0))
+
+func owns_skin(skin_id: String) -> bool:
+	return owned_skins.has(skin_id)
+
+func can_afford_skin(skin_id: String) -> bool:
+	return balance >= skin_price(skin_id)
+
+# Buy a complete skin. Returns true on success (deducts coins, adds to owned_skins).
+func purchase_skin(skin_id: String) -> bool:
+	if not FirebaseManager.is_signed_in(): return false
+	if not SIMON_SKINS.has(skin_id): return false
+	if owns_skin(skin_id): return false
+	var price := skin_price(skin_id)
+	if balance < price: return false
+	balance -= price
+	owned_skins.append(skin_id)
+	balance_changed.emit(balance)
+	simon_changed.emit()
+	_save_partial({"coins": balance, "owned_skins": _owned_skins_map_for_save()})
+	return true
+
+# Equip an owned complete skin. Equipping a skin implicitly puts the wheel into
+# SKIN mode (mirrors equip_simon_color flipping into MANUAL). Returns true if
+# anything actually changed.
+func equip_skin(skin_id: String) -> bool:
+	if not owns_skin(skin_id): return false
+	var changed := false
+	if simon_mode != SIMON_MODE_SKIN:
+		simon_mode = SIMON_MODE_SKIN
+		changed = true
+	if selected_skin != skin_id:
+		selected_skin = skin_id
+		changed = true
+	if not changed:
+		return false
+	simon_changed.emit()
+	_save_partial({"simon_mode": simon_mode, "selected_skin": selected_skin})
+	return true
+
+# Same map-not-array reasoning as _owned_themes_map_for_save.
+func _owned_skins_map_for_save() -> Dictionary:
+	var out := {}
+	for s in owned_skins:
+		out[s] = true
+	return out
+
 # Firestore field names, e.g. "owned_outer_circle" / "equipped_inner_circle".
 func _owned_simon_field(category: String) -> String:
 	return "owned_" + category
@@ -499,6 +633,9 @@ func _on_signed_out() -> void:
 	streak_days = 0
 	first_login_at = ""
 	player_name = ""
+	earned_coins = 0
+	purchase_history = {}
+	has_remove_ads = false
 	session_earned = 0
 	_loaded_for_uid = ""
 	balance_changed.emit(balance)
@@ -506,6 +643,7 @@ func _on_signed_out() -> void:
 	simon_changed.emit()
 	levels_changed.emit()
 	daily_claim_changed.emit()
+	remove_ads_changed.emit()
 
 # FirebaseManager owns the canonical display name; we mirror it onto /users
 # so leaderboards (and any future read-only consumer) can find it cheaply.
@@ -554,6 +692,7 @@ func _emit_all() -> void:
 	simon_changed.emit()
 	levels_changed.emit()
 	daily_claim_changed.emit()
+	remove_ads_changed.emit()
 
 func _apply_doc(doc: Dictionary) -> void:
 	balance = int(doc.get("coins", 0))
@@ -596,6 +735,20 @@ func _apply_doc(doc: Dictionary) -> void:
 	streak_days = int(doc.get("streak_days", 0))
 	first_login_at = String(doc.get("first_login_at", ""))
 	player_name = String(doc.get("name", ""))
+	# Audit fields. Missing on old wallets — defaults are correct (0 / {}) and
+	# the value just accumulates forward from the next event.
+	earned_coins = int(doc.get("earned_coins", 0))
+	purchase_history = {}
+	var raw_ph: Variant = doc.get("purchase_history", {})
+	if raw_ph is Dictionary:
+		for sku in raw_ph.keys():
+			var entries: Variant = raw_ph[sku]
+			if entries is Dictionary:
+				var copy := {}
+				for ts in entries.keys():
+					copy[String(ts)] = true
+				purchase_history[String(sku)] = copy
+	has_remove_ads = bool(doc.get("has_remove_ads", false))
 	# If FirebaseManager already knows a newer name (e.g. user just picked it
 	# and the doc on the server hasn't caught up), push the local pick back
 	# up so /users stays the canonical mirror.
@@ -632,15 +785,25 @@ func _apply_simon_doc(doc: Dictionary) -> void:
 					owned.append(s)
 		var eq := String(doc.get(_equipped_simon_field(cat), def_id))
 		equipped_simon[cat] = eq if owned.has(eq) else def_id
-	selected_skin = String(doc.get("selected_skin", ""))
 	owned_skins = []
 	var raw_sk: Variant = doc.get("owned_skins", {})
 	if raw_sk is Dictionary:
 		for k in raw_sk.keys():
-			owned_skins.append(String(k))
+			var s := String(k)
+			if SIMON_SKINS.has(s) and not owned_skins.has(s):
+				owned_skins.append(s)
 	elif raw_sk is Array:
 		for t in raw_sk:
-			owned_skins.append(String(t))
+			var s := String(t)
+			if SIMON_SKINS.has(s) and not owned_skins.has(s):
+				owned_skins.append(s)
+	selected_skin = String(doc.get("selected_skin", ""))
+	if not selected_skin.is_empty() and not owned_skins.has(selected_skin):
+		selected_skin = ""
+	# Defensive: if the doc claims skin mode but no skin is actually owned/selected,
+	# fall back to manual so the wheel never tries to render a non-existent skin.
+	if simon_mode == SIMON_MODE_SKIN and selected_skin.is_empty():
+		simon_mode = SIMON_MODE_MANUAL
 
 # Owned themes are persisted as a Firestore *map* ({theme_id: true}), not a
 # list. WHY: the Firebase Android Firestore SDK (25.1.4) rejects raw Java

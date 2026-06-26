@@ -1,5 +1,8 @@
 extends Control
 
+const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
+const PurchaseConfirmPopup := preload("res://purchase_confirm_popup.gd")
+
 # Shop screen — same visual language as the leaderboards / difficulty / home
 # screens (deep-space shader background, slowly rotating orbit of glowing orbs,
 # glass back button, glowing header with diamond-underlined subtitle, segmented
@@ -120,6 +123,7 @@ var _header: Control
 var _underline: Control
 var _coin_pill: Panel
 var _coin_lbl: Label
+var _coin_plus_btn: Button       # opens the coin-pack purchase popup
 var _tab_row: HBoxContainer
 var _tabs: Array[Dictionary] = []
 var _grid_scroll: ScrollContainer        # wraps _grid so the THEMES list can scroll
@@ -133,7 +137,8 @@ var _simon_root: Control                 # SIMON colour panel (built lazily)
 var _simon_preview: SimonWheel           # live wheel reflecting the equipped colours
 var _simon_tiles_box: Control            # holds the three colour tiles
 var _simon_tiles: Dictionary = {}        # category -> {swatch}
-var _skins_root: Control                 # SPECIAL SKINS placeholder panel (built lazily)
+var _skins_root: Control                 # SPECIAL SKINS panel (built lazily)
+var _skins_by_id: Dictionary = {}        # skin_id -> {root, btn, btn_label, price_label, accent, preview}
 # Colour popup (opened from a tile):
 var _color_popup: Control
 var _popup_category: String = ""
@@ -158,14 +163,38 @@ func _ready() -> void:
 	CoinsManager.themes_changed.connect(_refresh_cards)
 	# Buying / equipping / toggling on the SIMON tab refreshes its tiles and any
 	# open colour popup, the same way themes_changed refreshes the theme cards.
+	# The same signal is fired on SPECIAL SKINS purchase/equip, so the skin cards
+	# follow along too (their EQUIPPED state also flips when the SIMON tab equips
+	# a per-part colour, since that switches simon_mode back to MANUAL).
 	CoinsManager.simon_changed.connect(_refresh_simon_panel)
 	CoinsManager.simon_changed.connect(_refresh_color_cards)
+	CoinsManager.simon_changed.connect(_refresh_skin_cards)
 	# Equipping from inside the shop flips BackgroundManager.is_themed() under
 	# us — without this, the shop's own deep-space bg stays in place over the
 	# new global theme (or vanishes to grey when the player re-equips default),
 	# and the change only becomes visible after navigating back to home.
 	CoinsManager.themes_changed.connect(_sync_local_background)
 	_render_category(_current_cat)
+	# Pre-build the SIMON and SKINS panels one frame after the shop paints, while
+	# they're still hidden. Both are built lazily on first toggle otherwise, which
+	# is what makes the first tab switch hitch — constructing the live SimonWheel
+	# previews + tiles is the cost, not any Firestore fetch (all that data is
+	# already in CoinsManager). Deferring keeps the shop's first paint snappy.
+	call_deferred("_prebuild_panels")
+
+# Builds the non-default category panels ahead of time so switching to them is
+# instant. Each builder add_child()s its root; we hide them again afterwards so
+# only the active category shows. Safe to call once — guarded by the null checks.
+func _prebuild_panels() -> void:
+	if not is_inside_tree():
+		return
+	if _simon_root == null:
+		_build_simon_panel()
+		_simon_root.visible = false
+	if _skins_root == null:
+		_build_skins_panel()
+		_skins_root.visible = false
+	_layout()
 
 # ---------------- background ----------------
 
@@ -414,12 +443,50 @@ func _build_coin_pill() -> void:
 	_coin_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_coin_pill.add_child(_coin_lbl)
 
+	_build_coin_plus_button(PH)
+
+# Gold circular "+" button that opens the coin-pack purchase popup. Larger
+# than the home-screen variant because the shop's coin pill is itself larger;
+# positioned to the LEFT of the pill in _layout (the pill anchors top-right).
+func _build_coin_plus_button(pill_h: float) -> void:
+	var d := 48.0
+	_coin_plus_btn = Button.new()
+	_coin_plus_btn.text = "+"
+	_coin_plus_btn.size = Vector2(d, d)
+	_coin_plus_btn.add_theme_font_size_override("font_size", 34)
+	_coin_plus_btn.focus_mode = Control.FOCUS_NONE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(1.0, 0.78, 0.20)
+	s.set_corner_radius_all(int(d * 0.5))
+	s.border_color = Color(1.0, 0.92, 0.55)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(1.0, 0.78, 0.22, 0.55)
+	s.shadow_size = 12
+	_coin_plus_btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(1.0, 0.88, 0.35)
+	_coin_plus_btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.85, 0.62, 0.10)
+	_coin_plus_btn.add_theme_stylebox_override("pressed", sp)
+	_coin_plus_btn.add_theme_color_override("font_color", Color(0.30, 0.18, 0.0))
+	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(0.18, 0.10, 0.0))
+	_coin_plus_btn.pressed.connect(_open_coins_popup)
+	# Y position is shared with the pill (centered vertically); X is set in _layout.
+	_coin_plus_btn.position = Vector2(0, (pill_h - d) * 0.5)
+	add_child(_coin_plus_btn)
+
+func _open_coins_popup() -> void:
+	var popup := CoinsPurchasePopup.new()
+	add_child(popup)
+
 func _on_balance_changed(new_balance: int) -> void:
 	if _coin_lbl:
 		_coin_lbl.text = str(new_balance)
 	# Card affordability changes with balance too.
 	_refresh_cards()
 	_refresh_color_cards()
+	_refresh_skin_cards()
 
 # ---------------- category tabs ----------------
 
@@ -545,6 +612,8 @@ func _render_category(key: String) -> void:
 		if _skins_root == null:
 			_build_skins_panel()
 		_skins_root.visible = true
+		_refresh_skin_cards()
+		_refresh_skin_previews()
 		_layout()
 		return
 
@@ -726,12 +795,29 @@ func _on_action(theme_id: String) -> void:
 	if CoinsManager.owns(theme_id):
 		CoinsManager.select_theme(theme_id)
 		return
-	# Not yet owned. Try to purchase; signal-driven refresh handles the UI.
-	if not CoinsManager.purchase_theme(theme_id):
+	# Not yet owned. Confirm before spending — the BUY button is right under
+	# the player's thumb on the card and tapping it used to charge instantly.
+	if not CoinsManager.can_afford(theme_id):
 		return
-	# Auto-equip a freshly purchased theme so the player sees their reward
-	# immediately the next time they leave the shop.
-	CoinsManager.select_theme(theme_id)
+	var meta: Dictionary = CoinsManager.THEMES.get(theme_id, {})
+	_confirm_purchase(
+		String(meta.get("name", theme_id.capitalize())),
+		CoinsManager.theme_price(theme_id),
+		func() -> void:
+			if CoinsManager.purchase_theme(theme_id):
+				# Auto-equip a freshly purchased theme so the player sees their
+				# reward immediately the next time they leave the shop.
+				CoinsManager.select_theme(theme_id)
+	)
+
+# Shared confirm-then-spend gate for shop purchases. `on_confirmed` runs only
+# if the player taps BUY; backdrop / cancel / X just close the dialog.
+func _confirm_purchase(item_name: String, price: int, on_confirmed: Callable) -> void:
+	var popup := PurchaseConfirmPopup.new()
+	popup.item_name = item_name
+	popup.price = price
+	popup.confirmed.connect(on_confirmed)
+	add_child(popup)
 
 # ---------------- SIMON panel ----------------
 
@@ -789,22 +875,213 @@ func _build_simon_panel() -> void:
 		var tile := _make_simon_tile(def["cat"], def["label"], Vector2(tx + i * (SIMON_TILE_W + SIMON_TILE_GAP), 0))
 		_simon_tiles_box.add_child(tile)
 
-# SPECIAL SKINS category — a placeholder until complete skins ship.
+# SPECIAL SKINS panel — one tall card per complete skin (currently only Inferno).
+# Each card hosts a live SimonWheel preview with the skin's bespoke palette and
+# overlay (e.g. the inferno flames) actually rendering, so what you see in the
+# shop is exactly what you get on the gameplay screen.
+const SKIN_ACCENT := Color(0.92, 0.45, 0.78)
+const SKIN_CARD_W := 360.0
+const SKIN_CARD_H := 470.0
+const SKIN_PREVIEW := 260.0
+const SKIN_PREVIEW_LOGICAL := 380.0   # render the live wheel at this logical size
+                                       # then scale down (same trick as the SIMON
+                                       # tab's preview — keeps the inner numeral/hub
+                                       # proportions correct at preview scale).
+const SKIN_CARD_GAP := 32.0
+
+# Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
+# Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
+# + the corresponding skin path in SimonWheel. A `blurb` field is optional; when
+# absent the card renders just the title (used for VOLCANO).
+const SKIN_DEFS := [
+	{"id": "inferno", "label": "VOLCANO"},
+]
+
 func _build_skins_panel() -> void:
+	# Total width = N cards laid out horizontally with SKIN_CARD_GAP between them.
+	var total_w := SKIN_DEFS.size() * SKIN_CARD_W + maxi(0, SKIN_DEFS.size() - 1) * SKIN_CARD_GAP
 	_skins_root = Control.new()
 	_skins_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skins_root.custom_minimum_size = Vector2(SIMON_PANEL_W, 200)
-	_skins_root.size = Vector2(SIMON_PANEL_W, 200)
+	_skins_root.custom_minimum_size = Vector2(maxf(total_w, SIMON_PANEL_W), SKIN_CARD_H)
+	_skins_root.size = Vector2(maxf(total_w, SIMON_PANEL_W), SKIN_CARD_H)
 	add_child(_skins_root)
-	var soon := Label.new()
-	soon.text = "Complete skins coming soon"
-	soon.add_theme_font_size_override("font_size", 24)
-	soon.add_theme_color_override("font_color", Color(0.78, 0.72, 0.90, 0.9))
-	soon.position = Vector2(0, 70)
-	soon.size = Vector2(SIMON_PANEL_W, 44)
-	soon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	soon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skins_root.add_child(soon)
+	_skins_by_id.clear()
+	var origin_x := (_skins_root.size.x - total_w) * 0.5
+	for i in SKIN_DEFS.size():
+		var def: Dictionary = SKIN_DEFS[i]
+		var card := _make_skin_card(def)
+		card["root"].position = Vector2(origin_x + i * (SKIN_CARD_W + SKIN_CARD_GAP), 0)
+		_skins_root.add_child(card["root"])
+		_skins_by_id[def["id"]] = card
+	_refresh_skin_cards()
+
+func _make_skin_card(def: Dictionary) -> Dictionary:
+	var skin_id: String = def["id"]
+
+	var root := Panel.new()
+	root.custom_minimum_size = Vector2(SKIN_CARD_W, SKIN_CARD_H)
+	root.size = Vector2(SKIN_CARD_W, SKIN_CARD_H)
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.06, 0.08, 0.20, 0.94)
+	cs.set_corner_radius_all(24)
+	cs.border_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.75)
+	cs.set_border_width_all(2)
+	cs.shadow_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.35)
+	cs.shadow_size = 18
+	root.add_theme_stylebox_override("panel", cs)
+
+	# Live wheel preview hosted in a rounded inset, so the flame overlay can spill
+	# right out to the card's interior padding for a really immersive look.
+	var clip := Panel.new()
+	clip.size = Vector2(SKIN_CARD_W - 36, SKIN_PREVIEW + 24)
+	clip.position = Vector2(18, 18)
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var clip_st := StyleBoxFlat.new()
+	# Deep void backdrop so the inferno flames pop hard against it; matches the
+	# inferno BACKGROUND's near-black void in tone.
+	clip_st.bg_color = Color(0.018, 0.008, 0.025)
+	clip_st.set_corner_radius_all(16)
+	clip_st.border_color = Color(1, 1, 1, 0.07)
+	clip_st.set_border_width_all(1)
+	clip.add_theme_stylebox_override("panel", clip_st)
+	root.add_child(clip)
+
+	# Live SimonWheel preview with this skin applied. Logical size > displayed
+	# size + uniform scale = preview reads at the same proportions as the in-game
+	# wheel (same trick as the SIMON tab uses).
+	var wheel := SimonWheel.new()
+	wheel.size = Vector2(SKIN_PREVIEW_LOGICAL, SKIN_PREVIEW_LOGICAL)
+	var pscale := SKIN_PREVIEW / SKIN_PREVIEW_LOGICAL
+	wheel.scale = Vector2(pscale, pscale)
+	wheel.position = Vector2((clip.size.x - SKIN_PREVIEW) * 0.5, (clip.size.y - SKIN_PREVIEW) * 0.5)
+	clip.add_child(wheel)
+	wheel.configure(5, PREVIEW_COLORS)
+	wheel.set_level(1)
+	wheel.set_overlay_compact(0.52, false)
+	# Apply the skin (rings + hub + numeral get re-tinted, flame overlay spawns).
+	wheel.apply_skin(null, null, null, skin_id)
+
+	# Name + blurb, below the preview.
+	var name_lbl := Label.new()
+	name_lbl.text = String(def["label"])
+	name_lbl.add_theme_font_size_override("font_size", 26)
+	name_lbl.add_theme_color_override("font_color", Color.WHITE)
+	name_lbl.add_theme_color_override("font_shadow_color", Color(1.0, 0.40, 0.10, 0.55))
+	name_lbl.add_theme_constant_override("shadow_offset_x", 0)
+	name_lbl.add_theme_constant_override("shadow_offset_y", 2)
+	name_lbl.add_theme_constant_override("shadow_outline_size", 8)
+	name_lbl.position = Vector2(18, 18 + SKIN_PREVIEW + 24 + 8)
+	name_lbl.size = Vector2(SKIN_CARD_W - 36, 32)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(name_lbl)
+
+	# Optional one-line description under the title. Omitted for skins that
+	# don't define a `blurb` (e.g. VOLCANO ships with title-only).
+	var blurb_text := String(def.get("blurb", ""))
+	if not blurb_text.is_empty():
+		var blurb := Label.new()
+		blurb.text = blurb_text
+		blurb.add_theme_font_size_override("font_size", 15)
+		blurb.add_theme_color_override("font_color", Color(0.80, 0.82, 0.95, 0.78))
+		blurb.position = Vector2(18, name_lbl.position.y + 38)
+		blurb.size = Vector2(SKIN_CARD_W - 36, 22)
+		blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		blurb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(blurb)
+
+	# Action button at the bottom: BUY (shows coin + price), EQUIP, or EQUIPPED.
+	var btn := Button.new()
+	btn.size = Vector2(SKIN_CARD_W - 36, 52)
+	btn.position = Vector2(18, SKIN_CARD_H - 52 - 18)
+	btn.add_theme_font_size_override("font_size", 20)
+	btn.focus_mode = Control.FOCUS_NONE
+	root.add_child(btn)
+	var price := _make_price_content(CoinsManager.skin_price(skin_id), 13.0, 22, 52.0)
+	btn.add_child(price["box"])
+	btn.pressed.connect(func() -> void: _on_skin_action(skin_id))
+	return {
+		"root": root, "btn": btn, "price_box": price["box"],
+		"price_label": price["label"], "accent": SKIN_ACCENT, "preview": wheel,
+	}
+
+func _refresh_skin_cards() -> void:
+	for skin_id in _skins_by_id:
+		_apply_skin_card_state(skin_id, _skins_by_id[skin_id])
+
+# Mirror of _apply_card_state for skin cards. The "equipped" state additionally
+# requires simon_mode == SKIN — equipping a manual per-part colour switches the
+# mode back to MANUAL, at which point even the formerly-selected skin reads as
+# merely OWNED, not equipped.
+func _apply_skin_card_state(skin_id: String, c: Dictionary) -> void:
+	var btn: Button = c["btn"]
+	var accent: Color = c["accent"]
+	var price_box: Control = c["price_box"]
+	var price_label: Label = c["price_label"]
+	var owned := CoinsManager.owns_skin(skin_id)
+	var equipped := (not CoinsManager.is_simon_manual()) and CoinsManager.selected_skin == skin_id
+	var affordable := CoinsManager.can_afford_skin(skin_id)
+
+	price_box.visible = not owned
+	btn.disabled = false
+
+	var label_text := ""
+	var bg_col: Color
+	var fg_col := Color.WHITE
+	if equipped:
+		label_text = "EQUIPPED"
+		bg_col = Color(0.18, 0.45, 0.28)
+		btn.disabled = true
+	elif owned:
+		label_text = "EQUIP"
+		bg_col = Color(0.20, 0.55, 0.95)
+	elif affordable:
+		bg_col = Color(1.00, 0.66, 0.10)
+		fg_col = Color(0.18, 0.10, 0.0)
+	else:
+		bg_col = Color(0.30, 0.30, 0.40)
+		fg_col = Color(0.85, 0.85, 0.95, 0.7)
+		btn.disabled = true
+
+	price_label.add_theme_color_override("font_color", fg_col)
+	btn.text = label_text
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg_col
+	s.set_corner_radius_all(14)
+	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
+	s.set_border_width_all(2 if equipped else 0)
+	btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = bg_col.lightened(0.12)
+	btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = bg_col.darkened(0.20)
+	btn.add_theme_stylebox_override("pressed", sp)
+	var sd := s.duplicate() as StyleBoxFlat
+	sd.bg_color = bg_col.darkened(0.05)
+	btn.add_theme_stylebox_override("disabled", sd)
+	btn.add_theme_color_override("font_color", fg_col)
+	btn.add_theme_color_override("font_disabled_color", fg_col)
+
+# Re-applies each card's skin to its preview wheel. Cheap; safe to call any time
+# the skin's appearance might have changed (e.g. catalog re-tuned during dev).
+func _refresh_skin_previews() -> void:
+	for skin_id in _skins_by_id:
+		var c: Dictionary = _skins_by_id[skin_id]
+		var w: SimonWheel = c["preview"]
+		if w != null:
+			w.apply_skin(null, null, null, skin_id)
+
+func _on_skin_action(skin_id: String) -> void:
+	if CoinsManager.owns_skin(skin_id):
+		CoinsManager.equip_skin(skin_id)
+		return
+	if not CoinsManager.purchase_skin(skin_id):
+		return
+	# Auto-equip a freshly bought skin so the choice takes effect at once.
+	CoinsManager.equip_skin(skin_id)
 
 func _make_simon_tile(category: String, label: String, pos: Vector2) -> Button:
 	var root := Button.new()
@@ -872,14 +1149,18 @@ func _refresh_simon_panel() -> void:
 	# Live preview mirrors what the wheel actually wears right now.
 	_refresh_simon_preview()
 
-# Re-tint the preview wheel to match the equipped colours.
+# Re-tint the preview wheel to match what is actually equipped. In skin mode a
+# complete skin overrides the per-part colours, so the preview should show that
+# skin (otherwise switching between tabs makes the wheel "lose" its fire/etc.).
 func _refresh_simon_preview() -> void:
 	if _simon_preview == null:
 		return
+	var skin_id := CoinsManager.selected_skin if not CoinsManager.is_simon_manual() else ""
 	_simon_preview.apply_skin(
 		_simon_tint("outer_circle"),
 		_simon_tint("inner_circle"),
-		_simon_number_pack())
+		_simon_number_pack(),
+		skin_id)
 
 # The equipped level-number font package for the live preview, or null for stock.
 func _simon_number_pack() -> Variant:
@@ -1089,7 +1370,10 @@ func _apply_color_card_state(category: String, color_id: String, c: Dictionary) 
 	var price_box: Control = c["price_box"]
 	var price_label: Label = c["price_label"]
 	var owned := CoinsManager.owns_simon_color(category, color_id)
-	var equipped := CoinsManager.equipped_simon_color(category) == color_id
+	# Only the MANUAL mode actually wears these per-part colours; in SKIN mode the
+	# complete skin overrides them, so nothing should advertise itself as equipped.
+	var equipped := CoinsManager.is_simon_manual() \
+		and CoinsManager.equipped_simon_color(category) == color_id
 	var affordable := CoinsManager.can_afford_simon_item(category, color_id)
 
 	price_box.visible = not owned
@@ -1137,10 +1421,17 @@ func _on_color_action(category: String, color_id: String) -> void:
 	if CoinsManager.owns_simon_color(category, color_id):
 		CoinsManager.equip_simon_color(category, color_id)
 		return
-	if not CoinsManager.purchase_simon_color(category, color_id):
+	if not CoinsManager.can_afford_simon_item(category, color_id):
 		return
-	# Auto-equip a freshly bought colour so the choice takes effect at once.
-	CoinsManager.equip_simon_color(category, color_id)
+	var meta: Dictionary = CoinsManager.simon_catalog(category).get(color_id, {})
+	_confirm_purchase(
+		String(meta.get("name", color_id.capitalize())),
+		CoinsManager.simon_item_price(category, color_id),
+		func() -> void:
+			if CoinsManager.purchase_simon_color(category, color_id):
+				# Auto-equip a freshly bought colour so the choice takes effect at once.
+				CoinsManager.equip_simon_color(category, color_id)
+	)
 
 func _close_color_popup() -> void:
 	if _color_popup and is_instance_valid(_color_popup):
@@ -1175,6 +1466,11 @@ func _layout() -> void:
 		_header.position = Vector2(cx - _header.size.x * 0.5, top)
 	if _coin_pill:
 		_coin_pill.position = Vector2(sz.x - _coin_pill.size.x - 24, top + 4)
+		if _coin_plus_btn:
+			# Sit immediately left of the pill, vertically centred against it.
+			_coin_plus_btn.position = Vector2(
+				_coin_pill.position.x - _coin_plus_btn.size.x - 10,
+				_coin_pill.position.y + (_coin_pill.size.y - _coin_plus_btn.size.y) * 0.5)
 
 	if _tab_row:
 		var row_w := CATEGORIES.size() * TAB_W + maxi(0, CATEGORIES.size() - 1) * TAB_SEP

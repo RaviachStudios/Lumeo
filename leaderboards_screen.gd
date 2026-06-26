@@ -1,13 +1,19 @@
 extends Control
 
-# Premium "ALL-TIME BEST" leaderboard screen — same visual language as the home /
-# difficulty / how-to-play screens: deep-space shader background, rotating orbit
-# of glowing orbs, glass back button, gold trophy header with diamond-decorated
-# underline, three segmented difficulty tabs (EASY / MODERATE / HARD — labels
-# and icons mirror the difficulty selection screen), and a top-3 PODIUM (cards
-# on cylindrical pedestals with crown / star-medal / skull-medal toppers) over
-# a scrolling list of compact pill rows for ranks 4+. Names only — no avatars
-# (we don't store any). Built with Godot nodes + shaders + tweens; no PNG/MP3.
+# Premium leaderboard screen — same visual language as the home / difficulty /
+# how-to-play screens: deep-space shader background, rotating orbit of glowing
+# orbs, glass back button, gold trophy header with diamond-decorated underline.
+# Two-column body: a wide scrolling rank TABLE on the LEFT (full standings,
+# ranks 1+, with the top 3 medal-tinted) and a top-3 PODIUM on the RIGHT (cards
+# on cylindrical pedestals with crown / star-medal / skull-medal toppers). The
+# TODAY / ALL-TIME segmented toggle and the three difficulty tabs (EASY /
+# MODERATE / HARD — labels and icons mirror the difficulty selection screen)
+# stack above the table. Both ranges load when the screen opens (ALL-TIME shown
+# first), so the toggle flips instantly. When the signed-in player is outside the
+# top 20 the list also shows a "your neighborhood" snippet with a "⋯" gap divider
+# above their row. Names only — no avatars (we don't store any). A full-screen
+# orbiting-orb loading overlay covers the board while the first fetch is in
+# flight. Built with Godot nodes + shaders + tweens; no PNG/MP3.
 
 var game_manager: Node
 
@@ -45,10 +51,10 @@ const RANK_ACCENTS := [
 	Color(0.95, 0.55, 0.25),  # 3rd — bronze
 ]
 
-# Row metrics for the 4+ list.
+# Row metrics for the rank table (now the left column; lists ranks 1+).
 const ROW_H := 56.0
 const ROW_GAP := 8.0
-const LIST_W := 760.0
+const LIST_W := 600.0
 
 const BG_SHADER := "
 shader_type canvas_item;
@@ -110,10 +116,39 @@ var _empty_lbl: Label
 var _overlay: Panel
 var _overlay_msg: Label
 var _overlay_retry: Button
+# Full-screen loading state: an orbiting-orb spinner + caption (same language as
+# the boot loader) shown over a near-opaque backdrop, so a slow fetch reads as a
+# real loading screen instead of a thin label floating above an empty table.
+var _ov_spinner: Control
+var _ov_orbit: Node2D
+var _ov_orbs: Array[Node2D] = []
+var _ov_caption: Label
+var _ov_box: VBoxContainer
+var _ov_dots_idx := 0
+
+# Range toggle (TODAY ⇄ ALL-TIME). Sits above the table and is the screen's
+# second axis of slicing; default is ALL-TIME (the headline board players most
+# expect to see first). Both ranges are fetched when the screen opens, so the
+# toggle flips between them instantly.
+const RANGE_DAILY := "daily"
+const RANGE_ALL := "all_time"
+const RANGE_DEFS := [
+	{"key": RANGE_DAILY, "label": "TODAY",    "accent": Color(0.55, 0.82, 1.00)},
+	{"key": RANGE_ALL,   "label": "ALL-TIME", "accent": Color(1.00, 0.84, 0.35)},
+]
+const RANGE_TOGGLE_W := 216.0
+const RANGE_TOGGLE_H := 44.0        # matches TAB_H so toggle + difficulty tabs share a baseline
+var _range_toggle: Control
+var _range_segs: Array[Dictionary] = []   # per seg: { wrap, btn, stylebox, label, accent, key }
+# Title text is dynamic: "TODAY'S BEST" / "ALL-TIME BEST", swapped on toggle.
+var _title_lbl: Label
 
 var _current_diff := "easy"
-var _data: Dictionary = {}   # diff -> { rows, my_rank, total }
-var _loaded := false
+var _current_range := RANGE_ALL
+# Per-range cache so flipping the toggle is instant once both ranges have been
+# fetched at least once. Shape: { diff: { rows, my_row, my_rank, neighborhood, ok } }.
+var _caches: Dictionary = {RANGE_DAILY: {}, RANGE_ALL: {}}
+var _loaded_ranges: Dictionary = {RANGE_DAILY: false, RANGE_ALL: false}
 var _load_token := 0
 
 func _ready() -> void:
@@ -124,6 +159,7 @@ func _ready() -> void:
 	_build_orbit()
 	_build_back()
 	_build_header()
+	_build_range_toggle()
 	_build_tabs()
 	_build_podium()
 	_build_list()
@@ -132,7 +168,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_layout)
 	_start_animations()
 	_intro()
-	_load_all()
+	_load_initial()
 
 func _is_rtl() -> bool:
 	return is_layout_rtl()
@@ -246,22 +282,22 @@ func _build_header() -> void:
 	_trophy.position = Vector2(HEADER_W * 0.5, 22)
 	_header.add_child(_trophy)
 
-	var title := Label.new()
-	title.text = "ALL-TIME BEST"
-	title.add_theme_font_size_override("font_size", 46)
-	title.add_theme_color_override("font_color", Color.WHITE)
-	title.add_theme_color_override("font_outline_color", Color(1, 1, 1, 1))
-	title.add_theme_constant_override("outline_size", 2)             # faux-bold
-	title.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.40))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 4)
-	title.add_theme_constant_override("shadow_outline_size", 9)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.set_anchors_preset(Control.PRESET_FULL_RECT)
-	title.offset_top = 50
-	title.offset_bottom = -40
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_header.add_child(title)
+	_title_lbl = Label.new()
+	_title_lbl.text = _title_for_range(_current_range)
+	_title_lbl.add_theme_font_size_override("font_size", 46)
+	_title_lbl.add_theme_color_override("font_color", Color.WHITE)
+	_title_lbl.add_theme_color_override("font_outline_color", Color(1, 1, 1, 1))
+	_title_lbl.add_theme_constant_override("outline_size", 2)             # faux-bold
+	_title_lbl.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.40))
+	_title_lbl.add_theme_constant_override("shadow_offset_x", 0)
+	_title_lbl.add_theme_constant_override("shadow_offset_y", 4)
+	_title_lbl.add_theme_constant_override("shadow_outline_size", 9)
+	_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_title_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_title_lbl.offset_top = 50
+	_title_lbl.offset_bottom = -40
+	_title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_header.add_child(_title_lbl)
 
 	# Thin glowing blue underline with a small diamond in the center — matches
 	# the subtitle decorations on the home / how-to-play screens.
@@ -465,8 +501,135 @@ func _on_tab(diff: String) -> void:
 		return
 	_current_diff = diff
 	_refresh_tab_styles()
-	if _loaded:
-		_render(_data.get(diff, {}))
+	if _loaded_ranges[_current_range]:
+		_render(_caches[_current_range].get(diff, {}))
+
+# ---------------- range toggle (TODAY ⇄ ALL-TIME) ----------------
+
+# Two-segment pill that selects which leaderboard family the screen renders.
+# Visually distinct from the difficulty tabs (no icon, accent shared by both
+# segments only when active) so it reads as a scope toggle rather than another
+# difficulty — though it lives on the same row so the player understands the
+# two axes belong together.
+func _build_range_toggle() -> void:
+	_range_toggle = Control.new()
+	_range_toggle.custom_minimum_size = Vector2(RANGE_TOGGLE_W, RANGE_TOGGLE_H)
+	_range_toggle.size = Vector2(RANGE_TOGGLE_W, RANGE_TOGGLE_H)
+	_range_toggle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_range_toggle)
+
+	# Single shared background panel behind both segments — gives the toggle a
+	# unified pill silhouette so the two halves read as one control. Each
+	# segment is a transparent Button overlaid on top + its own thin "active"
+	# StyleBoxFlat that only shows when selected.
+	var bg := Panel.new()
+	bg.size = Vector2(RANGE_TOGGLE_W, RANGE_TOGGLE_H)
+	bg.position = Vector2.ZERO
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bs := StyleBoxFlat.new()
+	bs.bg_color = Color(0.04, 0.06, 0.18, 0.85)
+	bs.set_corner_radius_all(int(RANGE_TOGGLE_H * 0.5))
+	bs.border_color = Color(0.55, 0.62, 0.95, 0.35)
+	bs.set_border_width_all(1)
+	bs.shadow_color = Color(0.20, 0.32, 0.85, 0.22)
+	bs.shadow_size = 10
+	bg.add_theme_stylebox_override("panel", bs)
+	_range_toggle.add_child(bg)
+
+	# Hairline separator down the middle so the two halves read distinctly even
+	# when neither is hovered. Slightly inset top/bottom for a refined look.
+	var sep := ColorRect.new()
+	sep.color = Color(0.62, 0.68, 0.95, 0.18)
+	sep.size = Vector2(1, RANGE_TOGGLE_H - 22.0)
+	sep.position = Vector2(RANGE_TOGGLE_W * 0.5 - 0.5, 11.0)
+	sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_range_toggle.add_child(sep)
+
+	var seg_w := RANGE_TOGGLE_W * 0.5
+	for i in RANGE_DEFS.size():
+		var def: Dictionary = RANGE_DEFS[i]
+		_range_segs.append(_make_range_seg(def, Vector2(i * seg_w, 0), Vector2(seg_w, RANGE_TOGGLE_H)))
+	_refresh_range_styles()
+
+# One half of the pill. The "active" stylebox is what visually selects the
+# segment — an accent rim + halo on top of the shared background.
+func _make_range_seg(def: Dictionary, pos: Vector2, size: Vector2) -> Dictionary:
+	var accent: Color = def["accent"]
+
+	var btn := Button.new()
+	btn.size = size
+	btn.position = pos
+	btn.pivot_offset = size * 0.5
+	btn.focus_mode = Control.FOCUS_NONE
+	# Active stylebox — only swapped onto the button when this segment is the
+	# current range. Inactive segments use a fully transparent style so the
+	# shared background panel shows through. The active fill is intentionally
+	# soft (low alpha) so the underlying glass tone still reads.
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(accent.r, accent.g, accent.b, 0.14)
+	s.set_corner_radius_all(int(size.y * 0.5))
+	s.border_color = Color(accent.r, accent.g, accent.b, 0.9)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(accent.r, accent.g, accent.b, 0.45)
+	s.shadow_size = 14
+	var empty := StyleBoxEmpty.new()
+	for st_name in ["normal", "hover", "pressed", "focus"]:
+		btn.add_theme_stylebox_override(st_name, empty)
+	btn.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0))
+	_range_toggle.add_child(btn)
+
+	var lbl := Label.new()
+	lbl.text = def["label"]
+	lbl.add_theme_font_size_override("font_size", 15)
+	lbl.add_theme_color_override("font_color", accent.lightened(0.05))
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(lbl)
+
+	btn.pressed.connect(func() -> void: _on_range(def["key"]))
+	return {"btn": btn, "stylebox": s, "label": lbl, "accent": accent, "key": def["key"]}
+
+func _refresh_range_styles() -> void:
+	for seg in _range_segs:
+		var active: bool = seg["key"] == _current_range
+		var accent: Color = seg["accent"]
+		var s: StyleBoxFlat = seg["stylebox"]
+		var btn: Button = seg["btn"]
+		var lbl: Label = seg["label"]
+		if active:
+			for st_name in ["normal", "hover", "pressed", "focus"]:
+				btn.add_theme_stylebox_override(st_name, s)
+			lbl.add_theme_color_override("font_color", accent.lightened(0.35))
+		else:
+			var empty := StyleBoxEmpty.new()
+			for st_name in ["normal", "hover", "pressed", "focus"]:
+				btn.add_theme_stylebox_override(st_name, empty)
+			lbl.add_theme_color_override("font_color", Color(0.62, 0.68, 0.92, 0.85))
+		create_tween().tween_property(btn, "scale",
+			Vector2.ONE * (1.05 if active else 1.0), 0.18) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _on_range(key: String) -> void:
+	if key == _current_range:
+		return
+	_current_range = key
+	_refresh_range_styles()
+	_update_title()
+	# Already-loaded range: just re-render from cache, no spinner. First time
+	# the user flips to a range we fetch and show the loading overlay.
+	if _loaded_ranges[_current_range]:
+		_render(_caches[_current_range].get(_current_diff, {}))
+	else:
+		_load_range(_current_range)
+
+func _title_for_range(range_key: String) -> String:
+	return "TODAY'S BEST" if range_key == RANGE_DAILY else "ALL-TIME BEST"
+
+func _update_title() -> void:
+	if _title_lbl:
+		_title_lbl.text = _title_for_range(_current_range)
 
 # ---------------- podium ----------------
 
@@ -797,10 +960,17 @@ func _make_list_row(rank: int, name: String, score: int, is_me: bool) -> Control
 	circle.size = Vector2(circle_d, circle_d)
 	circle.position = Vector2(14, (ROW_H - circle_d) * 0.5)
 	circle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Medal tint for the podium ranks so the top 3 rows echo the podium beside them.
+	var medal := Color(0.55, 0.50, 0.95, 0.75)
+	match rank:
+		1: medal = GOLD
+		2: medal = SILVER
+		3: medal = BRONZE
 	var cs := StyleBoxFlat.new()
-	cs.bg_color = Color(0.04, 0.05, 0.14, 0.0)
+	cs.bg_color = Color(medal.r, medal.g, medal.b, 0.10) if rank <= 3 \
+		else Color(0.04, 0.05, 0.14, 0.0)
 	cs.set_corner_radius_all(int(circle_d * 0.5))
-	cs.border_color = Color(0.55, 0.50, 0.95, 0.75)
+	cs.border_color = Color(medal.r, medal.g, medal.b, 0.95 if rank <= 3 else 0.75)
 	cs.set_border_width_all(2)
 	circle.add_theme_stylebox_override("panel", cs)
 	row.add_child(circle)
@@ -808,7 +978,8 @@ func _make_list_row(rank: int, name: String, score: int, is_me: bool) -> Control
 	var rank_lbl := Label.new()
 	rank_lbl.text = str(rank)
 	rank_lbl.add_theme_font_size_override("font_size", 18)
-	rank_lbl.add_theme_color_override("font_color", Color(0.88, 0.92, 1.0))
+	rank_lbl.add_theme_color_override("font_color",
+		medal.lightened(0.25) if rank <= 3 else Color(0.88, 0.92, 1.0))
 	rank_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	rank_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	rank_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -844,7 +1015,7 @@ func _make_list_row(rank: int, name: String, score: int, is_me: bool) -> Control
 func _render(d: Dictionary) -> void:
 	var rows: Array = d.get("rows", [])
 	_render_podium(rows)
-	_render_list(rows)
+	_render_list(rows, d.get("neighborhood", []), int(d.get("my_rank", 0)))
 
 func _render_podium(rows: Array) -> void:
 	for rank_idx in 3:
@@ -865,20 +1036,21 @@ func _render_podium(rows: Array) -> void:
 			slot["beam"].visible = false
 			slot["topper"].visible = false
 
-func _render_list(rows: Array) -> void:
-	# Keep _empty_lbl, drop the previous row Panels.
+func _render_list(rows: Array, neighborhood: Array, my_rank: int) -> void:
+	# Keep _empty_lbl, drop the previous row Panels + any prior divider.
 	for c in _list.get_children():
 		if c == _empty_lbl: continue
 		c.queue_free()
 
-	if rows.is_empty():
+	if rows.is_empty() and neighborhood.is_empty():
 		_empty_lbl.visible = true
 		return
 	_empty_lbl.visible = false
 
-	# Only ranks 4+ go in the scroll list. With <4 entries, the list is empty
-	# but the podium still shows whatever rows we have.
-	for i in range(3, rows.size()):
+	# The table is the full standings now (ranks 1..20); the podium to its right
+	# celebrates the same top 3, with their table rows medal-tinted to tie the two
+	# columns together. With <20 entries the list is just shorter.
+	for i in range(0, rows.size()):
 		var r: Dictionary = rows[i]
 		var rank := i + 1
 		var w := _make_list_row(rank,
@@ -892,6 +1064,88 @@ func _render_list(rows: Array) -> void:
 			w.modulate.a = 0.0
 			create_tween().tween_property(w, "modulate:a", 1.0, 0.3) \
 				.set_delay(0.04 * (rank - 3)).set_trans(Tween.TRANS_SINE)
+
+	# Neighborhood snippet — only present when the signed-in player is outside
+	# the top 20. Manager builds an 11-row max sequence centred on the player
+	# with explicit "rank" fields, so we just render them with a "⋯" divider
+	# in front to call out the gap.
+	if not neighborhood.is_empty() and rows.size() > 0:
+		var last_top_rank := rows.size()
+		# Top neighborhood row's rank > last_top_rank + 1 means there's a true
+		# gap; if it's exactly last_top_rank + 1 we'd be lying with a "⋯". In
+		# practice my_rank > GLOBAL_TOP_N gates this, so last_top_rank + 1 <
+		# top.rank is always true — but be defensive.
+		var top_n_rank := int((neighborhood[0] as Dictionary).get("rank", last_top_rank + 2))
+		if top_n_rank > last_top_rank + 1:
+			_list.add_child(_make_gap_divider(last_top_rank, top_n_rank, my_rank))
+		for r in neighborhood:
+			var entry: Dictionary = r
+			var nr := _make_list_row(int(entry.get("rank", 0)),
+				String(entry.get("name", "Player")),
+				int(entry.get("score", 0)),
+				bool(entry.get("is_me", false)))
+			_list.add_child(nr)
+
+# A compact "rank gap" indicator placed between the top-20 list and the
+# player's neighborhood snippet. Two thin lines on either side of a centred
+# "⋯" and a small "RANK N" hint, so the player understands their snippet
+# isn't fabricated — there really are N players hidden between.
+func _make_gap_divider(last_top_rank: int, next_rank: int, my_rank: int) -> Control:
+	const DIVIDER_H := 36.0
+	var hidden := next_rank - last_top_rank - 1
+	var row := Control.new()
+	row.custom_minimum_size = Vector2(LIST_W, DIVIDER_H)
+	row.size = Vector2(LIST_W, DIVIDER_H)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	# Two ColorRects framing a centred dots + label. They're absolute-positioned
+	# so the label can drift slightly with hidden-count digits without breaking.
+	var dots := Label.new()
+	dots.text = "⋯"
+	dots.add_theme_font_size_override("font_size", 26)
+	dots.add_theme_color_override("font_color", Color(0.65, 0.72, 1.0, 0.65))
+	dots.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dots.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	dots.size = Vector2(60, DIVIDER_H)
+	dots.position = Vector2((LIST_W - 60.0) * 0.5, 0)
+	dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(dots)
+
+	# Small "N players hidden" hint above the dots. Reads as a non-shouty
+	# explanation rather than a label that demands attention.
+	var hint := Label.new()
+	if hidden == 1:
+		hint.text = "1 player between"
+	else:
+		hint.text = "%d players between" % hidden
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color(0.74, 0.80, 1.0, 0.55))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	hint.size = Vector2(LIST_W, 14)
+	hint.position = Vector2(0, -2)
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(hint)
+
+	# Faint side-lines so the divider feels like a graphical break, not just text.
+	var line_w := (LIST_W - 120.0) * 0.5
+	var l1 := ColorRect.new()
+	l1.color = Color(0.42, 0.48, 0.82, 0.30)
+	l1.size = Vector2(line_w, 1)
+	l1.position = Vector2(0, DIVIDER_H * 0.62)
+	l1.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(l1)
+	var l2 := ColorRect.new()
+	l2.color = Color(0.42, 0.48, 0.82, 0.30)
+	l2.size = Vector2(line_w, 1)
+	l2.position = Vector2(LIST_W - line_w, DIVIDER_H * 0.62)
+	l2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(l2)
+
+	# Suppress unused-warning when the caller doesn't read these (we keep the
+	# args for future expansion — e.g. clickable "jump to my rank" affordance).
+	var _unused := my_rank
+	return row
 
 # ---------------- icons ----------------
 
@@ -1135,24 +1389,38 @@ func _layout() -> void:
 	if _header:
 		_header.position = Vector2(cx - _header.size.x * 0.5, top)
 
-	# Tabs sit just under the header.
+	# Two columns: a wide scrolling rank table on the left and the top-3 podium on
+	# the right. The TODAY/ALL-TIME toggle and the EASY/MOD/HARD difficulty tabs
+	# stack above the table (toggle row first, then tabs row), both left-aligned to
+	# the table so the controls read as belonging to it.
+	var margin := 56.0
+	var col_gap := 36.0
+	var table_x := margin
+	var nav_y := top + HEADER_H - 6.0
+	if _range_toggle:
+		_range_toggle.position = Vector2(table_x, nav_y)
+	var tabs_y := nav_y + RANGE_TOGGLE_H + 12.0
 	if _tab_row:
-		var row_w := TAB_DEFS.size() * TAB_W + (TAB_DEFS.size() - 1) * TAB_SEP
-		_tab_row.position = Vector2(cx - row_w * 0.5, top + HEADER_H + 8.0)
+		_tab_row.position = Vector2(table_x, tabs_y)
 
-	# Podium: directly under the tab row.
-	var podium_y := top + HEADER_H + 8.0 + TAB_H + 16.0
-	if _podium:
-		_layout_podium(cx, podium_y)
-
-	# List: under the podium, fills remaining vertical space.
-	var list_y := podium_y + PODIUM_H + 14.0
-	var list_bottom := sz.y - 16.0
+	# Table fills the vertical space under the tabs down to the bottom margin.
+	var table_y := tabs_y + TAB_H + 18.0
+	var table_bottom := sz.y - 24.0
 	if _scroll:
-		_scroll.position = Vector2(cx - LIST_W * 0.5, list_y)
-		_scroll.size = Vector2(LIST_W, maxf(60.0, list_bottom - list_y))
+		_scroll.position = Vector2(table_x, table_y)
+		_scroll.size = Vector2(LIST_W, maxf(60.0, table_bottom - table_y))
 	if _list:
 		_list.custom_minimum_size = Vector2(LIST_W, 0)
+
+	# Podium sits in the space to the right of the table, centered both within
+	# that space and vertically against the table's height.
+	var podium_region_x := table_x + LIST_W + col_gap
+	var podium_cx := podium_region_x + (sz.x - podium_region_x - margin) * 0.5
+	var podium_y := table_y + ((table_bottom - table_y) - PODIUM_H) * 0.5
+	if _podium:
+		_layout_podium(podium_cx, maxf(table_y, podium_y))
+
+	_layout_overlay()
 
 # Centers the podium horizontally at cx with a fixed display order (left → right:
 # rank 2, rank 1, rank 3). Slots stack onto a shared baseline (PODIUM_H), so the
@@ -1203,20 +1471,26 @@ func _start_animations() -> void:
 		pulse.tween_property(_orbs[i], "scale", Vector2.ONE, dur) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-# Header fades in first, then the orbit/back, then the tabs slide up.
+# Header fades in first, then the orbit/back, then the nav row slides up.
 func _intro() -> void:
 	for n in [_header, _orbit, _back]:
 		if n:
 			n.modulate.a = 0.0
 			create_tween().tween_property(n, "modulate:a", 1.0, 0.5).set_trans(Tween.TRANS_SINE)
-	if _tab_row:
-		_tab_row.modulate.a = 0.0
-		var base_y := _tab_row.position.y
-		_tab_row.position.y = base_y + 14.0
-		var tw := create_tween().set_parallel(true)
-		tw.tween_property(_tab_row, "modulate:a", 1.0, 0.4).set_delay(0.25)
-		tw.tween_property(_tab_row, "position:y", base_y, 0.4).set_delay(0.25) \
-			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# Toggle + tabs share the row, so they share the intro motion — both ride
+	# the same delay/duration so the row reads as one element settling in.
+	# Annotate the iterator as Control so the type inference for `base_y` lands
+	# on float (the array literal mixes Control + HBoxContainer types).
+	var row_nodes: Array[Control] = [_range_toggle, _tab_row]
+	for n in row_nodes:
+		if n:
+			n.modulate.a = 0.0
+			var base_y: float = n.position.y
+			n.position.y = base_y + 14.0
+			var tw := create_tween().set_parallel(true)
+			tw.tween_property(n, "modulate:a", 1.0, 0.4).set_delay(0.25)
+			tw.tween_property(n, "position:y", base_y, 0.4).set_delay(0.25) \
+				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	if _podium:
 		_podium.modulate.a = 0.0
 		create_tween().tween_property(_podium, "modulate:a", 1.0, 0.5) \
@@ -1224,20 +1498,65 @@ func _intro() -> void:
 
 # ---------------- data load ----------------
 
-func _load_all() -> void:
+# Screen-open load: fetch BOTH ranges so flipping the toggle is instant. ALL-TIME
+# is the default view, so we fetch + render it first (behind the loading screen),
+# then preload TODAY silently in the background. If the player flips to TODAY
+# before it lands they briefly see the spinner, then it fills in.
+func _load_initial() -> void:
 	_show_loading()
 	_load_token += 1
 	var token := _load_token
-	var result: Dictionary = await LeaderboardManager.load_all_globals()
+
+	var all_res := await LeaderboardManager.load_all_globals()
+	if token != _load_token:
+		return
+	if not all_res.get("ok", false):
+		_show_error()
+		return
+	_caches[RANGE_ALL] = all_res
+	_loaded_ranges[RANGE_ALL] = true
+	if _current_range == RANGE_ALL:
+		_hide_overlay()
+		_render(_caches[RANGE_ALL].get(_current_diff, {}))
+
+	# Background-load TODAY. A toggle flip mid-flight bumps _load_token, so this
+	# bails harmlessly and the flip's own _load_range takes over.
+	var daily_res := await LeaderboardManager.load_all_dailies()
+	if token != _load_token:
+		return
+	if daily_res.get("ok", false):
+		_caches[RANGE_DAILY] = daily_res
+		_loaded_ranges[RANGE_DAILY] = true
+		# Player already flipped to TODAY while it was loading — render now.
+		if _current_range == RANGE_DAILY:
+			_hide_overlay()
+			_render(_caches[RANGE_DAILY].get(_current_diff, {}))
+
+# Re-entrant: bumps the token so any in-flight load from a previous range/diff
+# becomes a no-op when it returns. Always fetches the CURRENT range; the other
+# range stays in its cache (or empty until the user flips to it).
+func _load_range(range_key: String) -> void:
+	_show_loading()
+	_load_token += 1
+	var token := _load_token
+	var result: Dictionary
+	if range_key == RANGE_DAILY:
+		result = await LeaderboardManager.load_all_dailies()
+	else:
+		result = await LeaderboardManager.load_all_globals()
 	if token != _load_token:
 		return
 	if not result.get("ok", false):
 		_show_error()
 		return
-	_data = result
-	_loaded = true
-	_hide_overlay()
-	_render(_data.get(_current_diff, {}))
+	_caches[range_key] = result
+	_loaded_ranges[range_key] = true
+	# Only render if the player is still looking at the range we just loaded
+	# (they may have flipped the toggle while it was in flight; that case
+	# already triggered a separate _load_range for the new range).
+	if range_key == _current_range:
+		_hide_overlay()
+		_render(_caches[range_key].get(_current_diff, {}))
 
 # ---------------- overlay ----------------
 
@@ -1245,18 +1564,59 @@ func _build_overlay() -> void:
 	_overlay = Panel.new()
 	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0, 0, 0, 0.55)
+	# Near-opaque deep navy — fully hides the empty board so this reads as a
+	# loading screen, not a spinner sitting on top of blank table rows.
+	s.bg_color = Color(0.008, 0.020, 0.075, 0.985)
 	_overlay.add_theme_stylebox_override("panel", s)
 	add_child(_overlay)
 
+	# --- loading spinner (orbiting orbs + caption) ---
+	_ov_spinner = Control.new()
+	_ov_spinner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_overlay.add_child(_ov_spinner)
+
+	_ov_orbit = Node2D.new()
+	_ov_spinner.add_child(_ov_orbit)
+	var ring := _make_ring(2.0, Color(0.45, 0.55, 1.0, 0.18))
+	var pts := PackedVector2Array()
+	var n := 64
+	var r := 52.0
+	for i in n + 1:
+		var a: float = TAU * float(i) / n
+		pts.append(Vector2(cos(a), sin(a)) * r)
+	ring.points = pts
+	_ov_orbit.add_child(ring)
+	_ov_orbs.clear()
+	for i in ORB_COLORS.size():
+		var orb := _make_orb(ORB_COLORS[i])
+		orb.scale = Vector2.ONE * 0.62          # smaller than the page orbs
+		var a: float = -PI * 0.5 + i * TAU / ORB_COLORS.size()
+		orb.position = Vector2(cos(a), sin(a)) * r
+		_ov_orbit.add_child(orb)
+		_ov_orbs.append(orb)
+
+	_ov_caption = Label.new()
+	_ov_caption.text = "Loading leaderboards"
+	_ov_caption.add_theme_font_size_override("font_size", 24)
+	_ov_caption.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.92))
+	_ov_caption.add_theme_color_override("font_shadow_color", Color(0.30, 0.45, 1.0, 0.35))
+	_ov_caption.add_theme_constant_override("shadow_offset_x", 0)
+	_ov_caption.add_theme_constant_override("shadow_offset_y", 0)
+	_ov_caption.add_theme_constant_override("shadow_outline_size", 6)
+	_ov_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ov_caption.size = Vector2(360, 32)
+	_ov_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ov_spinner.add_child(_ov_caption)
+
+	# --- error box (message + retry) ---
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_overlay.add_child(center)
 
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 16)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	center.add_child(box)
+	_ov_box = VBoxContainer.new()
+	_ov_box.add_theme_constant_override("separation", 16)
+	_ov_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(_ov_box)
 
 	_overlay_msg = Label.new()
 	_overlay_msg.add_theme_font_size_override("font_size", 24)
@@ -1264,7 +1624,7 @@ func _build_overlay() -> void:
 	_overlay_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_overlay_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_overlay_msg.custom_minimum_size = Vector2(520, 0)
-	box.add_child(_overlay_msg)
+	_ov_box.add_child(_overlay_msg)
 
 	_overlay_retry = Button.new()
 	_overlay_retry.text = "Try Again"
@@ -1281,24 +1641,55 @@ func _build_overlay() -> void:
 	np.bg_color = Color(0.18, 0.34, 0.52)
 	_overlay_retry.add_theme_stylebox_override("pressed", np)
 	_overlay_retry.add_theme_color_override("font_color", Color.WHITE)
-	_overlay_retry.pressed.connect(_load_all)
-	box.add_child(_overlay_retry)
+	_overlay_retry.pressed.connect(func() -> void: _load_range(_current_range))
+	_ov_box.add_child(_overlay_retry)
+
+	# Perpetual spinner motion (rotation + per-orb pulse + caption dots). Cheap to
+	# leave running; the whole overlay just hides when not loading.
+	var rot := create_tween().set_loops()
+	rot.tween_property(_ov_orbit, "rotation", TAU, 2.6).from(0.0).set_trans(Tween.TRANS_LINEAR)
+	for i in _ov_orbs.size():
+		var dur := 0.7 + i * 0.05
+		var base := _ov_orbs[i].scale
+		var pulse := create_tween().set_loops()
+		pulse.tween_property(_ov_orbs[i], "scale", base * 1.14, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		pulse.tween_property(_ov_orbs[i], "scale", base, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var dots := create_tween().set_loops()
+	dots.tween_interval(0.35)
+	dots.tween_callback(_ov_tick_dots)
 
 	_overlay.visible = false
 
-func _show_loading() -> void:
+func _ov_tick_dots() -> void:
+	if _ov_caption == null or not _ov_caption.visible:
+		return
+	_ov_dots_idx = (_ov_dots_idx + 1) % 4
+	_ov_caption.text = "Loading leaderboards" + ".".repeat(_ov_dots_idx)
+
+func _layout_overlay() -> void:
+	if _overlay == null:
+		return
 	var sz := get_viewport_rect().size
 	_overlay.position = Vector2.ZERO
 	_overlay.size = sz
+	if _ov_orbit:
+		_ov_orbit.position = Vector2(sz.x * 0.5, sz.y * 0.45)
+	if _ov_caption:
+		_ov_caption.position = Vector2(sz.x * 0.5 - 180, sz.y * 0.45 + 86)
+
+func _show_loading() -> void:
+	_layout_overlay()
 	_overlay.visible = true
-	_overlay_msg.text = "Loading leaderboards..."
-	_overlay_retry.visible = false
+	_ov_spinner.visible = true
+	_ov_box.visible = false
 
 func _show_error() -> void:
-	var sz := get_viewport_rect().size
-	_overlay.position = Vector2.ZERO
-	_overlay.size = sz
+	_layout_overlay()
 	_overlay.visible = true
+	_ov_spinner.visible = false
+	_ov_box.visible = true
 	_overlay_msg.text = "Our servers are currently down.\nPlease try again soon."
 	_overlay_retry.visible = true
 

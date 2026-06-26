@@ -14,6 +14,7 @@ extends Control
 # Everything is laid out symmetrically and re-flowed in _layout() on resize.
 
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
+const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
 
 var game_manager: Node
 
@@ -99,11 +100,14 @@ var _signing_in := false
 # at a fixed corner here. Daily-claim button sits just under it.
 var _coin_pill: Panel
 var _coin_lbl: Label
+var _coin_plus_btn: Button       # opens the coin-pack purchase popup
 var _coin_loading_tween: Tween   # animates "." -> ".." -> "..." while CoinsManager loads
 var _coin_loading_idx: int = 0
 var _daily_btn: Button
 var _daily_badge: Panel
 var _settings_music_btn: Button
+# Tiny, low-key credit line pinned to the very bottom edge.
+var _credits: Label
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -119,6 +123,7 @@ func _ready() -> void:
 	_build_cards()
 	_build_start()
 	_build_profile_card()
+	_build_credits()
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
 		_build_daily_claim_button()
@@ -845,6 +850,44 @@ func _draw_arrow(c: Control) -> void:
 	c.draw_polyline(PackedVector2Array([Vector2(8, 5), Vector2(16, 12), Vector2(8, 19)]),
 		Color.WHITE, 3.0, true)
 
+# Small gift box glyph drawn inside the daily-claim disc: cream lid + body
+# with a vertical ribbon and a bow knot on top. Scales to the 34px disc.
+func _draw_gift_icon(c: Control) -> void:
+	var ctr := c.size * 0.5
+	var box_w := 18.0
+	var box_h := 14.0
+	var lid_h := 5.0
+	var box_top := ctr.y - box_h * 0.5 + 1.0
+	var cream := Color(1.0, 0.96, 0.86)
+	var ribbon := Color(0.95, 0.85, 0.30)
+	# Body + lid
+	c.draw_rect(Rect2(ctr.x - box_w * 0.5, box_top, box_w, box_h), cream)
+	c.draw_rect(Rect2(ctr.x - box_w * 0.5 - 1.0, box_top - lid_h, box_w + 2.0, lid_h), cream.darkened(0.06))
+	# Vertical ribbon
+	c.draw_rect(Rect2(ctr.x - 1.5, box_top - lid_h, 3.0, box_h + lid_h), ribbon)
+	# Bow knot — two small ellipses
+	c.draw_circle(Vector2(ctr.x - 3.5, box_top - lid_h - 1.0), 3.0, ribbon)
+	c.draw_circle(Vector2(ctr.x + 3.5, box_top - lid_h - 1.0), 3.0, ribbon)
+	c.draw_circle(Vector2(ctr.x, box_top - lid_h - 1.0), 1.6, ribbon.darkened(0.20))
+
+# A right-pointing ">" chevron drawn dead-center in the daily-claim arrow disc.
+# Two antialiased strokes meeting at the right vertex. A bare bbox-centered
+# chevron looks shoved left because its mass (the two open arm-ends) sits on
+# the left while only the single vertex pokes right — its centroid lands at
+# x = ctr - reach/3. We nudge the whole mark right by reach/3 so that centroid
+# falls on the disc's midline and it reads as centered.
+func _draw_daily_chevron(c: Control) -> void:
+	var ctr := c.size * 0.5
+	var half_h := c.size.y * 0.22       # vertical reach of each arm
+	var reach := c.size.x * 0.16        # horizontal half-span
+	var nudge := reach / 3.0            # optical-centroid correction
+	var col := Color.WHITE
+	var w := 3.0
+	var tip := Vector2(ctr.x + reach + nudge, ctr.y)
+	var top := Vector2(ctr.x - reach + nudge, ctr.y - half_h)
+	var bot := Vector2(ctr.x - reach + nudge, ctr.y + half_h)
+	c.draw_polyline(PackedVector2Array([top, tip, bot]), col, w, true)
+
 func _draw_gear(c: Control) -> void:
 	var col := Color(0.82, 0.84, 0.96)
 	var ctr := Vector2(12, 12)
@@ -871,6 +914,25 @@ func _on_lm_release(art: Control) -> void:
 	tw.tween_property(art, "scale", Vector2.ONE, 0.22) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(art, "modulate", Color.WHITE, 0.18)
+
+# ---------------- credits ----------------
+
+# A single faint, lightweight line pinned to the bottom edge. Lavender to match the
+# subtitle, low alpha + a whisper of glow so it reads as a quiet signature — never
+# competing with the START orb or the cards above it.
+func _build_credits() -> void:
+	_credits = Label.new()
+	_credits.text = "Game by Raviach Studios   ·   Music by @drorbardavid"
+	_credits.add_theme_font_size_override("font_size", 13)
+	_credits.add_theme_color_override("font_color", Color(0.74, 0.72, 1.0, 0.45))
+	_credits.add_theme_color_override("font_shadow_color", Color(0.40, 0.36, 1.0, 0.22))
+	_credits.add_theme_constant_override("shadow_offset_x", 0)
+	_credits.add_theme_constant_override("shadow_offset_y", 0)
+	_credits.add_theme_constant_override("shadow_outline_size", 4)
+	_credits.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_credits.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_credits.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_credits)
 
 # ---------------- layout ----------------
 
@@ -908,6 +970,11 @@ func _layout() -> void:
 
 	if _profile_card:
 		_profile_card.position = Vector2(sz.x - _profile_card.size.x - 16.0, 14.0)
+
+	# credits tuck into the bottom-right corner, right-aligned with a small margin
+	if _credits:
+		_credits.size = Vector2(sz.x - 32.0, 18.0)
+		_credits.position = Vector2(16.0, sz.y - 22.0)
 
 # Position a card's wrapper at `pos` (top-left). No-op for an absent card.
 func _place_card(card: Dictionary, pos: Vector2) -> void:
@@ -1030,54 +1097,114 @@ func _build_profile_card() -> void:
 
 # ---------------- coin pill + daily claim (top-left) ----------------
 
-# Gold coin pill anchored at the top-LEFT (the account card lives top-right).
-# Stays live via CoinsManager.balance_changed — buying / claiming / earning
-# during a game all update it on return.
+# Glassmorphism currency pill anchored at the top-LEFT. Dark navy pill with a
+# thin neon border and a soft outer purple aura; gold coin disc on the left,
+# bold comma-formatted balance in the middle, a hairline separator, and a small
+# gold circular "+" on the far right that opens the purchase popup. Stays live
+# via CoinsManager.balance_changed.
+const COIN_PILL_W := 230.0
+const COIN_PILL_H := 56.0
+const HUD_TOP := 18.0
+const HUD_LEFT := 18.0
+const HUD_GAP := 16.0
+
 func _build_coin_pill() -> void:
-	const PW := 160.0
-	const PH := 44.0
 	_coin_pill = Panel.new()
-	_coin_pill.position = Vector2(16, 16)
-	_coin_pill.size = Vector2(PW, PH)
+	_coin_pill.position = Vector2(HUD_LEFT, HUD_TOP)
+	_coin_pill.size = Vector2(COIN_PILL_W, COIN_PILL_H)
 	_coin_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.06, 0.07, 0.18, 0.88)
-	st.set_corner_radius_all(int(PH * 0.5))
-	st.border_color = Color(1.0, 0.78, 0.22, 0.85)
-	st.set_border_width_all(2)
-	st.shadow_color = Color(1.0, 0.78, 0.22, 0.35)
-	st.shadow_size = 10
+	# Dark navy glass face. The thin neon-blue border + purple outer shadow
+	# read as a sci-fi pill rather than a flat chip.
+	st.bg_color = Color(0.03, 0.04, 0.12, 0.90)
+	st.set_corner_radius_all(int(COIN_PILL_H * 0.5))
+	st.border_color = Color(0.55, 0.62, 1.0, 0.55)
+	st.set_border_width_all(1)
+	# Outer purple aura.
+	st.shadow_color = Color(0.55, 0.36, 1.0, 0.40)
+	st.shadow_size = 14
+	st.shadow_offset = Vector2(0, 2)
 	_coin_pill.add_theme_stylebox_override("panel", st)
 	add_child(_coin_pill)
 
-	# Tiny gold disc + "$" — same shape as the in-game HUD icon for consistency.
+	# Glossy gold coin disc — rim + face + highlight. Soft golden glow halo
+	# behind it sells the "premium currency" read.
+	var d := 40.0
+	var disc_x := 8.0
+	var disc_y := (COIN_PILL_H - d) * 0.5
+	var glow := Panel.new()
+	glow.size = Vector2(d + 12, d + 12)
+	glow.position = Vector2(disc_x - 6, disc_y - 6)
+	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var gs := StyleBoxFlat.new()
+	gs.bg_color = Color(1.0, 0.78, 0.22, 0.0)
+	gs.set_corner_radius_all(int((d + 12) * 0.5))
+	gs.shadow_color = Color(1.0, 0.78, 0.22, 0.55)
+	gs.shadow_size = 10
+	glow.add_theme_stylebox_override("panel", gs)
+	_coin_pill.add_child(glow)
+
 	var disc := Panel.new()
-	var d := 24.0
 	disc.size = Vector2(d, d)
-	disc.position = Vector2(10, (PH - d) * 0.5)
+	disc.position = Vector2(disc_x, disc_y)
 	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var ds := StyleBoxFlat.new()
-	ds.bg_color = Color(1.0, 0.78, 0.16)
+	ds.bg_color = Color(1.0, 0.80, 0.22)
 	ds.set_corner_radius_all(int(d * 0.5))
-	ds.border_color = Color(1.0, 0.92, 0.55)
+	ds.border_color = Color(1.0, 0.95, 0.62)
 	ds.set_border_width_all(2)
 	disc.add_theme_stylebox_override("panel", ds)
 	_coin_pill.add_child(disc)
+	# Highlight crescent: tiny lighter disc nudged to the top-left for gloss.
+	var hl := Panel.new()
+	var hd := d * 0.38
+	hl.size = Vector2(hd, hd)
+	hl.position = Vector2(d * 0.18, d * 0.14)
+	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hs := StyleBoxFlat.new()
+	hs.bg_color = Color(1.0, 1.0, 0.85, 0.55)
+	hs.set_corner_radius_all(int(hd * 0.5))
+	hl.add_theme_stylebox_override("panel", hs)
+	disc.add_child(hl)
 	var glyph := Label.new()
 	glyph.text = "$"
-	glyph.add_theme_font_size_override("font_size", 18)
-	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	glyph.add_theme_font_size_override("font_size", 24)
+	glyph.add_theme_color_override("font_color", Color(0.40, 0.24, 0.02))
+	glyph.add_theme_color_override("font_outline_color", Color(0.40, 0.24, 0.02))
+	glyph.add_theme_constant_override("outline_size", 2)
 	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
 	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	disc.add_child(glyph)
 
+	# Plus-button geometry, used to compute label width + separator position.
+	var plus_d := 36.0
+	var plus_x := COIN_PILL_W - plus_d - 8.0
+	var sep_x := plus_x - 10.0
+
+	# Hairline vertical separator just before the "+" disc — gives the pill the
+	# segmented "balance / action" reading from the reference art.
+	var sep := ColorRect.new()
+	sep.color = Color(0.65, 0.72, 1.0, 0.25)
+	sep.size = Vector2(1, COIN_PILL_H - 22.0)
+	sep.position = Vector2(sep_x, 11.0)
+	sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_coin_pill.add_child(sep)
+
+	# Balance label sits between the gold disc and the separator. Bold-ish via
+	# a 1px outline; soft gold shadow so the text feels like it lives in the
+	# same world as the coin.
 	_coin_lbl = Label.new()
 	_coin_lbl.add_theme_font_size_override("font_size", 22)
-	_coin_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
-	_coin_lbl.position = Vector2(40, 0)
-	_coin_lbl.size = Vector2(PW - 50, PH)
+	_coin_lbl.add_theme_color_override("font_color", Color.WHITE)
+	_coin_lbl.add_theme_color_override("font_outline_color", Color.WHITE)
+	_coin_lbl.add_theme_constant_override("outline_size", 1)
+	_coin_lbl.add_theme_color_override("font_shadow_color", Color(1.0, 0.80, 0.30, 0.35))
+	_coin_lbl.add_theme_constant_override("shadow_outline_size", 4)
+	var lbl_x := disc_x + d + 8.0
+	_coin_lbl.position = Vector2(lbl_x, 0)
+	_coin_lbl.size = Vector2(sep_x - lbl_x - 4.0, COIN_PILL_H)
 	_coin_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_coin_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_coin_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1087,7 +1214,7 @@ func _build_coin_pill() -> void:
 	# the placeholder "0" — otherwise the pill flashes "0" for a beat then snaps
 	# to the real balance, which reads as "you have nothing" on every open.
 	if CoinsManager.is_loaded():
-		_coin_lbl.text = str(CoinsManager.balance)
+		_coin_lbl.text = _comma_int(CoinsManager.balance)
 	else:
 		_start_coin_loading_anim()
 
@@ -1095,10 +1222,66 @@ func _build_coin_pill() -> void:
 	# After sign-in CoinsManager may load asynchronously; reflect the final value.
 	CoinsManager.loaded.connect(func() -> void: _on_balance_changed(CoinsManager.balance))
 
+	_build_coin_plus_button(plus_d, plus_x)
+
+# Circular gold "+" tucked at the right end of the coin pill — opens the
+# real-money purchase popup. Carries its own golden glow ring so it pops off
+# the dark glass, and breathes a slow heartbeat to read as actionable.
+func _build_coin_plus_button(d: float, x_in_pill: float) -> void:
+	var py := HUD_TOP + (COIN_PILL_H - d) * 0.5
+	var px := HUD_LEFT + x_in_pill
+	_coin_plus_btn = Button.new()
+	_coin_plus_btn.text = "+"
+	_coin_plus_btn.size = Vector2(d, d)
+	_coin_plus_btn.position = Vector2(px, py)
+	_coin_plus_btn.pivot_offset = Vector2(d, d) * 0.5
+	_coin_plus_btn.add_theme_font_size_override("font_size", 24)
+	_coin_plus_btn.focus_mode = Control.FOCUS_NONE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(1.0, 0.78, 0.22)                      # rich gold
+	s.set_corner_radius_all(int(d * 0.5))
+	s.border_color = Color(1.0, 0.94, 0.60)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(1.0, 0.78, 0.22, 0.65)            # golden bloom
+	s.shadow_size = 12
+	_coin_plus_btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(1.0, 0.86, 0.36)
+	_coin_plus_btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.86, 0.62, 0.12)
+	_coin_plus_btn.add_theme_stylebox_override("pressed", sp)
+	_coin_plus_btn.add_theme_color_override("font_color", Color(0.32, 0.18, 0.0))
+	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(0.32, 0.18, 0.0))
+	_coin_plus_btn.pressed.connect(_open_coins_popup)
+	add_child(_coin_plus_btn)
+
+	# Gentle pulse so the "+" reads as an actionable affordance.
+	var pulse := create_tween().set_loops()
+	pulse.tween_property(_coin_plus_btn, "scale", Vector2.ONE * 1.06, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pulse.tween_property(_coin_plus_btn, "scale", Vector2.ONE, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+func _open_coins_popup() -> void:
+	var popup := CoinsPurchasePopup.new()
+	add_child(popup)
+
+func _comma_int(n: int) -> String:
+	# 1234567 -> "1,234,567". Used for both the persistent balance HUD and any
+	# transient toasts so the formatting stays consistent across the app.
+	var s := str(n)
+	var out := ""
+	for i in s.length():
+		if i > 0 and (s.length() - i) % 3 == 0:
+			out += ","
+		out += s[i]
+	return out
+
 func _on_balance_changed(new_balance: int) -> void:
 	if _coin_lbl:
 		_stop_coin_loading_anim()
-		_coin_lbl.text = str(new_balance)
+		_coin_lbl.text = _comma_int(new_balance)
 
 func _start_coin_loading_anim() -> void:
 	if not _coin_lbl:
@@ -1120,42 +1303,139 @@ func _stop_coin_loading_anim() -> void:
 		_coin_loading_tween.kill()
 	_coin_loading_tween = null
 
-# Daily claim button — anchored on the LEFT, directly under the coin pill. Opens a
-# modal popup with the 14-day streak grid. A small red dot badges the button when
-# a claim is available.
+# Daily-claim chip — sits to the right of the coin pill as a matching glass
+# pill: purple gift disc on the left, bold "Daily Claim" label, and a small
+# purple arrow disc on the far right that hints at "tap to open". Outer purple
+# aura ties it visually to the coin pill's sci-fi treatment. A small red dot
+# badges the gift disc when a claim is available.
+const DAILY_PILL_W := 230.0
+
 func _build_daily_claim_button() -> void:
-	const W := 200.0
-	var x := 16.0
-	var y := 78.0                                      # 16 (pill y) + 44 (pill h) + ~18 gap
+	var x := HUD_LEFT + COIN_PILL_W + HUD_GAP
+	var y := HUD_TOP
+	var ph := COIN_PILL_H
 
 	_daily_btn = Button.new()
-	_daily_btn.text = "🎁  Daily Claim"
 	_daily_btn.position = Vector2(x, y)
-	_daily_btn.size = Vector2(W, 44)
+	_daily_btn.size = Vector2(DAILY_PILL_W, ph)
 	_daily_btn.focus_mode = Control.FOCUS_NONE
-	_daily_btn.add_theme_font_size_override("font_size", 17)
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.06, 0.07, 0.18, 0.88)
-	s.set_corner_radius_all(22)
-	s.border_color = Color(1.0, 0.78, 0.22, 0.85)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(1.0, 0.78, 0.22, 0.30)
-	s.shadow_size = 10
+	s.bg_color = Color(0.03, 0.04, 0.12, 0.90)
+	s.set_corner_radius_all(int(ph * 0.5))
+	s.border_color = Color(0.78, 0.62, 1.0, 0.55)
+	s.set_border_width_all(1)
+	s.shadow_color = Color(0.55, 0.36, 1.0, 0.40)
+	s.shadow_size = 14
+	s.shadow_offset = Vector2(0, 2)
 	_daily_btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.10, 0.12, 0.26, 0.95)
+	sh.bg_color = Color(0.08, 0.08, 0.20, 0.95)
 	_daily_btn.add_theme_stylebox_override("hover", sh)
 	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.04, 0.05, 0.14, 1.0)
+	sp.bg_color = Color(0.02, 0.02, 0.10, 1.0)
 	_daily_btn.add_theme_stylebox_override("pressed", sp)
-	_daily_btn.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
+	_daily_btn.text = ""                                # label is overlaid below
 	_daily_btn.pressed.connect(_open_daily_popup)
 	add_child(_daily_btn)
 
-	# Small pulsing red "claim available" notification dot.
+	# Geometry: purple disc on left, arrow disc on right, centered label between.
+	var d := 40.0
+	var disc_x := x + 8.0
+	var disc_y := y + (ph - d) * 0.5
+	var arrow_d := 32.0
+	var arrow_x := x + DAILY_PILL_W - arrow_d - 10.0
+	var arrow_y := y + (ph - arrow_d) * 0.5
+
+	# Soft purple aura behind the gift disc (drawn as an empty panel with shadow).
+	var glow := Panel.new()
+	glow.size = Vector2(d + 12, d + 12)
+	glow.position = Vector2(disc_x - 6, disc_y - 6)
+	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var gs := StyleBoxFlat.new()
+	gs.bg_color = Color(0.55, 0.36, 1.0, 0.0)
+	gs.set_corner_radius_all(int((d + 12) * 0.5))
+	gs.shadow_color = Color(0.62, 0.36, 1.0, 0.55)
+	gs.shadow_size = 10
+	glow.add_theme_stylebox_override("panel", gs)
+	add_child(glow)
+
+	# Purple gift disc — glossy, with a small highlight + the gift glyph inside.
+	var disc := Panel.new()
+	disc.size = Vector2(d, d)
+	disc.position = Vector2(disc_x, disc_y)
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(0.66, 0.36, 1.0)        # vivid purple
+	ds.set_corner_radius_all(int(d * 0.5))
+	ds.border_color = Color(0.90, 0.70, 1.0)
+	ds.set_border_width_all(2)
+	disc.add_theme_stylebox_override("panel", ds)
+	add_child(disc)
+	var hl := Panel.new()
+	var hd := d * 0.36
+	hl.size = Vector2(hd, hd)
+	hl.position = Vector2(d * 0.18, d * 0.14)
+	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hs := StyleBoxFlat.new()
+	hs.bg_color = Color(1.0, 0.95, 1.0, 0.45)
+	hs.set_corner_radius_all(int(hd * 0.5))
+	hl.add_theme_stylebox_override("panel", hs)
+	disc.add_child(hl)
+
+	# Tiny procedural gift box inside the disc (lid + body + ribbon).
+	var gift := Control.new()
+	gift.size = Vector2(d, d)
+	gift.position = Vector2.ZERO
+	gift.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gift.draw.connect(_draw_gift_icon.bind(gift))
+	disc.add_child(gift)
+
+	# Centered "Daily Claim" label between disc and arrow.
+	var lbl := Label.new()
+	lbl.text = "Daily Claim"
+	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.add_theme_color_override("font_outline_color", Color.WHITE)
+	lbl.add_theme_constant_override("outline_size", 1)
+	lbl.add_theme_color_override("font_shadow_color", Color(0.62, 0.36, 1.0, 0.40))
+	lbl.add_theme_constant_override("shadow_outline_size", 4)
+	var lbl_x := disc_x + d + 6.0
+	lbl.position = Vector2(lbl_x, y)
+	lbl.size = Vector2(arrow_x - lbl_x - 6.0, ph)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(lbl)
+
+	# Small purple arrow disc on the far right. Drawn as a glossy circle with
+	# a chevron glyph; sits over the pill so the whole widget reads as one.
+	var arrow := Panel.new()
+	arrow.size = Vector2(arrow_d, arrow_d)
+	arrow.position = Vector2(arrow_x, arrow_y)
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var asx := StyleBoxFlat.new()
+	asx.bg_color = Color(0.55, 0.30, 0.96)
+	asx.set_corner_radius_all(int(arrow_d * 0.5))
+	asx.border_color = Color(0.86, 0.66, 1.0)
+	asx.set_border_width_all(2)
+	asx.shadow_color = Color(0.55, 0.30, 0.96, 0.60)
+	asx.shadow_size = 10
+	arrow.add_theme_stylebox_override("panel", asx)
+	add_child(arrow)
+	# Procedurally drawn ">" chevron, centered in the disc — avoids relying on a
+	# glyph whose baseline/metrics shift the mark off-center per font.
+	var chevron := Control.new()
+	chevron.size = Vector2(arrow_d, arrow_d)
+	chevron.position = Vector2.ZERO
+	chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chevron.draw.connect(_draw_daily_chevron.bind(chevron))
+	arrow.add_child(chevron)
+
+	# Small pulsing red "claim available" notification dot on the top-right of
+	# the gift disc so it pops against the purple.
 	_daily_badge = Panel.new()
 	_daily_badge.size = Vector2(14, 14)
-	_daily_badge.position = Vector2(x + W - 18, y + 4)
+	_daily_badge.position = Vector2(disc_x + d - 8, disc_y - 4)
 	_daily_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bs := StyleBoxFlat.new()
 	bs.bg_color = Color(0.95, 0.18, 0.18)
@@ -1254,15 +1534,29 @@ func _toggle_music() -> void:
 	if _settings_music_btn and is_instance_valid(_settings_music_btn):
 		_settings_music_btn.text = "Music:  %s" % ("On" if AudioManager.is_music_on() else "Off")
 
-# ---------------- welcome popup (sign in / play as guest) ----------------
+# ---------------- sign-in popup (welcome + feature gates) ----------------
 
-# Modal shown on the first home open of a launch when signed out. A dimmed
-# backdrop blocks the menu behind it; the player must choose. "Sign In" runs the
-# same flow as the profile-card sign-in; "Play as Guest" just dismisses.
+# First-launch welcome popup: shown once per launch (gated on welcome_prompt_shown
+# in _ready) when signed out. The player must pick sign in or guest before they
+# can interact with the menu.
 func _show_welcome_popup() -> void:
+	_show_sign_in_popup(
+		"Welcome to Simon",
+		"Sign in to save your coins, climb the leaderboards and claim daily rewards — or jump straight in as a guest.",
+		"Play as Guest")
+
+# Feature-gate popup: shown when a guest taps Shop or Leaderboards. Same
+# visual, but the secondary action is "Maybe Later" — the user is already
+# playing as a guest, so "Play as Guest" would be redundant copy.
+func _show_sign_in_required_popup(title_text: String, subtitle_text: String) -> void:
+	_show_sign_in_popup(title_text, subtitle_text, "Maybe Later")
+
+# Shared builder for both popup variants. Caller passes the title / subtitle
+# copy and the label for the secondary (dismiss) button.
+func _show_sign_in_popup(title_text: String, subtitle_text: String, secondary_label: String) -> void:
 	var sz := get_viewport_rect().size
 	var overlay := Control.new()
-	overlay.name = "WelcomePopup"
+	overlay.name = "SignInPopup"
 	overlay.position = Vector2.ZERO
 	overlay.size = sz
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP   # eat clicks meant for the menu
@@ -1292,7 +1586,7 @@ func _show_welcome_popup() -> void:
 	overlay.add_child(panel)
 
 	var title := Label.new()
-	title.text = "Welcome to Simon"
+	title.text = title_text
 	title.add_theme_font_size_override("font_size", 34)
 	title.add_theme_color_override("font_color", Color.WHITE)
 	title.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.45))
@@ -1306,7 +1600,7 @@ func _show_welcome_popup() -> void:
 	panel.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "Sign in to save your coins, climb the leaderboards and claim daily rewards — or jump straight in as a guest."
+	sub.text = subtitle_text
 	sub.add_theme_font_size_override("font_size", 17)
 	sub.add_theme_color_override("font_color", Color(0.76, 0.80, 1.0, 0.90))
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1318,10 +1612,10 @@ func _show_welcome_popup() -> void:
 
 	var bw := PW - 80.0
 	var sign_in_btn := _make_popup_button(panel, "Sign In", Vector2(40, 196), Vector2(bw, 56),
-		Color(0.15, 0.6, 0.95), _welcome_sign_in.bind(overlay))
+		Color(0.15, 0.6, 0.95), _popup_sign_in.bind(overlay))
 	sign_in_btn.add_theme_font_size_override("font_size", 22)
 
-	_make_popup_button(panel, "Play as Guest", Vector2(40, 264), Vector2(bw, 56),
+	_make_popup_button(panel, secondary_label, Vector2(40, 264), Vector2(bw, 56),
 		Color(0.16, 0.18, 0.34), overlay.queue_free)
 
 	# Gentle entrance: fade + scale-pop on the panel.
@@ -1333,8 +1627,8 @@ func _show_welcome_popup() -> void:
 	tw.tween_property(panel, "scale", Vector2.ONE, 0.30) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
-# Dismiss the welcome popup and run the normal sign-in flow.
-func _welcome_sign_in(overlay: Control) -> void:
+# Dismiss the sign-in popup and run the normal sign-in flow.
+func _popup_sign_in(overlay: Control) -> void:
 	overlay.queue_free()
 	_on_sign_in()
 
@@ -1372,23 +1666,36 @@ func _on_how() -> void:
 	game_manager.show_how_to_play()
 
 func _on_shop() -> void:
-	# The shop needs a wallet — guests are routed through sign-in first.
+	# The shop needs a wallet — guests get the sign-in popup, not a direct
+	# auth flow, so they can choose whether to commit.
 	if FirebaseManager.is_signed_in():
 		game_manager.show_shop()
 	else:
-		_on_sign_in()
+		_show_sign_in_required_popup(
+			"Sign In to Open the Shop",
+			"Sign in to save your coins and purchases across devices — or come back later.")
 
 func _on_leaderboards() -> void:
 	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
 		game_manager.show_leaderboards()
 	else:
-		_on_sign_in()  # not signed in -> behaves like the sign-in button
+		_show_sign_in_required_popup(
+			"Sign In for Leaderboards",
+			"Sign in to record your high scores and climb the global rankings.")
 
 func _on_sign_in() -> void:
 	if _signing_in:
 		return
 	_signing_in = true
 	FirebaseManager.sign_in()
+	# Safety net: if the Google sign-in intent silently never launches (e.g. a
+	# plugin conflict ate the Activity result), neither success nor failure
+	# will fire and the lockout would wedge the button forever. Auto-clear it
+	# after a reasonable timeout so a second press can retry.
+	get_tree().create_timer(20.0).timeout.connect(_clear_signing_in_guard)
+
+func _clear_signing_in_guard() -> void:
+	_signing_in = false
 
 func _on_sign_out() -> void:
 	FirebaseManager.sign_out_user()

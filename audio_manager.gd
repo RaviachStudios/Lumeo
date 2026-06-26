@@ -3,36 +3,24 @@ extends Node
 const SR := 22050
 const BUTTON_FREQS: Array[float] = [415.30, 493.88, 329.63, 261.63, 440.00, 587.33]
 
-const BEAT := 0.625
-const BG_MELODY: Array = [
-	[523.25,1],[659.25,0.5],[783.99,0.5],[659.25,1],[0.0,0.5],
-	[698.46,1],[880.00,0.5],[698.46,0.5],[659.25,1],[0.0,0.5],
-	[587.33,1],[659.25,0.5],[783.99,0.5],[698.46,1],[0.0,0.5],
-	[523.25,2],[0.0,1.0],
-	[659.25,1],[783.99,0.5],[880.00,0.5],[783.99,1],[0.0,0.5],
-	[698.46,1],[783.99,0.5],[880.00,0.5],[987.77,1],[0.0,0.5],
-	[880.00,1],[783.99,0.5],[698.46,0.5],[659.25,1],[0.0,0.5],
-	[523.25,2],[0.0,2.0],
-]
+# Background music is the bundled Simon WAV. We restart it on `finished`
+# rather than relying on the WAV's import-side loop_mode, because the import is
+# QOA-compressed and loop points aren't reliable across re-imports.
+const BG_MUSIC_PATH := "res://Simon WAV.wav"
 
 var _music_player: AudioStreamPlayer
-var _music_pb: AudioStreamGeneratorPlayback
-var _music_phase := 0.0
-var _music_note := 0
-var _music_elapsed := 0.0
 var _music_on := false
 
 var _btn_players: Array[AudioStreamPlayer] = []
 var _sfx_player: AudioStreamPlayer
 
 func _ready() -> void:
-	# Background music — generator (long-running loop)
-	var gen := AudioStreamGenerator.new()
-	gen.mix_rate = SR
-	gen.buffer_length = 0.2
 	_music_player = AudioStreamPlayer.new()
-	_music_player.stream = gen
-	_music_player.volume_db = -8.0
+	_music_player.stream = load(BG_MUSIC_PATH)
+	# Source WAV ships with low headroom — at the old -8 dB attenuation the
+	# track was barely audible on phones even at master max, so we push it up.
+	_music_player.volume_db = 6.0
+	_music_player.finished.connect(_on_music_finished)
 	add_child(_music_player)
 
 	# Button tones — pre-generated WAV, one player per button
@@ -118,41 +106,12 @@ func play_bg_music() -> void:
 	if _music_on:
 		return
 	_music_on = true
-	_music_note = 0
-	_music_elapsed = 0.0
-	_music_phase = 0.0
+	_music_player.play()
 
 func stop_bg_music() -> void:
 	_music_on = false
 	_music_player.stop()
-	_music_pb = null
 
-# ── Background music generator ────────────────────────────────────────────────
-
-func _process(_d: float) -> void:
-	_tick_music()
-
-func _tick_music() -> void:
-	if not _music_on:
-		return
-	if not _music_player.playing:
+func _on_music_finished() -> void:
+	if _music_on:
 		_music_player.play()
-	_music_pb = _music_player.get_stream_playback() as AudioStreamGeneratorPlayback
-	if not _music_pb:
-		return
-	for _i in _music_pb.get_frames_available():
-		var note: Array = BG_MELODY[_music_note]
-		var freq: float = note[0]
-		var s := 0.0
-		if freq > 0.0:
-			var dur: float = float(note[1]) * BEAT
-			var env := _env(_music_elapsed, dur)
-			s = sin(TAU * freq * _music_phase / SR) * env * 0.28
-			s += sin(TAU * freq * 2.0 * _music_phase / SR) * env * 0.08
-		_music_pb.push_frame(Vector2(s, s))
-		_music_phase += 1.0
-		_music_elapsed += 1.0 / SR
-		if _music_elapsed >= float(note[1]) * BEAT:
-			_music_elapsed = 0.0
-			_music_phase = 0.0
-			_music_note = (_music_note + 1) % BG_MELODY.size()

@@ -49,6 +49,34 @@ const BTN_RAISE := 0.09      # how far the button sits above the frame plate
 const SIDE_DARK := 0.7      # outer side-wall brightness vs the top
 const SIDE_DARK_IN := 0.95   # inner/recessed walls a touch darker
 
+# ---- Volcano skin (id "inferno") extras ----
+# A wide raised "sulfur stone" platform is slipped under each colored button so
+# the buttons read as proud blocks seated in volcanic rock. The platform nearly
+# fills the slot (so a broad sulfur rim frames each button), rises to STONE_TOP,
+# and the button is lifted STONE_BTN_LIFT to sit proud on top of it.
+const STONE_TOP := 0.28          # height of the sulfur platform's top face
+const STONE_BTN_LIFT := 0.14     # extra button raise so it sits proud on the stone
+const STONE_ANG_MARGIN := 0.4    # platform nearly fills the slot (button sits in its
+const STONE_RAD_MARGIN := 0.01   #   middle), so a wide sulfur rim frames each button
+const STONE_DOME := 0.04         # gentle chunky-stone crown
+# In Volcano mode the button is inset further than usual so a generous band of the
+# sulfur platform shows around it (instead of the button covering the whole stone).
+const VOLC_BTN_ANG_MARGIN := 4.0
+const VOLC_BTN_RAD_MARGIN := 0.11
+# Low, wide volcano cone at the hub with a recessed lava crater. Kept low so the
+# glowing crater sits UNDER the centered level numeral (number sits on the crater).
+const VOLC_BASE_R := HUB_R * 1.18   # cone foot radius
+const VOLC_RIM_R := HUB_R * 0.62    # crater outer rim radius (cone top)
+const VOLC_H := 0.30                # cone rise above the wheel top
+const VOLC_CRATER_R := HUB_R * 0.40 # crater floor (lava pool) radius
+const VOLC_CRATER_DROP := 0.10      # how deep the crater recesses below the rim
+# The level numeral sits on the volcano crater (higher on screen than the flat
+# hub), so the Volcano skin lifts the readout by this FRACTION of the widget
+# height on top of CENTER_LIFT. Proportional so it tracks both the big in-game
+# wheel and the small shop preview. Tune if it doesn't land dead-centre on the
+# crater's top circle.
+const VOLC_NUM_LIFT_FRAC := 0.05
+
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Pulled in so the wheel fills most of the widget (large, prominent).
 const CAM_POS := Vector3(0.0, 4.0, 1.5)
@@ -82,9 +110,19 @@ var _dot: Panel                      # status light below the numeral
 #   _outer_tint -> the metallic rim/frame rings around the buttons
 #   _inner_tint -> the centre hub disc
 #   _num_pack   -> the level numeral's font package (Dictionary) or null = stock
+#   _skin_id    -> active complete skin ("" = none). Skins (e.g. "inferno") have
+#                  their own bespoke metal treatment + a 2D overlay layer on top
+#                  of the SubViewport, and override outer/inner/num when applied.
 var _outer_tint: Variant = null
 var _inner_tint: Variant = null
 var _num_pack: Variant = null
+var _skin_id: String = ""
+
+# Animated 2D overlay layer painted ON TOP of the SubViewport (e.g. the inferno
+# skin's ring of flames). Lives outside the 3D scene because it's a screen-space
+# canvas-item shader; null until a skin that needs an overlay is equipped.
+var _skin_overlay: Control
+var _skin_overlay_mat: ShaderMaterial
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -287,7 +325,8 @@ func set_overlay_compact(numeral_scale: float, show_dot: bool) -> void:
 		_num_holder.pivot_offset = _num_holder.size * 0.5
 		_num_holder.scale = Vector2(numeral_scale, numeral_scale)
 	if _dot != null:
-		_dot.visible = show_dot
+		# The Volcano skin drops the status dot entirely (it would sit on the crater).
+		_dot.visible = show_dot and _skin_id != "inferno"
 
 # One numeral layer: fills the holder and centers its glyph, so all layers align.
 func _num_label(fsize: int, col: Color) -> Label:
@@ -325,6 +364,27 @@ func _sync_viewport_size() -> void:
 		_vpc.size = size
 	if _vp:
 		_vp.size = Vector2i(maxi(2, int(size.x)), maxi(2, int(size.y)))
+	_layout_numeral()   # the volcano lift is a fraction of the widget height
+
+# Position the level-numeral overlay (and the status dot below it) for the active
+# skin. Stock skins sit CENTER_LIFT above the widget centre; the Volcano skin lifts
+# the readout further so it lands on the raised crater's top circle, by a fraction
+# of the widget height so it tracks both the in-game wheel and the shop preview.
+func _layout_numeral() -> void:
+	if _num_holder == null:
+		return
+	var lift := float(CENTER_LIFT)
+	if _skin_id == "inferno":
+		lift += size.y * VOLC_NUM_LIFT_FRAC
+	_num_holder.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE)
+	_num_holder.offset_top -= lift
+	_num_holder.offset_bottom -= lift
+	if _dot != null:
+		# The Volcano skin removes the status dot (it would land on the crater).
+		_dot.visible = _skin_id != "inferno"
+		_dot.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE)
+		_dot.offset_top += DOT_GAP - lift
+		_dot.offset_bottom += DOT_GAP - lift
 
 # ---------------- build ----------------
 
@@ -354,36 +414,52 @@ func _rebuild() -> void:
 	# Graphite (never pure black), satin metal so it catches soft reflections.
 	# Semi-metallic graphite: enough diffuse to read as a lit gray metal surface
 	# (pure metal would only show dim reflections and look black).
-	var base := _disc(BASE_R, BASE_H, _outer(Color(0.15, 0.155, 0.17)), 0.45)
-	(base.material_override as StandardMaterial3D).metallic = 0.4
+	# Inferno skin swaps these StandardMaterial3D rings for a single coal+lava
+	# ShaderMaterial via _ring_material — the same procedural pattern runs across
+	# every ring so they read as one continuous chunk of glowing coal, with the
+	# `heat` param brightening the hub area relative to the cooler outer rim.
+	var base := _disc_no_mat(BASE_R, BASE_H)
+	base.material_override = _ring_material(Color(0.15, 0.155, 0.17), 0.4, 0.45, 0.85)
 	_wheel_root.add_child(base)
 
 	# recessed dark groove just outside the buttons - reads as ambient occlusion
 	var groove := MeshInstance3D.new()
 	groove.mesh = _ring_mesh(OUTER_R, OUTER_R + 0.035, 0.16, 0.0)
 	groove.position.y = 0.04
-	groove.material_override = _metal_mat(Color(0.05, 0.05, 0.06), 0.3, 0.6)
+	groove.material_override = _ring_material(Color(0.05, 0.05, 0.06), 0.3, 0.6, 1.10)
 	_wheel_root.add_child(groove)
 
 	# raised beveled inner ring (machined lip)
 	var ring_a := MeshInstance3D.new()
 	ring_a.mesh = _ring_mesh(OUTER_R + 0.035, OUTER_R + 0.10, 0.22, 0.05)
 	ring_a.position.y = 0.05
-	ring_a.material_override = _metal_mat(_outer(Color(0.19, 0.195, 0.22)), 0.45, 0.32)
+	ring_a.material_override = _ring_material(Color(0.19, 0.195, 0.22), 0.45, 0.32, 1.25)
 	_wheel_root.add_child(ring_a)
 
 	# outer rounded rim ring (catches the soft top highlight); thin overall frame
 	var ring_b := MeshInstance3D.new()
 	ring_b.mesh = _ring_mesh(OUTER_R + 0.095, OUTER_R + 0.16, 0.2, 0.07)
 	ring_b.position.y = 0.03
-	ring_b.material_override = _metal_mat(_outer(Color(0.23, 0.235, 0.26)), 0.5, 0.26)
+	ring_b.material_override = _ring_material(Color(0.23, 0.235, 0.26), 0.5, 0.26, 1.30)
 	_wheel_root.add_child(ring_b)
 
-	# smaller glossy graphite center hub
-	var hub := _disc(HUB_R, HUB_H, _inner(Color(0.11, 0.11, 0.14)), 0.3)
-	(hub.material_override as StandardMaterial3D).metallic = 0.5
-	hub.position.y = 0.06
-	_wheel_root.add_child(hub)
+	# Glowing hub — under the Volcano skin this becomes a low cone with a molten
+	# crater and lava running down its slopes; otherwise it's the standard hub.
+	if _skin_id == "inferno":
+		var top_y := BASE_H * 0.5 + 0.03   # cone foot sits on the wheel top
+		var volcano := MeshInstance3D.new()
+		volcano.mesh = _volcano_mesh()
+		volcano.position.y = top_y
+		volcano.material_override = _volcano_material()
+		_wheel_root.add_child(volcano)
+	else:
+		var hub := _disc_no_mat(HUB_R, HUB_H)
+		# Hub wears the INNER tint (the "CENTER HUB" shop slot); _ring_material is
+		# routed through _outer() and would otherwise tint the hub with the rim
+		# colour, so equipping a centre-hub colour produced no visible change.
+		hub.material_override = _metal_mat(_inner(Color(0.11, 0.11, 0.14)), 0.5, 0.3)
+		hub.position.y = 0.06
+		_wheel_root.add_child(hub)
 
 	var step := TAU / _count
 	var gap := deg_to_rad(GAP_DEG)
@@ -391,22 +467,47 @@ func _rebuild() -> void:
 		var a0 := _start_angle + i * step + gap * 0.5
 		var a1 := _start_angle + (i + 1) * step - gap * 0.5
 		var raw: Color = _colors[i % _colors.size()] if not _colors.is_empty() else Color.GRAY
-		var col := _enrich(raw)   # richer + ~25% brighter so colors read clearly
-		# dark metallic frame plate filling this slot (the button's own frame)
+		# Inferno burns each button: same hue, lower value + saturation so it reads
+		# as a charred plastic that's been licked by flame. The colour stays clearly
+		# recognisable (red is red, green is green) but no longer "fresh out of the
+		# mould". Non-skin mode keeps the existing enriched look.
+		var col := _burn_color(_enrich(raw)) if _skin_id == "inferno" else _enrich(raw)
+		# dark metallic frame plate filling this slot (the button's own frame).
+		# Inferno: the frame becomes another coal slab (same coal shader) so the
+		# gaps between burnt buttons glow with embers rather than dark graphite.
 		var frame := MeshInstance3D.new()
 		frame.mesh = _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
 		frame.position.y = BASE_H * 0.5
-		frame.material_override = _metal_mat(Color(0.08, 0.08, 0.095), 0.3, 0.45)
+		frame.material_override = _ring_material(Color(0.08, 0.08, 0.095), 0.3, 0.45, 1.40)
 		_wheel_root.add_child(frame)
+		# Volcano: a wide raised sulfur-stone platform under the button (smaller
+		# margins than the button) so a broad rim of yellow volcanic rock frames it,
+		# and STONE_BTN_LIFT raises the button to sit proud on top of the stone.
+		var stone_lift := 0.0
+		if _skin_id == "inferno":
+			var sa0 := a0 + deg_to_rad(STONE_ANG_MARGIN)
+			var sa1 := a1 - deg_to_rad(STONE_ANG_MARGIN)
+			var stone := MeshInstance3D.new()
+			# Wide slab rising from the wheel top (y≈0) to STONE_TOP — a sulfur
+			# platform the button is seated into so a broad rim of rock frames it.
+			stone.mesh = _sector_mesh(sa0, sa1, INNER_R + STONE_RAD_MARGIN, OUTER_R - STONE_RAD_MARGIN,
+				STONE_TOP, STONE_DOME, SIDE_DARK, BEVEL)
+			stone.position.y = STONE_TOP * 0.5
+			stone.material_override = _sulfur_material()
+			_wheel_root.add_child(stone)
+			stone_lift = STONE_BTN_LIFT
 		# inset, raised, glossy colored button sitting inside the frame: thick body,
 		# a gently pillowed top and a soft rounded bevel wrapping the whole edge.
-		var ba0 := a0 + deg_to_rad(BTN_ANG_MARGIN)
-		var ba1 := a1 - deg_to_rad(BTN_ANG_MARGIN)
-		var mesh := _sector_mesh(ba0, ba1, INNER_R + BTN_RAD_MARGIN, OUTER_R - BTN_RAD_MARGIN,
+		# Volcano insets it further so the sulfur platform frames it generously.
+		var bam := VOLC_BTN_ANG_MARGIN if _skin_id == "inferno" else BTN_ANG_MARGIN
+		var brm := VOLC_BTN_RAD_MARGIN if _skin_id == "inferno" else BTN_RAD_MARGIN
+		var ba0 := a0 + deg_to_rad(bam)
+		var ba1 := a1 - deg_to_rad(bam)
+		var mesh := _sector_mesh(ba0, ba1, INNER_R + brm, OUTER_R - brm,
 			SEG_H * 2.0, DOME, SIDE_DARK, BEVEL)
 		var mi := MeshInstance3D.new()
 		mi.mesh = mesh
-		mi.position.y = BASE_H * 0.5 + BTN_RAISE
+		mi.position.y = BASE_H * 0.5 + BTN_RAISE + stone_lift
 		var mat := _seg_material(col, true)
 		mi.material_override = mat
 		_wheel_root.add_child(mi)
@@ -427,7 +528,7 @@ func _rebuild() -> void:
 		# Sit above the frame (~0.20) but below the button's edge top (~0.305): the
 		# button hides the bright core, only the soft outer falloff spills onto the
 		# surrounding frame = light bleed.
-		halo.position = Vector3(cos(am) * rm, 0.26, sin(am) * rm)
+		halo.position = Vector3(cos(am) * rm, 0.26 + stone_lift, sin(am) * rm)
 		var gmat := _halo_material(col)
 		halo.material_override = gmat
 		_wheel_root.add_child(halo)
@@ -477,20 +578,35 @@ func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
-# ---------------- customization (shop "SIMON" colours) ----------------
+# ---------------- customization (shop "SIMON" colours + SPECIAL SKINS) ----------------
 
 # Equip the player's chosen look. `outer`/`inner` are a Color or null (= stock
 # graphite). `number` is a font-package Dictionary or null (= stock white numeral).
+# `skin_id` is the active complete-skin id ("" = none); when non-empty the skin
+# fully overrides outer/inner/number with its own bespoke palette and spawns any
+# 2D overlay (e.g. the inferno ring of flames).
 # Rebuilds the wheel meshes and restyles the numeral so it shows immediately.
-func apply_skin(outer: Variant, inner: Variant, number: Variant) -> void:
-	_outer_tint = outer
-	_inner_tint = inner
-	_num_pack = number
+func apply_skin(outer: Variant, inner: Variant, number: Variant, skin_id: String = "") -> void:
+	_skin_id = skin_id
+	# A skin owns the whole look — caller tints/num pack are ignored when one is
+	# active so manual + skin choices don't fight each other.
+	if _skin_id != "":
+		_outer_tint = null
+		_inner_tint = null
+		_num_pack = _skin_num_pack(_skin_id)
+	else:
+		_outer_tint = outer
+		_inner_tint = inner
+		_num_pack = number
 	if _wheel_root != null:
 		_rebuild()
 	_apply_num_pack()
+	_sync_skin_overlay()
+	_layout_numeral()   # move the readout onto the volcano crater (or back to centre)
 
 # Resolve a rim mesh's stock graphite colour through the equipped outer tint.
+# Inferno is handled separately via _ring_material (it uses a coal shader rather
+# than a tinted StandardMaterial3D), so this only matters in non-skin mode.
 func _outer(gray: Color) -> Color:
 	return _tint_metal(gray, _outer_tint) if _outer_tint is Color else gray
 
@@ -506,6 +622,341 @@ func _tint_metal(gray: Color, tint: Color) -> Color:
 	var v := clampf(gray.v * 2.2 + 0.30, 0.0, 1.0)
 	var s := clampf(tint.s * 0.85, 0.0, 1.0)
 	return Color.from_hsv(tint.h, s, v)
+
+# Skin's numeral font package, or null = leave the numeral as-is. Each complete
+# skin restyles the level numeral so the readout matches the overall vibe.
+func _skin_num_pack(skin: String) -> Variant:
+	if skin == "inferno":
+		return {
+			"font": "", "color": Color(1.0, 0.88, 0.45),
+			"glow": Color(1.0, 0.32, 0.06, 0.95), "glow_size": 22,
+			"outline": Color(0.08, 0.0, 0.0, 1.0), "outline_size": 5,
+		}
+	return null
+
+# Burnt version of a button colour: same hue, dropped value + saturation so it
+# reads as a piece of plastic that's been licked by flame. The hue is preserved
+# so red still looks red, yellow still looks yellow, etc.
+func _burn_color(col: Color) -> Color:
+	var v := clampf(col.v * 0.60, 0.0, 1.0)
+	var s := clampf(col.s * 0.82, 0.0, 1.0)
+	return Color.from_hsv(col.h, s, v, col.a)
+
+# Pick the right material for a metallic ring/hub based on the active skin.
+# Inferno → a shared coal+lava ShaderMaterial parameterised by `heat` (lets the
+# hub glow brighter than the base plate while running the same shader across
+# every ring, so the cracks / hot stones look continuous).
+# No skin → the regular satin-metal StandardMaterial3D used since launch.
+func _ring_material(stock: Color, metal: float, rough: float, heat: float) -> Material:
+	if _skin_id == "inferno":
+		return _coal_material(heat)
+	return _metal_mat(_outer(stock), metal, rough)
+
+# Shared 3D shader compiled lazily — every ring/hub material for inferno points
+# at the same Shader resource, so the GPU only compiles it once.
+var _coal_shader: Shader
+
+func _coal_material(heat: float) -> ShaderMaterial:
+	if _coal_shader == null:
+		_coal_shader = Shader.new()
+		_coal_shader.code = _COAL_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = _coal_shader
+	m.set_shader_parameter("heat", heat)
+	return m
+
+# ---------------- Volcano skin: hub cone + sulfur stones ----------------
+
+# Low, wide volcano cone with a recessed lava crater, built in local units with
+# its foot at y = 0. A ring of quads sweeps the outer slope (base -> crater rim),
+# then drops down a short inner wall to a small crater floor (the lava pool). The
+# crater is left deliberately shallow/wide so the molten floor glows out from
+# UNDER the centered level numeral rather than being hidden behind a tall peak.
+func _volcano_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var steps := 64
+	var rim_y := VOLC_H
+	var floor_y := VOLC_H - VOLC_CRATER_DROP
+	for j in steps:
+		var a0: float = TAU * float(j) / steps
+		var a1: float = TAU * float(j + 1) / steps
+		# outer slope: foot (base radius, y=0) up to the crater rim
+		var s00 := Vector3(cos(a0) * VOLC_BASE_R, 0.0, sin(a0) * VOLC_BASE_R)
+		var s10 := Vector3(cos(a1) * VOLC_BASE_R, 0.0, sin(a1) * VOLC_BASE_R)
+		var s11 := Vector3(cos(a1) * VOLC_RIM_R, rim_y, sin(a1) * VOLC_RIM_R)
+		var s01 := Vector3(cos(a0) * VOLC_RIM_R, rim_y, sin(a0) * VOLC_RIM_R)
+		var ns := (s10 - s00).cross(s01 - s00).normalized()
+		if ns.y < 0.0:
+			ns = -ns
+		_quad(st, s00, s10, s11, s01, ns)
+		# inner crater wall: rim down to the crater floor (faces inward/up)
+		var w00 := s01
+		var w10 := s11
+		var w11 := Vector3(cos(a1) * VOLC_CRATER_R, floor_y, sin(a1) * VOLC_CRATER_R)
+		var w01 := Vector3(cos(a0) * VOLC_CRATER_R, floor_y, sin(a0) * VOLC_CRATER_R)
+		var nw := (w10 - w00).cross(w01 - w00).normalized()
+		if nw.y < 0.0:
+			nw = -nw
+		_quad(st, w00, w10, w11, w01, nw)
+		# crater floor (lava pool), facing straight up
+		var c := Vector3(0.0, floor_y, 0.0)
+		_quad(st, w01, w11, c, c, Vector3.UP)
+	return st.commit()
+
+# Shared lava-cone shader, compiled once like the coal shader.
+var _volcano_shader: Shader
+
+func _volcano_material() -> ShaderMaterial:
+	if _volcano_shader == null:
+		_volcano_shader = Shader.new()
+		_volcano_shader.code = _VOLCANO_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = _volcano_shader
+	m.set_shader_parameter("rim_y", VOLC_H)
+	m.set_shader_parameter("rim_r", VOLC_RIM_R)
+	return m
+
+# Sulfur-rock material for the raised button stones. A plain StandardMaterial3D —
+# the SAME opaque path as the colored buttons — so the stones are guaranteed to
+# render solid (an earlier custom ShaderMaterial read as see-through). A triplanar
+# noise texture mottles the yellow rock so it reads as stone, not flat plastic.
+var _sulfur_tex: Texture2D
+
+func _sulfur_material() -> StandardMaterial3D:
+	if _sulfur_tex == null:
+		var n := FastNoiseLite.new()
+		n.noise_type = FastNoiseLite.TYPE_SIMPLEX
+		n.frequency = 0.05
+		var nt := NoiseTexture2D.new()
+		nt.width = 96
+		nt.height = 96
+		nt.seamless = true
+		nt.noise = n
+		_sulfur_tex = nt
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.92, 0.80, 0.26)        # sulfur yellow
+	m.albedo_texture = _sulfur_tex                   # mottled darker crevices
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3(2.5, 2.5, 2.5)
+	m.vertex_color_use_as_albedo = true              # bakes the side-wall AO darkening
+	m.metallic = 0.0
+	m.roughness = 0.95
+	m.specular = 0.2
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.emission_enabled = true                        # faint warmth ties it to the lava
+	m.emission = Color(0.7, 0.30, 0.06)
+	m.emission_energy_multiplier = 0.08
+	return m
+
+# Volcano cone shader: dark basalt rock with bright lava rivulets that flow
+# DOWNHILL from the crater, and a molten, pooling crater floor. Uses the same
+# fbm/gnoise noise style as the coal shader. The lava channels are vertical
+# ridged-noise veins whose sampling Y scrolls with TIME so the hot rock appears
+# to creep down the slope; emission is strongest at the top and fades downward.
+const _VOLCANO_SHADER := "
+shader_type spatial;
+render_mode cull_disabled;
+
+uniform float rim_y = 0.30;
+uniform float rim_r = 0.186;
+varying vec3 v_pos;
+
+vec3 hash3(vec3 p) {
+	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+		 dot(p, vec3(269.5, 183.3, 246.1)),
+		 dot(p, vec3(113.5, 271.9, 124.6)));
+	return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
+}
+float gnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	vec3 u = f * f * (3.0 - 2.0 * f);
+	float n000 = dot(hash3(i + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0));
+	float n100 = dot(hash3(i + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0));
+	float n010 = dot(hash3(i + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0));
+	float n110 = dot(hash3(i + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0));
+	float n001 = dot(hash3(i + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0));
+	float n101 = dot(hash3(i + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0));
+	float n011 = dot(hash3(i + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0));
+	float n111 = dot(hash3(i + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0));
+	return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+		   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 0.5 + 0.5;
+}
+float fbm(vec3 p) {
+	float v = 0.0; float a = 0.5;
+	for (int i = 0; i < 5; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
+	return v;
+}
+
+void vertex() {
+	v_pos = VERTEX;
+}
+
+void fragment() {
+	// Cylindrical coords on the cone: angle around the axis, radius from it, and
+	// normalized height up the slope. Streams are placed by ANGLE and run along
+	// HEIGHT, so they read as channels flowing straight down the slope.
+	float ang = atan(v_pos.z, v_pos.x);
+	float rad = length(vec2(v_pos.x, v_pos.z));
+	float h = clamp(v_pos.y / max(rim_y, 1e-4), 0.0, 1.2);  // 0 at foot, 1 at rim
+	vec2 ac = vec2(cos(ang), sin(ang)) * 1.7;               // seamless angular coord
+
+	// Black-brown basalt ground — kept clearly visible; lava only threads over it.
+	float rock = fbm(v_pos * 9.0);
+	vec3 rock_dark = vec3(0.030, 0.020, 0.015);
+	vec3 rock_light = vec3(0.105, 0.060, 0.040);
+	vec3 albedo = mix(rock_dark, rock_light, rock);
+
+	// Keep streams on the OUTER slope only (not inside the crater bowl).
+	float outer = smoothstep(rim_r * 0.9, rim_r * 1.1, rad);
+
+	// A few NARROW lava channels at fixed angular positions ('chan'), each running
+	// the full height of the slope. 'flow' makes the glow creep DOWN over time
+	// (height coord scrolls with +TIME), so the lava streams downhill.
+	float place = fbm(vec3(ac, 3.0));
+	float pridge = 1.0 - abs(2.0 * place - 1.0);
+	float chan = smoothstep(0.80, 0.97, pridge);
+	float flow = fbm(vec3(ac, h * 5.0 + TIME * 0.6));
+	flow = 0.55 + 0.45 * smoothstep(0.30, 0.80, flow);
+	float streams = chan * flow * outer * smoothstep(0.03, 0.25, h);
+	float breath = 0.7 + 0.3 * sin(TIME * 1.6 + place * 12.0);
+
+	// Molten pool filling the crater bowl (everything inside the rim radius).
+	float crater = smoothstep(rim_r * 1.0, rim_r * 0.55, rad);
+	float bubble = 0.7 + 0.3 * sin(TIME * 2.2 + rock * 20.0);
+
+	vec3 lava_col = vec3(1.00, 0.30, 0.04);
+	vec3 hot_col = vec3(1.00, 0.78, 0.30);
+	vec3 emission = lava_col * streams * breath * 2.6;
+	emission += mix(lava_col, hot_col, 0.6) * crater * bubble * 4.5;
+
+	ALBEDO = albedo;
+	EMISSION = emission;
+	METALLIC = 0.0;
+	ROUGHNESS = 0.9;
+	SPECULAR = 0.05;
+}
+"
+
+# 3D coal+lava shader for the inferno skin. The wheel reads as a chunk of black
+# coal with bright orange cracks running across it, plus rarer "hot stones" that
+# glow yellow-white — patterns sampled in object space so all the rings + hub
+# share one continuous, calm-breathing surface (no per-mesh seams).
+const _COAL_SHADER := "
+shader_type spatial;
+render_mode cull_disabled;
+
+uniform float heat = 1.0;
+varying vec3 v_pos;
+
+vec3 hash3(vec3 p) {
+	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+		 dot(p, vec3(269.5, 183.3, 246.1)),
+		 dot(p, vec3(113.5, 271.9, 124.6)));
+	return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
+}
+
+float gnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	vec3 u = f * f * (3.0 - 2.0 * f);
+	float n000 = dot(hash3(i + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0));
+	float n100 = dot(hash3(i + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0));
+	float n010 = dot(hash3(i + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0));
+	float n110 = dot(hash3(i + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0));
+	float n001 = dot(hash3(i + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0));
+	float n101 = dot(hash3(i + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0));
+	float n011 = dot(hash3(i + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0));
+	float n111 = dot(hash3(i + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0));
+	return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+		   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 0.5 + 0.5;
+}
+
+float fbm(vec3 p) {
+	float v = 0.0; float a = 0.5;
+	for (int i = 0; i < 5; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
+	return v;
+}
+
+void vertex() {
+	v_pos = VERTEX;
+}
+
+void fragment() {
+	// Sample noise in object space so every ring/hub of the wheel reads as a
+	// SINGLE chunk of coal (no per-mesh seam where the noise pattern resets).
+	vec3 p = v_pos * 7.0;
+
+	// Coal base: rocky variation between near-black and a slightly warmer dark
+	// brown, so the rim doesn't look like a flat colour.
+	float coal = fbm(p);
+	vec3 coal_dark = vec3(0.020, 0.010, 0.006);
+	vec3 coal_light = vec3(0.085, 0.040, 0.022);
+	vec3 albedo = mix(coal_dark, coal_light, coal);
+
+	// Cracks via ridged noise (1 - |2n-1|): sharp lines where the noise crosses
+	// the midpoint. Slow drift gives the impression of glow seeping along veins.
+	float cn = fbm(p * 0.55 + vec3(0.0, TIME * 0.10, 0.0));
+	float ridge = 1.0 - abs(2.0 * cn - 1.0);
+	float cracks = smoothstep(0.74, 0.95, ridge);
+
+	// Per-position pulse phase so different cracks breathe at different times —
+	// reads as living embers, not a synchronised flicker.
+	float breath = 0.55 + 0.45 * sin(TIME * 1.4 + cn * 14.0);
+
+	// Rare 'hot stones': large-scale low-frequency noise selects a few zones
+	// that glow extra-bright yellow-white, like coals that just shifted to the
+	// surface.
+	float hot_noise = fbm(p * 0.32 + vec3(TIME * 0.07, 0.0, 0.0));
+	float hot = smoothstep(0.72, 0.88, hot_noise);
+
+	// Emission: cracks are red-orange, hot stones push toward yellow-white.
+	vec3 crack_col = vec3(1.00, 0.30, 0.05);
+	vec3 stone_col = vec3(1.00, 0.72, 0.22);
+	vec3 emission = crack_col * cracks * breath * 2.6;
+	emission += stone_col * hot * 4.0;
+	emission *= heat;
+
+	ALBEDO = albedo;
+	EMISSION = emission;
+	METALLIC = 0.0;
+	ROUGHNESS = 0.88;
+	SPECULAR = 0.05;
+}
+"
+
+# ---------------- skin overlay (animated 2D layer on top of the SubViewport) ----------------
+
+# Pick the right overlay shader for a skin and (re)spawn it. Called from
+# apply_skin every time the skin changes. No current skin paints a 2D overlay —
+# the Volcano skin dropped the rim flames — but the machinery is kept for any
+# future skin that needs one.
+func _sync_skin_overlay() -> void:
+	_destroy_skin_overlay()
+
+func _ensure_skin_overlay(shader_code: String) -> void:
+	if _skin_overlay == null:
+		_skin_overlay = ColorRect.new()
+		_skin_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_skin_overlay.color = Color.WHITE
+		_skin_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		add_child(_skin_overlay)
+		# Keep the numeral overlay + status dot ON TOP of the flames — flames are
+		# transparent in the wheel interior anyway, but this guarantees the level
+		# readout is never composited under a stray ember.
+		move_child(_skin_overlay, 1 if _vpc != null else 0)
+		_skin_overlay_mat = ShaderMaterial.new()
+		_skin_overlay.material = _skin_overlay_mat
+	var sh := Shader.new()
+	sh.code = shader_code
+	_skin_overlay_mat.shader = sh
+
+func _destroy_skin_overlay() -> void:
+	if _skin_overlay and is_instance_valid(_skin_overlay):
+		_skin_overlay.queue_free()
+	_skin_overlay = null
+	_skin_overlay_mat = null
 
 # Apply the equipped level-number font package (typeface + colour + glow + outline)
 # across the numeral layers; a null/empty package restores the stock white look.
@@ -553,6 +1004,19 @@ func _disc(radius: float, height: float, col: Color, rough: float) -> MeshInstan
 	m.metallic = 0.2
 	m.roughness = rough
 	mi.material_override = m
+	return mi
+
+# Same disc mesh as _disc, but without auto-assigning a material — the caller
+# always overrides material_override (e.g. with the coal shader for inferno),
+# so creating + immediately replacing the StandardMaterial3D was wasted work.
+func _disc_no_mat(radius: float, height: float) -> MeshInstance3D:
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = height
+	cyl.radial_segments = 48
+	var mi := MeshInstance3D.new()
+	mi.mesh = cyl
 	return mi
 
 # Full-circle rounded rim (domed across the radius only -> no seam).
@@ -724,8 +1188,9 @@ func _process(dt: float) -> void:
 			var hc := _halo_mats[i].albedo_color
 			hc.a = lit_amount * HALO_ALPHA
 			_halo_mats[i].albedo_color = hc
-		# press sink
-		_segments[i].position.y = BASE_H * 0.5 + BTN_RAISE - _press[i] * PRESS_DROP
+		# press sink (Volcano keeps the button lifted on its sulfur stone)
+		var stone_lift := STONE_BTN_LIFT if _skin_id == "inferno" else 0.0
+		_segments[i].position.y = BASE_H * 0.5 + BTN_RAISE + stone_lift - _press[i] * PRESS_DROP
 
 # ---------------- hit testing ----------------
 
