@@ -33,16 +33,28 @@ const _COLL := "users"
 const DEFAULT_THEME := "default"
 const THEMES := {
 	"default":  {"name": "Default",  "price": 0,    "category": "themes"},
-	# Basic static backgrounds — elegant solid/gradient looks, all 150 coins.
-	"midnight": {"name": "Midnight", "price": 150,  "category": "themes"},
-	"indigo":   {"name": "Indigo",   "price": 150,  "category": "themes"},
-	"sunset":   {"name": "Sunset",   "price": 150,  "category": "themes"},
-	"forest":   {"name": "Forest",   "price": 150,  "category": "themes"},
-	"crimson":  {"name": "Crimson",  "price": 150,  "category": "themes"},
-	"slate":    {"name": "Slate",    "price": 150,  "category": "themes"},
-	# Premium animated backgrounds.
-	"skybound": {"name": "Skybound", "price": 2000, "category": "themes"},
-	"inferno":  {"name": "Inferno",  "price": 5000, "category": "themes"},
+	# Low-value static gradient backgrounds — elegant solid/gradient looks, 80 coins.
+	"midnight": {"name": "Midnight", "price": 80,   "category": "themes"},
+	"indigo":   {"name": "Indigo",   "price": 80,   "category": "themes"},
+	"sunset":   {"name": "Sunset",   "price": 80,   "category": "themes"},
+	"crimson":  {"name": "Crimson",  "price": 80,   "category": "themes"},
+	"slate":    {"name": "Slate",    "price": 80,   "category": "themes"},
+	"skybound": {"name": "Skybound", "price": 80,   "category": "themes"},
+	# Mid-value static illustrated backgrounds — detailed procedural scenes, 250-800.
+	"rainbow":  {"name": "Rainbow",           "price": 250, "category": "themes"},
+	"forest":   {"name": "Enchanted Forest",  "price": 350, "category": "themes"},
+	"desert":   {"name": "Wild West",         "price": 350, "category": "themes"},
+	"speedway": {"name": "Speedway",          "price": 450, "category": "themes"},
+	"reef":     {"name": "Coral Reef",        "price": 450, "category": "themes"},
+	"kitty":    {"name": "Neko Pop",          "price": 550, "category": "themes"},
+	"cosmos":   {"name": "Cosmos",            "price": 600, "category": "themes"},
+	"neon":     {"name": "Neon City",         "price": 800, "category": "themes"},
+	# High-value animated backgrounds — detailed animated scenes, 1000-3200.
+	"inferno":  {"name": "Inferno",           "price": 1000, "category": "themes"},
+	"clouds":   {"name": "Dreamy Clouds",     "price": 1000, "category": "themes"},
+	"aurora":   {"name": "Northern Lights",   "price": 1500, "category": "themes"},
+	"fairies":  {"name": "Enchanted Fairies", "price": 2000, "category": "themes"},
+	"deepspace":{"name": "Deep Space",        "price": 2500, "category": "themes"},
 }
 
 # Difficulty unlocks. "easy" is always playable; "moderate" and "hard" are
@@ -420,13 +432,33 @@ func purchase_theme(theme_id: String) -> bool:
 	_save_partial({"coins": balance, "owned_themes": _owned_themes_map_for_save()})
 	return true
 
-# Equip an owned theme. Returns true if the selection actually changed.
+# Equip an owned theme. Returns true if anything actually changed.
+#
+# Equipping a theme is a manual choice, so it also drops any complete skin: a skin
+# wins everything while on (overriding both the background AND the per-part wheel
+# colours), and equipping a theme returns to the manual look. The saved theme +
+# per-part colours are kept in storage untouched while a skin is on, so flipping
+# simon_mode back to manual simply makes them active again ("reequip all the manual
+# stuff"). This is why it's not a plain `selected_theme == theme_id` early-out — we
+# must still drop the skin even when re-equipping the already-selected theme.
 func select_theme(theme_id: String) -> bool:
 	if not owns(theme_id): return false
-	if selected_theme == theme_id: return false
-	selected_theme = theme_id
+	var fields := {}
+	var mode_changed := false
+	if simon_mode != SIMON_MODE_MANUAL:
+		simon_mode = SIMON_MODE_MANUAL
+		mode_changed = true
+		fields["simon_mode"] = simon_mode
+	var theme_changed := selected_theme != theme_id
+	if theme_changed:
+		selected_theme = theme_id
+		fields["selected_theme"] = selected_theme
+	if not mode_changed and not theme_changed:
+		return false
 	themes_changed.emit()
-	_save_partial({"selected_theme": selected_theme})
+	if mode_changed:
+		simon_changed.emit()    # the skin came off → wheel, skin cards + simon tiles refresh
+	_save_partial(fields)
 	return true
 
 # --- simon-customization API ---
@@ -486,7 +518,11 @@ func equip_simon_color(category: String, color_id: String) -> bool:
 	if not SIMON_CATEGORIES.has(category): return false
 	if not owns_simon_color(category, color_id): return false
 	# Equipping a per-part colour IS the act of choosing the manual look, so it
-	# implicitly puts the wheel into manual mode — there is no separate toggle.
+	# implicitly drops any complete skin and puts the wheel back into manual mode.
+	# A skin wins everything while on (overriding the per-part colours AND the
+	# theme), but the manual config is kept in storage untouched — so flipping back
+	# to manual restores the rest of the saved per-part colours, with only the part
+	# just tapped changing here.
 	var changed := false
 	if simon_mode != SIMON_MODE_MANUAL:
 		simon_mode = SIMON_MODE_MANUAL

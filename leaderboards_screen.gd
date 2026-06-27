@@ -1959,18 +1959,28 @@ func _load_initial() -> void:
 		_caches[RANGE_ALL] = all_res
 		_loaded_ranges[RANGE_ALL] = true
 
+	# Show ALL-TIME immediately; don't block on daily.
+	if _loaded_ranges[RANGE_ALL]:
+		if _current_range == RANGE_ALL:
+			_hide_overlay()
+			_render(_caches[RANGE_ALL].get(_current_diff, {}))
+	else:
+		_show_error()
+		return
+
 	var daily_res := await LeaderboardManager.load_all_dailies()
 	if token != _load_token:
 		return
 	if daily_res.get("ok", false):
 		_caches[RANGE_DAILY] = daily_res
 		_loaded_ranges[RANGE_DAILY] = true
-
-	if not _loaded_ranges[_current_range]:
-		_show_error()
-		return
-	_hide_overlay()
-	_render(_caches[_current_range].get(_current_diff, {}))
+	# If the user tapped TODAY while daily was still loading, show it now.
+	if _current_range == RANGE_DAILY:
+		if _loaded_ranges[RANGE_DAILY]:
+			_hide_overlay()
+			_render(_caches[RANGE_DAILY].get(_current_diff, {}))
+		else:
+			_show_error()
 
 # Re-entrant: bumps the token so any in-flight load from a previous range/diff
 # becomes a no-op when it returns.
@@ -1999,6 +2009,9 @@ func _load_range(range_key: String) -> void:
 func _build_overlay() -> void:
 	_overlay = Panel.new()
 	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	# Sit above EVERYTHING, including the spotlights (z_index 1) which would
+	# otherwise let the projector cans + beams poke through the loading backdrop.
+	_overlay.z_index = 5
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.008, 0.020, 0.075, 0.985)
 	_overlay.add_theme_stylebox_override("panel", s)

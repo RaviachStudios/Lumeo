@@ -35,10 +35,14 @@ const CATEGORIES := [
 		"accent": Color(1.00, 0.78, 0.22),
 		# "default" is included so players can revert after equipping a paid
 		# theme; its card is always "owned" and free, so the buy/equip flow
-		# handles it without special casing. Basic 150-coin gradients sit between
-		# default and the premium animated themes (Skybound / Inferno).
-		"items": ["default", "midnight", "indigo", "sunset", "forest", "crimson",
-			"slate", "skybound", "inferno"],
+		# handles it without special casing. Ordered by tier: low-value gradients
+		# (80), then mid-value illustrated scenes (250-800), then high-value
+		# animated scenes (1000-3200).
+		"items": ["default",
+			"midnight", "indigo", "sunset", "crimson", "slate", "skybound",
+			"rainbow", "forest", "desert", "speedway", "reef", "kitty",
+			"cosmos", "neon",
+			"inferno", "clouds", "aurora", "fairies", "deepspace"],
 	},
 	# Wheel colour customization. No flat `items` list — its content (live wheel
 	# preview + the three per-part colour tiles) is built specially in
@@ -746,7 +750,10 @@ func _apply_card_state(theme_id: String, c: Dictionary) -> void:
 	var price_box: Control = c["price_box"]
 	var price_label: Label = c["price_label"]
 	var owned := CoinsManager.owns(theme_id)
-	var equipped := CoinsManager.selected_theme == theme_id
+	# In SKIN mode the skin's own world overrides every theme, so no theme reads as
+	# equipped — it shows EQUIP instead (tapping it drops the skin and re-applies
+	# the theme as the background).
+	var equipped := CoinsManager.is_simon_manual() and CoinsManager.selected_theme == theme_id
 	var affordable := CoinsManager.can_afford(theme_id)
 
 	# Unowned cards show the price block in the button; owned ones show EQUIP/EQUIPPED.
@@ -939,14 +946,20 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	clip.clip_contents = true
 	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var clip_st := StyleBoxFlat.new()
-	# Deep void backdrop so the inferno flames pop hard against it; matches the
-	# inferno BACKGROUND's near-black void in tone.
+	# Deep void backdrop, used only as a fallback for skins with no background;
+	# the skin's own world (below) paints over it for skins that ship one.
 	clip_st.bg_color = Color(0.018, 0.008, 0.025)
 	clip_st.set_corner_radius_all(16)
 	clip_st.border_color = Color(1, 1, 1, 0.07)
 	clip_st.set_border_width_all(1)
 	clip.add_theme_stylebox_override("panel", clip_st)
 	root.add_child(clip)
+
+	# The skin's bespoke background (e.g. the Volcano world), rendered behind the
+	# wheel so the card previews the full look you'll equip — not just the wheel.
+	var skin_bg := BackgroundManager.make_skin_preview(skin_id, clip.size)
+	skin_bg.position = Vector2.ZERO
+	clip.add_child(skin_bg)
 
 	# Live SimonWheel preview with this skin applied. Logical size > displayed
 	# size + uniform scale = preview reads at the same proportions as the in-game
@@ -1141,10 +1154,13 @@ func _style_swatch(swatch: SimonPartIcon, category: String, color_id: String) ->
 func _refresh_simon_panel() -> void:
 	if _simon_root == null:
 		return
-	# tile swatches (the equipped look is shown by the icon itself).
+	# tile swatches (the equipped look is shown by the icon itself). In SKIN mode
+	# the per-part slots read as "nothing equipped", so the tiles show the stock
+	# look rather than whatever manual colour is still stored underneath.
+	var manual := CoinsManager.is_simon_manual()
 	for cat in _simon_tiles:
 		var t: Dictionary = _simon_tiles[cat]
-		var id: String = CoinsManager.equipped_simon_color(cat)
+		var id: String = CoinsManager.equipped_simon_color(cat) if manual else CoinsManager.simon_default_id(cat)
 		_style_swatch(t["swatch"], cat, id)
 	# Live preview mirrors what the wheel actually wears right now.
 	_refresh_simon_preview()
