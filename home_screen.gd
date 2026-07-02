@@ -95,6 +95,7 @@ var _shop_card: Dictionary = {}
 var _ranks_card: Dictionary = {}
 var _howto_card: Dictionary = {}
 var _profile_card: Panel
+var _arena_btn: Button           # bottom-left: opens the Arena (multiplayer contests)
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
 # at a fixed corner here. Daily-claim button sits just under it.
@@ -123,6 +124,7 @@ func _ready() -> void:
 	_build_cards()
 	_build_start()
 	_build_profile_card()
+	_build_arena_button()
 	_build_credits()
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
@@ -673,6 +675,32 @@ func _lm_label(lm: Dictionary, txt: String, fsize: int, col: Color, glow: Color,
 	lm["art"].add_child(l)
 	return l
 
+# ---------------- arena button (bottom-left) ----------------
+
+func _build_arena_button() -> void:
+	_arena_btn = Button.new()
+	_arena_btn.text = "⚔  ARENA"
+	_arena_btn.size = Vector2(176.0, 52.0)
+	_arena_btn.focus_mode = Control.FOCUS_NONE
+	_arena_btn.add_theme_font_size_override("font_size", 20)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.10, 0.06, 0.20, 0.82)          # translucent violet glass
+	s.set_corner_radius_all(26)
+	s.border_color = Color(0.70, 0.45, 1.0, 0.75)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(0.55, 0.35, 1.0, 0.32)
+	s.shadow_size = 12
+	_arena_btn.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(0.16, 0.10, 0.30, 0.92)
+	_arena_btn.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.07, 0.04, 0.15, 0.95)
+	_arena_btn.add_theme_stylebox_override("pressed", sp)
+	_arena_btn.add_theme_color_override("font_color", Color(0.90, 0.82, 1.0))
+	_arena_btn.pressed.connect(_on_arena)
+	add_child(_arena_btn)
+
 # ---------------- procedural art ----------------
 
 # Soft layered halo: large faint circle first, smaller brighter ones on top.
@@ -972,6 +1000,9 @@ func _layout() -> void:
 
 	if _profile_card:
 		_profile_card.position = Vector2(sz.x - _profile_card.size.x - 16.0, 14.0)
+
+	if _arena_btn:
+		_arena_btn.position = Vector2(24.0, sz.y - _arena_btn.size.y - 30.0)
 
 	# credits tuck into the bottom-right corner, right-aligned with a small margin
 	if _credits:
@@ -1667,6 +1698,15 @@ func _on_leaderboards() -> void:
 		_show_sign_in_required_popup(
 			"Sign In for Leaderboards",
 			"Sign in to record your high scores and climb the global rankings.")
+
+func _on_arena() -> void:
+	# Arena needs an identity (a name others can see + a uid to own contests).
+	if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
+		game_manager.show_arena()
+	else:
+		_show_sign_in_required_popup(
+			"Sign In for the Arena",
+			"Sign in and pick a name to create and join contests with friends.")
 
 func _on_sign_in() -> void:
 	if _signing_in:

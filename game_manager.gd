@@ -9,6 +9,9 @@ const GameOverScreen := preload("res://game_over.gd")
 const NamePickerScreen := preload("res://name_picker_screen.gd")
 const LeaderboardsScreen := preload("res://leaderboards_screen.gd")
 const ShopScreen := preload("res://shop_screen.gd")
+const ArenaScreen := preload("res://arena_screen.gd")
+const ContestCreateScreen := preload("res://contest_create_screen.gd")
+const ContestDetailScreen := preload("res://contest_detail_screen.gd")
 
 var _current: Control = null
 var _canvas: CanvasLayer
@@ -53,13 +56,29 @@ func show_leaderboards() -> void:
 func show_shop() -> void:
 	_swap(ShopScreen.new())
 
+func show_arena() -> void:
+	_swap(ArenaScreen.new())
+
+func show_contest_create() -> void:
+	_swap(ContestCreateScreen.new())
+
+func show_contest_detail(contest_id: String) -> void:
+	var s := ContestDetailScreen.new()
+	s.contest_id = contest_id
+	_swap(s)
+
 func show_loading() -> void:
 	_swap(LoadingScreen.new())
 
 func show_home() -> void:
+	# Any return home ends a contest game context (an abandoned contest game must
+	# never leak into a later normal game).
+	GameState.contest_context = {}
 	_swap(HomeScreen.new())
 
 func show_difficulty() -> void:
+	# Normal-play entry point: guarantee no stale contest context.
+	GameState.contest_context = {}
 	_swap(DifficultyScreen.new())
 
 func show_how_to_play() -> void:

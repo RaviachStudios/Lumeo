@@ -1,5 +1,13 @@
 extends Node
 
+# Set by ContestManager.begin_contest_game when a game is launched from inside an
+# Arena contest; empty {} for normal play. Shape: {id, type, difficulty,
+# best_before, games_before}. game.gd reads it to switch to "Forfeit" framing;
+# game_over.gd captures + clears it, submits the contest result, and routes back
+# to the contest. Cleared on any return to home / difficulty so a stale context
+# can never make a normal game count toward a contest.
+var contest_context: Dictionary = {}
+
 var difficulty: String = "easy"
 var num_colors: int = 4
 var flash_time: float = 0.7

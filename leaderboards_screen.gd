@@ -1944,43 +1944,49 @@ func _intro() -> void:
 
 # ---------------- data load ----------------
 
+# Emitted by _fetch_family when one range's batch finishes, so _load_initial can
+# wait for both without fetching them one-after-another.
+signal _family_loaded
+
 # Screen-open load: fetch BOTH ranges behind a SINGLE loading screen, and keep
-# that screen up until both are cached. ALL-TIME is the default view, so it's
-# fetched first and shown once both fetches land.
+# that screen up until BOTH are cached so either toggle position is instant the
+# first time it's tapped. The two families are fetched CONCURRENTLY (and each
+# fetches its three difficulty boards in parallel), so the whole set lands in
+# roughly one round-trip instead of six serialized ones.
 func _load_initial() -> void:
 	_show_loading()
 	_load_token += 1
 	var token := _load_token
 
-	var all_res := await LeaderboardManager.load_all_globals()
+	var pending := {"left": 2}
+	_fetch_family(RANGE_ALL, token, pending)
+	_fetch_family(RANGE_DAILY, token, pending)
+	while pending["left"] > 0:
+		await _family_loaded
 	if token != _load_token:
 		return
-	if all_res.get("ok", false):
-		_caches[RANGE_ALL] = all_res
-		_loaded_ranges[RANGE_ALL] = true
 
-	# Show ALL-TIME immediately; don't block on daily.
-	if _loaded_ranges[RANGE_ALL]:
-		if _current_range == RANGE_ALL:
-			_hide_overlay()
-			_render(_caches[RANGE_ALL].get(_current_diff, {}))
+	# Only reveal the board once both ranges are cached; if the current view
+	# failed to load, surface the error instead.
+	if _loaded_ranges[_current_range]:
+		_hide_overlay()
+		_render(_caches[_current_range].get(_current_diff, {}))
 	else:
 		_show_error()
-		return
 
-	var daily_res := await LeaderboardManager.load_all_dailies()
-	if token != _load_token:
-		return
-	if daily_res.get("ok", false):
-		_caches[RANGE_DAILY] = daily_res
-		_loaded_ranges[RANGE_DAILY] = true
-	# If the user tapped TODAY while daily was still loading, show it now.
-	if _current_range == RANGE_DAILY:
-		if _loaded_ranges[RANGE_DAILY]:
-			_hide_overlay()
-			_render(_caches[RANGE_DAILY].get(_current_diff, {}))
-		else:
-			_show_error()
+# Worker: fetches one range's three boards, caches them, then signals the batch.
+# Called WITHOUT await so ALL-TIME and TODAY load at the same time.
+func _fetch_family(range_key: String, token: int, pending: Dictionary) -> void:
+	var res: Dictionary
+	if range_key == RANGE_DAILY:
+		res = await LeaderboardManager.load_all_dailies()
+	else:
+		res = await LeaderboardManager.load_all_globals()
+	if token == _load_token and res.get("ok", false):
+		_caches[range_key] = res
+		_loaded_ranges[range_key] = true
+	pending["left"] -= 1
+	_family_loaded.emit()
 
 # Re-entrant: bumps the token so any in-flight load from a previous range/diff
 # becomes a no-op when it returns.

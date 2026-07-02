@@ -107,5 +107,79 @@ service cloud.firestore {
         && (!('has_remove_ads' in request.resource.data)
             || request.resource.data.has_remove_ads is bool);
     }
+
+    // ---- Arena contests ----------------------------------------------------
+    // There is no server (no Cloud Functions), so finalization/standings are
+    // written by clients. Rules bound what they can (types, enums, counts, the
+    // status transition space, per-user row ownership); the score/standings
+    // values themselves are trusted, exactly like the leaderboard scores above.
+    //
+    // contests/{CID}                -> meta (public read; short random ID is the
+    //                                  share token). expires_at is the TTL field.
+    // contest_members/{CID__uid}    -> one row per participant. Each user writes
+    //                                  only their own row; the creator may delete
+    //                                  any row (kick). expires_at is the TTL field.
+
+    function contestData(cid) {
+      return get(/databases/$(database)/documents/contests/$(cid)).data;
+    }
+    function memberScoreOk() {
+      return request.resource.data.best_score is int
+          && request.resource.data.best_score >= 0
+          && request.resource.data.best_score <= 9999;
+    }
+
+    match /contests/{cid} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.creator_uid == request.auth.uid
+        && request.resource.data.status == 'lobby'
+        && request.resource.data.type in ['one_game', 'one_hour', 'one_day', 'daily']
+        && request.resource.data.difficulty in ['easy', 'moderate', 'hard']
+        && request.resource.data.member_count is int;
+
+      // Any signed-in participant may update the meta (join bumps member_count;
+      // the creator starts it; anyone may write the finalized standings). The
+      // immutable identity fields must not change, member_count stays in range,
+      // and status only ever sits in the known set.
+      allow update: if request.auth != null
+        && request.resource.data.creator_uid == resource.data.creator_uid
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.difficulty == resource.data.difficulty
+        && request.resource.data.status in ['lobby', 'active', 'finished']
+        && request.resource.data.member_count is int
+        && request.resource.data.member_count >= 0
+        && request.resource.data.member_count <= 50;
+
+      // The creator can delete anytime (cancel); anyone can delete an empty
+      // contest (last member out). member_count is lowered to 0 before that
+      // delete, so the empty-delete path is reachable by a non-creator.
+      allow delete: if request.auth != null
+        && (resource.data.creator_uid == request.auth.uid
+            || resource.data.member_count <= 0);
+    }
+
+    match /contest_members/{docId} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.contest_id is string
+        && memberScoreOk();
+
+      // Only the owner edits their own row; best_score stays sane.
+      allow update: if request.auth != null
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && memberScoreOk();
+
+      // Owner leaves, OR the contest's creator kicks. The creator lookup only
+      // runs for a non-owner delete (|| short-circuits) so a normal self-leave
+      // never depends on the contest doc still existing.
+      allow delete: if request.auth != null
+        && (resource.data.uid == request.auth.uid
+            || request.auth.uid == contestData(resource.data.contest_id).creator_uid);
+    }
   }
 }

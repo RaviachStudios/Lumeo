@@ -15,8 +15,12 @@ extends Node
 # (the old value-noise versions read blocky). Shared verbatim by both shaders.
 const _NOISE_GLSL := "
 vec2 hash2(vec2 p) {
-	p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-	return fract(sin(p) * 43758.5453) * 2.0 - 1.0;
+	// sin-free hash (Hoskins). sin() is among the slowest mobile-GPU ops and this
+	// runs ~24x per fbm call x millions of px; the noise PATTERN shifts slightly,
+	// the noise character/sharpness is identical.
+	vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
 }
 float gnoise(vec2 p) {
 	vec2 i = floor(p);
@@ -31,7 +35,7 @@ float gnoise(vec2 p) {
 float fbm(vec2 p) {
 	float v = 0.0;
 	float a = 0.5;
-	for (int i = 0; i < 6; i++) { v += a * gnoise(p); p = p * 2.0 + vec2(1.7, 9.2); a *= 0.5; }
+	for (int i = 0; i < 4; i++) { v += a * gnoise(p); p = p * 2.0 + vec2(1.7, 9.2); a *= 0.5; }
 	return v;
 }
 "
@@ -129,12 +133,21 @@ float sdTri(vec2 p, float r) {
 	return -length(p) * sign(p.y);
 }
 mat2 rot(float a) { float c = cos(a); float s = sin(a); return mat2(vec2(c, -s), vec2(s, c)); }
-float hash11(float n) { return fract(sin(n) * 43758.5453); }
-float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float hash11(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float hash21(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 // Crisp, resolution-independent fill/line from a signed distance (uses screen
 // derivatives so edges stay a clean ~1px — sharp, never blurry).
 float aafill(float d) { float w = max(fwidth(d), 0.00001); return clamp(0.5 - d / w, 0.0, 1.0); }
 float aaline(float d, float hw) { float w = max(fwidth(d), 0.00001); return clamp((hw - abs(d)) / w + 0.5, 0.0, 1.0); }
+// Analytic, derivative-FREE edge windows. A prop wrapped in a hard bounding-box `if`
+// guard seams along that boundary: aafill/aaline use fwidth(), whose value is
+// undefined where neighbouring fragments in the 2x2 quad took the guard's early
+// return. Multiplying the prop's alpha by one of these windows — which reach 0 just
+// INSIDE the (slightly enlarged) guard and are 1 across all visible prop content —
+// forces that seam to zero without changing the look. win1 windows one axis over
+// [lo, hi] with ramp width f; radWin windows a radius.
+float win1(float x, float lo, float hi, float f) { return clamp(smoothstep(lo, lo + f, x) * (1.0 - smoothstep(hi - f, hi, x)), 0.0, 1.0); }
+float radWin(float r, float inner, float outer) { return 1.0 - smoothstep(inner, outer, r); }
 float sdStar5(vec2 p, float r, float rf) {
 	vec2 k1 = vec2(0.809016994, -0.587785252);
 	vec2 k2 = vec2(-k1.x, k1.y);
@@ -305,9 +318,10 @@ vec4 birdProfile(vec2 p, float flap, int kind) {
 }
 vec3 placeBird(vec3 col, vec2 a, vec2 pos, float s, float flap, int kind, float dark) {
 	vec2 bp = (a - pos) / s;
-	if (abs(bp.x) > 1.4 || abs(bp.y) > 1.2) return col;
+	if (abs(bp.x) > 1.56 || abs(bp.y) > 1.34) return col;
 	vec4 b = birdProfile(bp, flap, kind);
-	return mix(col, mix(b.rgb, vec3(0.09, 0.06, 0.09), dark), b.a);
+	float win = win1(bp.x, -1.50, 1.50, 0.18) * win1(bp.y, -1.28, 1.28, 0.18);
+	return mix(col, mix(b.rgb, vec3(0.09, 0.06, 0.09), dark), b.a * win);
 }
 // One free-flying bird, fully randomised from `seed`: species (repeats are fine),
 // horizontal speed, size (up to smax) and vertical lane (within [ylo, ylo+yspan]).
@@ -344,13 +358,15 @@ float cloudSDF(vec2 q, float s, float seed) {
 	return d * s;
 }
 vec3 placeCloud(vec3 base, vec2 a, vec2 pos, float s, float seed, vec3 lit, vec3 shade) {
-	if (abs((a.x - pos.x) / s) > 1.1 || abs((a.y - pos.y) / s) > 0.75) return base;
+	vec2 cp = (a - pos) / s;
+	if (abs(cp.x) > 1.24 || abs(cp.y) > 0.90) return base;
+	float win = win1(cp.x, -1.22, 1.22, 0.12) * win1(cp.y, -0.84, 0.84, 0.12);
 	float d = cloudSDF(a - pos, s, seed);
-	float cl = aafill(d);
+	float cl = aafill(d) * win;
 	float topness = clamp((pos.y - a.y) / (0.5 * s) + 0.5, 0.0, 1.0);
 	vec3 cc = mix(shade, lit, smoothstep(0.0, 1.0, topness));
 	base = mix(base, cc, cl);
-	base = mix(base, lit, aaline(d, 0.004 * s) * step(a.y, pos.y) * 0.5);
+	base = mix(base, lit, aaline(d, 0.004 * s) * step(a.y, pos.y) * 0.5 * win);
 	return base;
 }
 
@@ -441,9 +457,10 @@ vec4 treeAt(vec2 p, float s, int kind, float seed) {
 }
 vec3 placeTree(vec3 col, vec2 a, vec2 base, float s, int kind, float seed, float dark) {
 	vec2 tp = (a - base) / s;
-	if (tp.x < -1.4 || tp.x > 1.4 || tp.y > 0.2 || tp.y < -2.7) return col;
+	if (tp.x < -1.5 || tp.x > 1.5 || tp.y > 0.30 || tp.y < -2.86) return col;
 	vec4 t = treeAt(a - base, s, kind, seed);
-	return mix(col, mix(t.rgb, vec3(0.03, 0.06, 0.10), dark), t.a);
+	float win = win1(tp.x, -1.42, 1.42, 0.16) * win1(tp.y, -2.78, 0.24, 0.18);
+	return mix(col, mix(t.rgb, vec3(0.03, 0.06, 0.10), dark), t.a * win);
 }
 
 // ---- Premium grass tuft: several curved, tapered, gradient blades ----
@@ -467,9 +484,10 @@ vec4 grassTuft(vec2 p, float seed) {
 }
 vec3 placeGrass(vec3 col, vec2 a, vec2 base, float s, float seed) {
 	vec2 gp = (a - base) / s;
-	if (gp.x < -1.2 || gp.x > 1.2 || gp.y > 0.2 || gp.y < -1.4) return col;
+	if (gp.x < -1.3 || gp.x > 1.3 || gp.y > 0.30 || gp.y < -1.54) return col;
 	vec4 g = grassTuft(gp, seed);
-	return mix(col, g.rgb, g.a);
+	float win = win1(gp.x, -1.24, 1.24, 0.14) * win1(gp.y, -1.46, 0.26, 0.16);
+	return mix(col, g.rgb, g.a * win);
 }
 
 // ---- Detailed mushroom: domed spotted cap, gills, shaded cream stem ----
@@ -506,12 +524,13 @@ vec4 mushroomShape(vec2 p, float seed, vec3 capCol) {
 }
 vec3 placeMushroom(vec3 col, vec2 a, vec2 base, float s, float seed, float glow, vec3 glowCol) {
 	vec2 mp = (a - base) / s;
-	if (mp.x < -1.0 || mp.x > 1.0 || mp.y > 0.2 || mp.y < -1.6) return col;
-	col = mix(col, col * 0.6, aafill(ellip(a, base + vec2(0.0, 0.02 * s), vec2(0.5 * s, 0.12 * s), 0.0)) * 0.4);
+	if (mp.x < -1.12 || mp.x > 1.12 || mp.y > 0.30 || mp.y < -1.72) return col;
+	float win = win1(mp.x, -1.06, 1.06, 0.12) * win1(mp.y, -1.64, 0.26, 0.14);
+	col = mix(col, col * 0.6, aafill(ellip(a, base + vec2(0.0, 0.02 * s), vec2(0.5 * s, 0.12 * s), 0.0)) * 0.4 * win);
 	vec3 capCol = mix(vec3(0.86, 0.16, 0.14), glowCol, glow);
-	if (glow > 0.5) col += glowCol * smoothstep(1.4, 0.0, length(mp)) * 0.25;
+	if (glow > 0.5) col += glowCol * smoothstep(1.4, 0.0, length(mp)) * 0.25 * win;
 	vec4 m = mushroomShape(mp, seed, capCol);
-	return mix(col, m.rgb, m.a);
+	return mix(col, m.rgb, m.a * win);
 }
 "
 
@@ -561,6 +580,51 @@ void fragment() {
 	float hill = 0.80 - 0.05 * sin(uv.x * 5.0);
 	col = mix(col, mix(vec3(0.35, 0.70, 0.32), vec3(0.18, 0.48, 0.20), (uv.y - hill) / (1.0 - hill)), aafill(hill - uv.y));
 	// a round broadleaf + a pine rooted on the hill
+	col = placeTree(col, a, vec2(0.14 * aspect, 0.885), 0.15, 1, 4.0, 0.0);
+	col = placeTree(col, a, vec2(0.86 * aspect, 0.895), 0.14, 0, 9.0, 0.0);
+	for (int i = 0; i < 9; i++) {
+		float fi = float(i);
+		vec2 fp = vec2((0.06 + 0.11 * fi) * aspect, 0.86 + 0.06 * hash11(fi * 3.1));
+		vec3 pc = vec3(hash11(fi * 1.3), hash11(fi * 2.9), hash11(fi * 5.7)) * 0.55 + 0.40;
+		col = mix(col, vec3(0.16, 0.42, 0.18), aaline(a.x - fp.x, 0.004) * step(fp.y, a.y) * step(a.y, fp.y + 0.07));
+		col = mix(col, pc, aafill(sdStar5(a - fp, 0.022, 0.45)));
+		col = mix(col, vec3(1.0, 0.92, 0.35), aafill(distance(a, fp) - 0.007));
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Rainbow static plate: the full scene MINUS the 5 flying birds (the only animated
+# element). Birds are drawn as sprites over this plate.
+const _RAINBOW_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.46, 0.76, 0.99), vec3(0.85, 0.95, 1.0), uv.y);
+	vec2 sp = vec2(0.15 * aspect, 0.11);
+	float sd = distance(a, sp);
+	float sang = atan(a.y - sp.y, a.x - sp.x);
+	col += vec3(1.0, 0.92, 0.55) * smoothstep(0.34, 0.0, sd) * (0.28 + 0.14 * max(0.0, sin(sang * 16.0)));
+	col = mix(col, vec3(1.0, 0.96, 0.62), aafill(sd - 0.070));
+	vec2 cc = vec2(0.5 * aspect, 1.36);
+	float rd = distance(a, cc);
+	float bw = 0.050;
+	for (int i = 0; i < 7; i++) {
+		float r0 = 0.56 + float(i) * bw;
+		float ring = aafill(rd - (r0 + bw)) * aafill(r0 - rd);
+		vec3 bc = vec3(0.93, 0.22, 0.24);
+		if (i == 1) bc = vec3(0.98, 0.57, 0.18);
+		if (i == 2) bc = vec3(0.99, 0.89, 0.26);
+		if (i == 3) bc = vec3(0.32, 0.77, 0.36);
+		if (i == 4) bc = vec3(0.24, 0.53, 0.92);
+		if (i == 5) bc = vec3(0.36, 0.30, 0.72);
+		if (i == 6) bc = vec3(0.62, 0.32, 0.74);
+		col = mix(col, bc, ring * 0.92);
+	}
+	col = placeCloud(col, a, vec2(0.28 * aspect, 0.16), 0.22, 11.0, vec3(1.0), vec3(0.80, 0.85, 0.93));
+	col = placeCloud(col, a, vec2(0.60 * aspect, 0.11), 0.15, 27.0, vec3(1.0), vec3(0.82, 0.87, 0.95));
+	col = placeCloud(col, a, vec2(0.87 * aspect, 0.25), 0.19, 43.0, vec3(1.0), vec3(0.80, 0.85, 0.93));
+	float hill = 0.80 - 0.05 * sin(uv.x * 5.0);
+	col = mix(col, mix(vec3(0.35, 0.70, 0.32), vec3(0.18, 0.48, 0.20), (uv.y - hill) / (1.0 - hill)), aafill(hill - uv.y));
 	col = placeTree(col, a, vec2(0.14 * aspect, 0.885), 0.15, 1, 4.0, 0.0);
 	col = placeTree(col, a, vec2(0.86 * aspect, 0.895), 0.14, 0, 9.0, 0.0);
 	for (int i = 0; i < 9; i++) {
@@ -676,8 +740,51 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Desert: static plate (sky/sun/mesas/floor/cacti) minus the flock of birds.
+const _DESERT_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(1.0, 0.80, 0.45), vec3(0.99, 0.58, 0.40), uv.y * 0.7);
+	col = mix(col, vec3(0.52, 0.26, 0.40), smoothstep(0.42, 0.62, uv.y));
+	vec2 sp = vec2(0.72 * aspect, 0.14);
+	col += vec3(1.0, 0.72, 0.34) * smoothstep(0.40, 0.0, distance(a, sp)) * 0.30;
+	float sun = aafill(distance(a, sp) - 0.085);
+	col = mix(col, vec3(1.0, 0.88, 0.50), sun);
+	col = mix(col, vec3(1.0, 0.62, 0.30), sun * aaline(mod(a.y - sp.y + 0.5, 0.05) - 0.025, 0.012) * step(0.0, a.y - sp.y + 0.02));
+	for (int L = 0; L < 2; L++) {
+		float d = float(L);
+		float top = 0.50 + d * 0.06;
+		float blocky = top - 0.05 * step(0.5, fract(uv.x * (2.0 + d) + d * 0.3)) - 0.03 * step(0.5, fract(uv.x * (3.7 + d)));
+		col = mix(col, mix(vec3(0.62, 0.30, 0.26), vec3(0.45, 0.20, 0.20), d), aafill(blocky - uv.y) * step(uv.y, 0.64));
+	}
+	col = mix(col, mix(vec3(0.84, 0.48, 0.27), vec3(0.50, 0.27, 0.17), (uv.y - 0.62) / 0.38), aafill(0.62 - uv.y));
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float cx = (0.10 + 0.26 * fi) * aspect;
+		float hh = 0.13 + 0.03 * hash11(fi);
+		float body = sdBox(vec2(a.x - cx, a.y - 0.86), vec2(0.020, hh));
+		float arm1 = min(sdBox(vec2(a.x - cx - 0.050, a.y - 0.80), vec2(0.035, 0.014)), sdBox(vec2(a.x - cx - 0.082, a.y - 0.76), vec2(0.014, 0.040)));
+		float arm2 = min(sdBox(vec2(a.x - cx + 0.050, a.y - 0.84), vec2(0.035, 0.014)), sdBox(vec2(a.x - cx + 0.082, a.y - 0.80), vec2(0.014, 0.040)));
+		float cac = min(body, min(arm1, arm2));
+		col = mix(col, vec3(0.13, 0.34, 0.19), aafill(cac));
+		col = mix(col, vec3(0.20, 0.46, 0.26), aaline(cac + 0.006, 0.004));
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Desert dynamic: sample plate, draw the gliding flock over it.
+const _DESERT_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	for (int i = 0; i < 5; i++) col = flyBird(col, a, TIME, float(i) * 6.1 + 2.0, 0.18, 0.10, 0.090, 0.86);
+	COLOR = vec4(col, 1.0);
+}
+"
 
-const _SPEEDWAY_SHADER := _HEAD + "
+const _SPEEDWAY_FUNCS := "
 // Rear-view race car drawn in unit-ish space (y points DOWN). `body` is the paint
 // colour. Built from rounded SDF boxes: shaded body, dark rear glass, glowing tail
 // lights, plate, wheels and a soft contact shadow — reads crisp at any scale.
@@ -704,10 +811,13 @@ vec4 carRear(vec2 q, vec3 body) {
 }
 vec3 placeCar(vec3 col, vec2 a, vec2 c, float s, vec3 body, float fade) {
 	vec2 q = (a - c) / s;
-	if (abs(q.x) > 0.95 || q.y < -0.75 || q.y > 0.75) return col;
+	if (abs(q.x) > 1.04 || abs(q.y) > 0.84) return col;
 	vec4 cv = carRear(q, body);
-	return mix(col, cv.rgb, cv.a * fade);
+	float win = win1(q.x, -0.98, 0.98, 0.10) * win1(q.y, -0.78, 0.78, 0.10);
+	return mix(col, cv.rgb, cv.a * fade * win);
 }
+"
+const _SPEEDWAY_SHADER := _HEAD + _SPEEDWAY_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
@@ -774,8 +884,78 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Speedway static plate: sunset sky + sun + cloud streaks + the perspective track
+# with kerbs (all static — the only animated thing is the stream of cars).
+const _SPEEDWAY_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.20, 0.11, 0.36), vec3(1.0, 0.60, 0.30), smoothstep(0.0, 0.27, uv.y));
+	col = mix(col, vec3(1.0, 0.74, 0.40), smoothstep(0.15, 0.27, uv.y));
+	vec2 sunp = vec2(0.62 * aspect, 0.125);
+	float sdist = distance(a, sunp);
+	col += vec3(1.0, 0.52, 0.24) * smoothstep(0.40, 0.0, sdist) * 0.5;
+	float sundisk = aafill(sdist - 0.115);
+	vec3 sunCol = mix(vec3(1.0, 0.93, 0.60), vec3(1.0, 0.60, 0.28), smoothstep(-0.115, 0.115, a.y - sunp.y));
+	col = mix(col, sunCol, sundisk);
+	col = mix(col, vec3(0.99, 0.52, 0.26), sundisk * step(0.0, a.y - sunp.y) * step(0.5, fract((a.y - sunp.y) * 26.0)) * 0.55);
+	for (int sc = 0; sc < 3; sc++) {
+		float fsc = float(sc);
+		float cy = 0.17 + 0.028 * fsc;
+		col = mix(col, vec3(0.80, 0.36, 0.32), smoothstep(0.05, 0.0, abs(uv.y - cy)) * step(uv.y, 0.26) * 0.38 * (0.5 + 0.5 * sin(uv.x * 8.0 + fsc)));
+	}
+	if (uv.y >= 0.27) {
+		float ty = (uv.y - 0.27) / 0.73;
+		float halfw = mix(0.06, 0.62, ty);
+		float cx = uv.x - 0.5;
+		if (abs(cx) < halfw) {
+			col = mix(vec3(0.24, 0.24, 0.27), vec3(0.12, 0.12, 0.14), ty);
+			col = mix(col, vec3(0.95, 0.85, 0.20), step(abs(cx), 0.010 * mix(0.3, 1.0, ty)) * step(0.5, fract(uv.y * 14.0)));
+			float kerb = step(halfw - 0.045, abs(cx)) * step(abs(cx), halfw - 0.014);
+			col = mix(col, mix(vec3(0.90, 0.15, 0.15), vec3(0.95), step(0.5, fract(uv.y * 22.0))), kerb);
+			col = mix(col, vec3(0.95), step(halfw - 0.014, abs(cx)));
+		} else {
+			col = mix(vec3(0.24, 0.48, 0.24), vec3(0.14, 0.32, 0.16), ty);
+		}
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Speedway dynamic: sample plate, draw the receding stream of cars over it.
+const _SPEEDWAY_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _SPEEDWAY_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		float speed = 0.05 + 0.05 * hash11(fi * 1.7);
+		float gap = 0.6 + 1.4 * hash11(fi * 4.3);
+		float raw = TIME * speed + hash11(fi * 9.1) * 3.0;
+		float p = mod(raw, 1.0 + gap);
+		if (p > 1.0) continue;
+		float cyc = floor(raw / (1.0 + gap));
+		float yy = mix(1.05, 0.305, p);
+		float ty = clamp((yy - 0.27) / 0.73, 0.0, 1.0);
+		float halfw = mix(0.06, 0.62, ty);
+		float lane = (fi - 1.0) * 0.46;
+		float cx = 0.5 + lane * halfw;
+		float s = mix(0.016, 0.165, ty);
+		float ci = hash11(fi * 2.9 + cyc * 1.7);
+		vec3 body = vec3(0.90, 0.16, 0.16);
+		if (ci > 0.16) body = vec3(0.13, 0.40, 0.92);
+		if (ci > 0.33) body = vec3(0.96, 0.78, 0.12);
+		if (ci > 0.50) body = vec3(0.13, 0.62, 0.28);
+		if (ci > 0.66) body = vec3(0.96, 0.45, 0.10);
+		if (ci > 0.83) body = vec3(0.92, 0.93, 0.97);
+		float fade = smoothstep(0.305, 0.345, yy) * smoothstep(1.05, 0.96, yy);
+		col = placeCar(col, a, vec2(cx * aspect, yy), s, body, fade);
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
-const _REEF_SHADER := _HEAD + "
+const _REEF_FUNCS := "
 // Branching/lumpy reef coral, base at q=0 growing up (-y). seed randomises the
 // fingers; tint is the coral colour, lighter toward the tips with bright polyps.
 vec4 coralClump(vec2 q, float seed, vec3 tint) {
@@ -828,11 +1008,14 @@ vec4 jelly(vec2 q, float t, vec3 tint) {
 }
 vec3 placeJelly(vec3 col, vec2 a, vec2 c, float s, float t, vec3 tint) {
 	vec2 q = (a - c) / s;
-	if (abs(q.x) > 0.95 || q.y < -0.6 || q.y > 1.1) return col;
-	col += tint * smoothstep(0.65, 0.0, length(q * vec2(1.0, 0.55))) * 0.12;
+	if (abs(q.x) > 1.04 || q.y < -0.70 || q.y > 1.20) return col;
+	float win = win1(q.x, -0.98, 0.98, 0.10) * win1(q.y, -0.66, 1.16, 0.10);
+	col += tint * smoothstep(0.65, 0.0, length(q * vec2(1.0, 0.55))) * 0.12 * win;
 	vec4 j = jelly(q, t, tint);
-	return mix(col, j.rgb, j.a);
+	return mix(col, j.rgb, j.a * win);
 }
+"
+const _REEF_SHADER := _HEAD + _REEF_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
@@ -926,6 +1109,102 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Reef static plate: water gradient + sandy floor (caustics frozen) + coral clumps
+# + starfish. The shafts, seaweed, fish and jellyfish animate; bubbles are particles.
+const _REEF_STATIC := _HEAD + _REEF_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.16, 0.55, 0.72), vec3(0.02, 0.13, 0.30), uv.y);
+	float floorY = 0.82 + 0.02 * sin(uv.x * 9.0) + 0.015 * sin(uv.x * 23.0);
+	float isFloor = aafill(floorY - uv.y);
+	col = mix(col, mix(vec3(0.92, 0.84, 0.60), vec3(0.74, 0.62, 0.42), (uv.y - floorY) / 0.18), isFloor);
+	col += vec3(0.18, 0.26, 0.22) * smoothstep(0.6, 0.95, fbm(vec2(a.x * 5.0, uv.y * 5.0))) * isFloor * 0.5;
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float cx = (0.10 + 0.20 * fi) * aspect;
+		vec3 ccol = vec3(0.97, 0.36, 0.52);
+		if (int(mod(fi, 3.0)) == 1) ccol = vec3(0.99, 0.60, 0.18);
+		if (int(mod(fi, 3.0)) == 2) ccol = vec3(0.58, 0.42, 0.95);
+		col = mix(col, col * 0.7, aafill(ellip(a, vec2(cx, 0.865), vec2(0.07, 0.014), 0.0)) * 0.4);
+		vec4 cor = coralClump(a - vec2(cx, 0.86), fi * 4.7 + 1.0, ccol);
+		col = mix(col, cor.rgb, cor.a);
+	}
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		col = mix(col, vec3(1.0, 0.60, 0.25), aafill(sdStar5((a - vec2(mix(0.25, 0.75, fi) * aspect, 0.90)) * rot(0.3), 0.030, 0.5)));
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Reef dynamic: sample plate, draw the shimmering light shafts, swaying seaweed,
+# darting fish (bounded) and drifting jellyfish over it.
+const _REEF_DYN := _HEAD + _REEF_FUNCS + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float x0 = (0.10 + 0.20 * fi) * aspect + 0.07 * sin(t * 0.3 + fi * 1.7);
+		float lean = uv.y * 0.16 + 0.04 * sin(t * 0.45 + fi * 2.0);
+		col += vec3(0.50, 0.85, 0.92) * smoothstep(0.05, 0.0, abs(a.x - (x0 + lean))) * (1.0 - uv.y) * (0.16 + 0.06 * sin(t * 0.8 + fi));
+	}
+	for (int i = 0; i < 7; i++) {
+		float fi = float(i);
+		float side = step(3.5, fi);
+		float basex = (mix(0.05, 0.95, side) + (mod(fi, 4.0) - 1.5) * 0.045) * aspect;
+		float rootY = 0.86;
+		float h = 0.22 + 0.08 * hash11(fi * 2.3);
+		float tt = clamp((rootY - uv.y) / h, 0.0, 1.0);
+		float sway = (0.03 + 0.06 * tt) * sin(t * 1.2 + fi * 1.7 + tt * 3.0);
+		float w = 0.014 * (1.0 - 0.7 * tt);
+		float d = abs(a.x - (basex + sway)) - w;
+		d = max(d, max(uv.y - rootY, rootY - h - uv.y));
+		vec3 wc = mix(vec3(0.08, 0.40, 0.20), vec3(0.22, 0.64, 0.30), tt);
+		col = mix(col, wc, aafill(d));
+	}
+	for (int i = 0; i < 7; i++) {
+		float fi = float(i);
+		float dir = (hash11(fi * 7.0) < 0.5) ? -1.0 : 1.0;
+		float speed = 0.04 + 0.07 * hash11(fi * 2.3);
+		float span = aspect + 0.30;
+		float baseY = mix(0.13, 0.74, step(3.5, fi)) + 0.06 * hash11(fi * 5.1);
+		float yy = baseY + 0.02 * sin(t * 0.8 + fi * 2.0);
+		float prog = mod(t * speed + hash11(fi * 3.1) * span, span) - 0.15;
+		float xx = (dir > 0.0) ? prog : (span - 0.30 - prog);
+		vec2 q = a - vec2(xx, yy);
+		q.x *= dir;
+		float wig = 0.007 * sin(t * 8.0 + fi * 3.0);
+		q.y += wig * smoothstep(0.0, 0.05, -q.x);
+		if (abs(q.x) < 0.11 && abs(q.y) < 0.075) {
+			vec3 col0 = col;
+			vec3 fc = vec3(0.99, 0.72, 0.20);
+			if (int(mod(fi, 2.0)) == 0) fc = vec3(0.30, 0.72, 0.99);
+			if (int(mod(fi, 3.0)) == 2) fc = vec3(0.95, 0.35, 0.45);
+			float body = aafill(length(q * vec2(0.7, 1.7)) - 0.028);
+			float tail = aafill(sdTri(vec2(q.x + 0.030 + wig, q.y) * rot(1.57), 0.018));
+			col = mix(col, fc, max(body, tail));
+			col = mix(col, fc * 0.65, aaline(q.y, 0.0018) * step(abs(q.x), 0.020) * body);
+			col = mix(col, vec3(1.0), aafill(distance(q, vec2(0.020, -0.004)) - 0.007) * body);
+			col = mix(col, vec3(0.05), aafill(distance(q, vec2(0.022, -0.004)) - 0.004) * body);
+			col = mix(col0, col, win1(q.x, -0.095, 0.095, 0.018) * win1(q.y, -0.065, 0.065, 0.012));
+		}
+	}
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float jx = (0.13 + 0.25 * fi) * aspect + 0.05 * sin(t * 0.25 + fi * 2.3);
+		float jy = 0.12 + 0.13 * hash11(fi * 4.1) + 0.05 * sin(t * 0.4 + fi * 1.7);
+		float js = 0.06 + 0.025 * hash11(fi * 6.7);
+		vec3 tint = vec3(0.95, 0.55, 0.85);
+		if (int(mod(fi, 3.0)) == 1) tint = vec3(0.55, 0.80, 0.98);
+		if (int(mod(fi, 3.0)) == 2) tint = vec3(0.98, 0.72, 0.45);
+		col = placeJelly(col, a, vec2(jx, jy), js, t + fi * 1.3, tint);
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
 const _KITTY_SHADER := _HEAD + "
 void fragment() {
@@ -936,7 +1215,7 @@ void fragment() {
 	// soft candy stripes
 	col = mix(col, col * 1.04, aaline(fract(a.x * 10.0) - 0.5, 0.18) * 0.3);
 	// LOTS of hearts drifting up across the whole screen, each fading in and out
-	for (int i = 0; i < 26; i++) {
+	for (int i = 0; i < 18; i++) {
 		float fi = float(i);
 		float speed = 0.02 + 0.05 * hash11(fi * 2.9);
 		float yy = fract(hash11(fi * 3.1) - t * speed);
@@ -957,7 +1236,7 @@ void fragment() {
 		}
 	}
 	// ---- adorable Neko Pop kitty, tucked into the TOP-LEFT (clear of the wheel) ----
-	vec2 c = vec2(0.215 * aspect, 0.150);
+	vec2 c = vec2(0.175 * aspect, 0.150);
 	vec2 q = a - c;
 	float R = 0.090;
 	// the LEFT eye (the cat's own left = screen right, +x) winks on a slow cycle
@@ -1025,6 +1304,95 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Kitty static plate: candy-pink gradient + stripes + paw prints. The drifting
+# hearts are particles; the winking kitty + orbiting sparkles animate.
+const _KITTY_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(1.0, 0.82, 0.89), vec3(1.0, 0.64, 0.79), uv.y);
+	col = mix(col, col * 1.04, aaline(fract(a.x * 10.0) - 0.5, 0.18) * 0.3);
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		vec2 pp = vec2((0.12 + 0.18 * fi) * aspect, 0.93);
+		col = mix(col, vec3(1.0, 0.60, 0.74), aafill(distance(a, pp) - 0.018));
+		for (int k = 0; k < 4; k++) {
+			float fk = float(k);
+			col = mix(col, vec3(1.0, 0.60, 0.74), aafill(distance(a, pp + 0.026 * vec2(cos(fk * 1.4 - 0.7), -abs(sin(fk * 1.4 - 0.7)) * 0.8 - 0.4)) - 0.008));
+		}
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Kitty dynamic: sample plate, draw the Neko Pop kitty (bounded to its corner so
+# its many SDF ops only cost there) with its slow wink, plus orbiting sparkles.
+const _KITTY_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+uniform float eye_l = 1.0;   // viewer-left eye openness (0 = happy-closed)
+uniform float eye_r = 1.0;   // viewer-right eye openness (the one that winks)
+uniform float smile = 0.0;   // extra grin 0..1, driven by the gesture controller
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	vec2 c = vec2(0.175 * aspect, 0.150);
+	vec2 q = a - c;
+	if (abs(q.x) < 0.185 && abs(q.y) < 0.185) {
+		vec3 col0 = col;
+		float R = 0.090;
+		col = mix(col, col * 0.86, aafill(length((q - vec2(0.008, 0.010)) * vec2(1.0, 0.96)) - (R + 0.004)) * 0.30);
+		float earL = aafill(sdTri((q - vec2(-0.072, -0.082)) * rot(0.34), 0.038) - 0.013);
+		earL = max(earL, aafill(sdCircle((q - vec2(-0.082, -0.116)) * vec2(1.0, 0.85), 0.018)));
+		float earR = aafill(sdTri((q - vec2( 0.072, -0.082)) * rot(-0.34), 0.038) - 0.013);
+		earR = max(earR, aafill(sdCircle((q - vec2( 0.082, -0.116)) * vec2(1.0, 0.85), 0.018)));
+		float head = aafill(length(q * vec2(1.0, 0.96)) - R);
+		col = mix(col, vec3(1.0), max(head, max(earL, earR)));
+		col = mix(col, vec3(0.97, 0.90, 0.95), aafill(length(q * vec2(1.0, 0.96)) - R) * smoothstep(-0.08, 0.10, q.y) * 0.35);
+		col = mix(col, vec3(0.98, 0.55, 0.66), aafill(sdTri((q - vec2(-0.072, -0.070)) * rot(0.34), 0.018) - 0.008));
+		col = mix(col, vec3(0.98, 0.55, 0.66), aafill(sdTri((q - vec2( 0.072, -0.070)) * rot(-0.34), 0.018) - 0.008));
+		col = mix(col, vec3(0.86, 0.45, 0.60), aaline(length(q * vec2(1.0, 0.96)) - R, 0.0022) * head);
+		col = mix(col, vec3(1.0, 0.62, 0.72), aafill(distance(q, vec2(-0.062, 0.030)) - 0.019) * head * 0.85);
+		col = mix(col, vec3(1.0, 0.62, 0.72), aafill(distance(q, vec2( 0.062, 0.030)) - 0.019) * head * 0.85);
+		float eyLh = mix(0.004, 0.030, eye_l);      // viewer-left eye height
+		float eyRh = mix(0.004, 0.030, eye_r);      // viewer-right eye height (winks)
+		col = mix(col, vec3(0.17, 0.10, 0.17), aafill(length((q - vec2(-0.040, 0.006)) / vec2(0.021, eyLh)) - 1.0) * head);
+		col = mix(col, vec3(0.17, 0.10, 0.17), aafill(length((q - vec2( 0.040, 0.006)) / vec2(0.021, eyRh)) - 1.0) * head);
+		col = mix(col, vec3(0.40, 0.22, 0.30), aaline(distance(q - vec2(-0.040, 0.012), vec2(0.0)) - 0.018, 0.0018) * step(q.y, 0.012) * step(-0.056, q.x) * step(q.x, -0.024) * head * (1.0 - eye_l));
+		col = mix(col, vec3(0.40, 0.22, 0.30), aaline(distance(q - vec2( 0.040, 0.012), vec2(0.0)) - 0.018, 0.0018) * step(q.y, 0.012) * step(0.024, q.x) * step(q.x, 0.056) * head * (1.0 - eye_r));
+		col = mix(col, vec3(1.0), aafill(distance(q, vec2(-0.034, -0.004)) - 0.006) * head * eye_l);
+		col = mix(col, vec3(1.0), aafill(distance(q, vec2( 0.046, -0.004)) - 0.006) * head * eye_r);
+		col = mix(col, vec3(1.0), aafill(distance(q, vec2(-0.046, 0.012)) - 0.003) * head * eye_l);
+		col = mix(col, vec3(0.98, 0.40, 0.52), aafill(sdHeart((q - vec2(0.0, 0.030)) * vec2(1.0, -1.0) * 70.0)) * head);
+		col = mix(col, vec3(0.70, 0.34, 0.45), aaline(distance(q - vec2(-0.012, 0.044), vec2(0.0)) - 0.013, 0.0017) * step(0.044, q.y) * step(q.y, 0.060) * head);
+		col = mix(col, vec3(0.70, 0.34, 0.45), aaline(distance(q - vec2( 0.012, 0.044), vec2(0.0)) - 0.013, 0.0017) * step(0.044, q.y) * step(q.y, 0.060) * head);
+		col = mix(col, vec3(0.72, 0.33, 0.44), aaline(distance(q - vec2(0.0, 0.028), vec2(0.0)) - 0.032, 0.0020) * step(0.052, q.y) * step(q.y, 0.070) * head * smile);
+		for (int s = -1; s <= 1; s += 2) {
+			float fs = float(s);
+			for (int w = 0; w < 3; w++) {
+				float fw = float(w) - 1.0;
+				vec2 wc = vec2(fs * 0.112, 0.024 + fw * 0.016);
+				float wd = aafill(sdBox((q - wc) * rot(fs * (-fw) * 0.22), vec2(0.034, 0.0014)));
+				col = mix(col, vec3(0.62, 0.46, 0.52), wd * 0.85);
+			}
+		}
+		vec2 bw = q - vec2(0.082, -0.108);
+		float bowL = aafill(sdTri((bw + vec2(0.020, 0.0)) * rot(-1.5708), 0.026));
+		float bowR = aafill(sdTri((bw - vec2(0.020, 0.0)) * rot(1.5708), 0.026));
+		col = mix(col, vec3(1.0, 0.30, 0.50), max(bowL, bowR));
+		col = mix(col, vec3(1.0, 0.62, 0.74), (aafill(sdTri((bw + vec2(0.020, -0.006)) * rot(-1.5708), 0.012)) + aafill(sdTri((bw - vec2(0.020, -0.006)) * rot(1.5708), 0.012))) * 0.6);
+		col = mix(col, vec3(0.85, 0.18, 0.40), aafill(distance(bw, vec2(0.0)) - 0.011));
+		col = mix(col0, col, win1(q.x, -0.18, 0.18, 0.02) * win1(q.y, -0.18, 0.18, 0.02));
+	}
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		vec2 spp = c + 0.17 * vec2(cos(fi * 1.05 + 0.3), sin(fi * 1.05 + 0.3));
+		float tw = 0.5 + 0.5 * sin(t * 4.0 + fi * 1.7);
+		vec2 d = a - spp;
+		col += vec3(1.0, 1.0, 0.92) * (aaline(d.x, 0.0016) * step(abs(d.y), 0.011) + aaline(d.y, 0.0016) * step(abs(d.x), 0.011)) * tw * 0.9;
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
 const _COSMOS_SHADER := _HEAD + "
 void fragment() {
@@ -1036,7 +1404,7 @@ void fragment() {
 	col += vec3(0.45, 0.18, 0.60) * smoothstep(0.55, 0.95, fbm(a * 2.6 + 1.0)) * 0.45 * smoothstep(0.45, 0.0, abs(uv.y - 0.13));
 	col += vec3(0.15, 0.35, 0.70) * smoothstep(0.50, 0.95, fbm(a * 2.2 + 7.0)) * 0.40 * smoothstep(0.45, 0.0, abs(uv.y - 0.88));
 	// crisp star field, each star twinkling on its own cycle; brightest sparkle
-	for (int i = 0; i < 46; i++) {
+	for (int i = 0; i < 30; i++) {
 		float fi = float(i);
 		vec2 sp = vec2(hash11(fi * 1.3) * aspect, hash11(fi * 2.7));
 		float br = hash11(fi * 3.9);
@@ -1118,6 +1486,103 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Cosmos static plate: space gradient + nebula + Mars (all static). The starfield,
+# spinning ringed planet, spinning Earth, orbiting Moon and shooting stars animate.
+const _COSMOS_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.03, 0.02, 0.10), vec3(0.08, 0.03, 0.18), uv.y);
+	col += vec3(0.45, 0.18, 0.60) * smoothstep(0.55, 0.95, fbm(a * 2.6 + 1.0)) * 0.45 * smoothstep(0.45, 0.0, abs(uv.y - 0.13));
+	col += vec3(0.15, 0.35, 0.70) * smoothstep(0.50, 0.95, fbm(a * 2.2 + 7.0)) * 0.40 * smoothstep(0.45, 0.0, abs(uv.y - 0.88));
+	vec2 mq = a - vec2(0.17 * aspect, 0.12);
+	float mr = 0.058;
+	float marsA = aafill(length(mq) - mr);
+	vec3 mcol = mix(vec3(0.78, 0.34, 0.18), vec3(0.55, 0.22, 0.12), fbm(mq * 16.0 + 2.0));
+	mcol = mix(mcol, vec3(0.88, 0.52, 0.32), smoothstep(0.5, 0.82, fbm(mq * 26.0 - 1.0)) * 0.6);
+	mcol = mix(mcol, vec3(0.92, 0.94, 0.98), smoothstep(0.62, 0.92, -mq.y / mr) * 0.85);
+	mcol *= mix(0.26, 1.15, smoothstep(-0.35, 0.6, dot(normalize(mq + 0.0008), normalize(vec2(-0.6, -0.6)))));
+	col += vec3(0.70, 0.34, 0.18) * smoothstep(mr + 0.024, mr, length(mq)) * 0.30;
+	col = mix(col, mcol, marsA);
+	COLOR = vec4(col, 1.0);
+}
+"
+# Cosmos dynamic: sample plate, then the spinning ringed planet, spinning Earth +
+# orbiting Moon, and shooting stars — each planet bounded so it only costs where it
+# actually is. (The starfield is particles.)
+const _COSMOS_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	vec2 pc = vec2(0.74 * aspect, 0.16);
+	vec2 q = a - pc;
+	if (abs(q.x) < 0.24 && abs(q.y) < 0.11) {
+		vec3 col0 = col;
+		float ringline = aaline(length(q * vec2(1.0, 3.2)) - 0.17, 0.013);
+		float rang = atan(q.y * 3.2, q.x);
+		float spin = 0.5 + 0.5 * sin(rang * 6.0 - t * 1.4);
+		vec3 ringCol = vec3(0.92, 0.82, 0.62) * (0.55 + 0.6 * spin);
+		col = mix(col, ringCol, ringline);
+		float pl = aafill(length(q) - 0.105);
+		vec3 pcol = mix(vec3(0.96, 0.72, 0.42), vec3(0.62, 0.34, 0.22), clamp(q.y / 0.105 * 0.5 + 0.5, 0.0, 1.0));
+		pcol = mix(pcol, pcol * 0.85, step(0.5, fract(q.y * 26.0)));
+		col = mix(col, pcol, pl);
+		col = mix(col, ringCol, ringline * step(0.0, q.y));
+		col = mix(col0, col, win1(q.x, -0.23, 0.23, 0.02) * win1(q.y, -0.105, 0.105, 0.018));
+	}
+	vec2 ec = vec2(0.80 * aspect, 0.84);
+	vec2 eq = a - ec;
+	if (abs(eq.x) < 0.15 && abs(eq.y) < 0.15) {
+		vec3 col0 = col;
+		float er = 0.078;
+		float ea = aafill(length(eq) - er);
+		float spinx = eq.x + t * 0.05;
+		vec3 ecol = mix(vec3(0.10, 0.40, 0.64), vec3(0.06, 0.24, 0.48), clamp(eq.y / er * 0.5 + 0.5, 0.0, 1.0));
+		float land = fbm(vec2(spinx, eq.y) * 15.0 + 3.0);
+		ecol = mix(ecol, vec3(0.18, 0.50, 0.26), smoothstep(0.54, 0.68, land));
+		ecol = mix(ecol, vec3(0.34, 0.60, 0.34), smoothstep(0.66, 0.82, land) * 0.7);
+		ecol = mix(ecol, vec3(0.88, 0.92, 0.98), smoothstep(0.74, 0.96, fbm(vec2(eq.x + t * 0.03, eq.y) * 11.0 - 1.0)) * 0.5);
+		float lightd = dot(normalize(eq + vec2(0.0008, 0.0008)), normalize(vec2(-0.6, -0.7)));
+		ecol *= mix(0.20, 1.18, smoothstep(-0.35, 0.6, lightd));
+		col += vec3(0.30, 0.52, 0.72) * smoothstep(er + 0.032, er, length(eq)) * 0.5;
+		col = mix(col, ecol, ea);
+		col = mix(col0, col, win1(eq.x, -0.14, 0.14, 0.02) * win1(eq.y, -0.14, 0.14, 0.02));
+	}
+	float moonAng = t * 0.55;
+	vec2 moonPos = ec + vec2(cos(moonAng) * 0.165, sin(moonAng) * 0.072);
+	vec2 mnq = a - moonPos;
+	if (abs(mnq.x) < 0.055 && abs(mnq.y) < 0.055) {
+		vec3 col0 = col;
+		float mnr = 0.019;
+		vec3 mnc = vec3(0.80, 0.80, 0.84) * (0.72 + 0.4 * fbm(mnq * 40.0));
+		mnc = mix(mnc, mnc * 0.6, smoothstep(0.35, 0.7, fbm(mnq * 70.0)));
+		mnc *= mix(0.30, 1.1, smoothstep(-0.3, 0.6, dot(normalize(mnq + 0.0006), normalize(vec2(-0.6, -0.7)))));
+		col = mix(col, mnc, aafill(length(mnq) - mnr));
+		col = mix(col0, col, win1(mnq.x, -0.05, 0.05, 0.01) * win1(mnq.y, -0.05, 0.05, 0.01));
+	}
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float period = 6.0 + 4.0 * hash11(fi * 2.1);
+		float phase = (t + fi * 11.0) / period;
+		float seed = floor(phase);
+		float ph = fract(phase);
+		vec2 ssp = vec2(hash11(seed + fi * 1.3) * aspect, 0.05 + 0.30 * hash11(seed + fi * 2.7));
+		float ang = 3.14159 * (0.16 + 0.68 * hash11(seed + fi * 3.9));
+		vec2 dir = vec2(cos(ang), sin(ang));
+		vec2 head = ssp + dir * ph * (aspect * 1.2);
+		vec2 d = a - head;
+		float along = dot(d, -dir);
+		float perp = dot(d, vec2(-dir.y, dir.x));
+		float trail = smoothstep(0.22, 0.0, along) * step(0.0, along) * smoothstep(0.008, 0.0, abs(perp));
+		float vis = smoothstep(0.0, 0.04, ph) * smoothstep(0.60, 0.40, ph);
+		col += vec3(0.85, 0.95, 1.0) * trail * vis * 0.9;
+		col += vec3(1.0) * smoothstep(0.012, 0.0, length(d)) * vis;
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
 const _NEON_SHADER := _HEAD + "
 void fragment() {
@@ -1130,7 +1595,7 @@ void fragment() {
 	col += vec3(0.60, 0.45, 0.70) * smoothstep(0.22, 0.0, distance(a, mp)) * 0.25;
 	col = mix(col, vec3(0.96, 0.92, 0.82), aafill(distance(a, mp) - 0.055));
 	// stars
-	for (int i = 0; i < 22; i++) {
+	for (int i = 0; i < 14; i++) {
 		float fi = float(i);
 		col += vec3(0.90) * aafill(distance(a, vec2(hash11(fi * 1.1) * aspect, hash11(fi * 2.2) * 0.40)) - 0.0016) * 0.8;
 	}
@@ -1188,6 +1653,77 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Neon static plate: gradient + moon + halo + city skyline (windows frozen lit) +
+# the rooftop billboard. The starfield is particles; the airplane animates.
+const _NEON_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.06, 0.03, 0.16), vec3(0.18, 0.05, 0.24), uv.y * 0.6);
+	vec2 mp = vec2(0.18 * aspect, 0.12);
+	col += vec3(0.60, 0.45, 0.70) * smoothstep(0.22, 0.0, distance(a, mp)) * 0.25;
+	col = mix(col, vec3(0.96, 0.92, 0.82), aafill(distance(a, mp) - 0.055));
+	float horizon = 1.0;
+	for (int i = 0; i < 10; i++) {
+		float fi = float(i);
+		float bx = fi / 10.0 * aspect;
+		float bw = aspect / 10.0 * 0.94;
+		float edge = abs(fi / 9.0 - 0.5) * 2.0;
+		float bh = 0.30 + 0.42 * pow(edge, 1.4) + 0.05 * hash11(fi * 3.3);
+		float top = horizon - bh;
+		if (a.x > bx && a.x < bx + bw && uv.y > top && uv.y < horizon) {
+			vec3 bcol = mix(vec3(0.08, 0.07, 0.18), vec3(0.14, 0.09, 0.26), hash11(fi));
+			vec2 cell = floor(vec2((a.x - bx) * 26.0, (uv.y - top) * 40.0));
+			float lit = step(0.45, hash21(cell + fi));
+			lit *= step(0.22, fract(hash21(cell + fi) * 7.31));
+			vec2 w = fract(vec2((a.x - bx) * 26.0, (uv.y - top) * 40.0)) - 0.5;
+			vec3 wc = mix(vec3(0.95, 0.85, 0.40), vec3(0.30, 0.85, 0.98), hash11(fi * 7.0));
+			col = mix(bcol, wc, aafill(max(abs(w.x) - 0.30, abs(w.y) - 0.32)) * lit);
+			col = mix(col, mix(vec3(1.0, 0.20, 0.60), vec3(0.20, 0.90, 1.0), hash11(fi * 2.1)), aaline(uv.y - top, 0.004));
+		}
+	}
+	vec2 np = vec2(0.80 * aspect, 0.73);
+	col = mix(col, vec3(0.05, 0.02, 0.10), aafill(sdBox(a - np, vec2(0.05, 0.04))));
+	col = mix(col, vec3(1.0, 0.25, 0.60), aaline(sdBox(a - np, vec2(0.05, 0.04)), 0.004));
+	col = mix(col, vec3(0.20, 0.95, 1.0), aafill(sdStar5((a - np) * rot(0.2), 0.022, 0.5)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Neon dynamic: sample plate, draw the crossing airplane + vapour trail + blinking
+# nav lights, bounded to a thin band so it's nearly free elsewhere.
+const _NEON_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	float plnPeriod = 13.0;
+	float plnPh = fract(t / plnPeriod);
+	float plnSeed = floor(t / plnPeriod);
+	float pdir = (hash11(plnSeed * 1.7) < 0.5) ? 1.0 : -1.0;
+	float py = 0.10 + 0.16 * hash11(plnSeed * 2.3);
+	float px = mix(-0.2, aspect + 0.2, (pdir > 0.0) ? plnPh : (1.0 - plnPh));
+	vec2 pq = a - vec2(px, py + 0.008 * sin(t * 0.6));
+	pq.x *= pdir;
+	if (abs(pq.y) < 0.075) {
+		vec3 col0 = col;
+		float behind = -pq.x - 0.027;
+		col += vec3(0.85, 0.90, 1.0) * smoothstep(0.34, 0.0, behind) * step(0.0, behind) * smoothstep(0.0035 + behind * 0.02, 0.0, abs(pq.y)) * 0.40;
+		float pbody = ellip(pq, vec2(0.0, 0.0), vec2(0.032, 0.0065), 0.0);
+		float pwing = sdBox(pq - vec2(-0.002, 0.0), vec2(0.010, 0.026));
+		float ptail = sdBox(pq - vec2(-0.027, 0.0), vec2(0.006, 0.013));
+		float plane = min(pbody, min(pwing, ptail));
+		float pa2 = aafill(plane);
+		col = mix(col, vec3(0.82, 0.86, 0.96), pa2);
+		col = mix(col, vec3(0.45, 0.55, 0.78), aaline(plane, 0.0015) * pa2);
+		float nav = 0.5 + 0.5 * sin(t * 8.0);
+		col += vec3(1.0, 0.25, 0.25) * aafill(distance(pq, vec2(0.0, 0.026)) - 0.004) * nav;
+		col += vec3(0.30, 1.0, 0.35) * aafill(distance(pq, vec2(0.0, -0.026)) - 0.004) * (1.0 - nav);
+		col = mix(col0, col, win1(pq.y, -0.07, 0.07, 0.015));
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
 # ---- HIGH-VALUE: detailed animated scenes ----
 
@@ -1224,6 +1760,53 @@ void fragment() {
 	col = mix(col, vec3(0.30, 0.22, 0.14), aaline(abs(bq.x) - 0.04 * (bq.y - 0.06), 0.002) * step(0.0, bq.y) * step(bq.y, 0.065));
 	// a flock gliding past, wings flapping: random species (repeats fine), speeds,
 	// sizes and an off-screen gap before each loops back in from the left
+	for (int i = 0; i < 5; i++) col = flyBird(col, a, TIME, float(i) * 5.7 + 3.0, 0.26, 0.14, 0.082, 0.32);
+	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.85, 1.0, smoothstep(1.2, 0.2, length(p)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Clouds static plate: sky + sun + the 4 soft layered fbm cloud sheets, FROZEN
+# (their slow drift is removed). Baking these once removes ~12 fbm calls/pixel/frame
+# — the dominant cost. The defined clouds, balloon and birds still drift in the dyn.
+const _CLOUDS_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.30, 0.56, 0.86), vec3(0.78, 0.88, 0.98), smoothstep(0.0, 1.0, uv.y));
+	vec2 sp = vec2(0.80 * aspect, 0.12);
+	float sang = atan(a.y - sp.y, a.x - sp.x);
+	col += vec3(1.0, 0.95, 0.70) * smoothstep(0.40, 0.0, distance(a, sp)) * (0.30 + 0.12 * max(0.0, sin(sang * 14.0)));
+	col = mix(col, vec3(1.0, 0.97, 0.75), aafill(distance(a, sp) - 0.060));
+	for (int L = 0; L < 4; L++) {
+		float d = float(L);
+		vec2 cq = a * (1.5 + d * 0.7) + vec2(0.0, -d * 2.0);
+		vec2 warp = vec2(fbm(cq), fbm(cq + vec2(3.0, 1.0)));
+		float c = fbm(cq + warp * 1.3);
+		float clouds = smoothstep(0.55, 0.78, c);
+		col = mix(col, mix(vec3(0.82, 0.86, 0.95), vec3(1.0), clouds), clouds * (0.85 - d * 0.12));
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# Clouds dynamic: sample plate, draw the defined drifting clouds, the hot-air
+# balloon and the flock, then the vignette (applied to the whole composite, as in
+# the original).
+const _CLOUDS_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = placeCloud(col, a, vec2(fract(0.10 + TIME * 0.012) * (aspect + 0.5) - 0.25, 0.20), 0.20, 5.0, vec3(1.0), vec3(0.80, 0.85, 0.95));
+	col = placeCloud(col, a, vec2(fract(0.52 + TIME * 0.008) * (aspect + 0.5) - 0.25, 0.12), 0.15, 23.0, vec3(1.0), vec3(0.82, 0.87, 0.96));
+	col = placeCloud(col, a, vec2(fract(0.80 + TIME * 0.010) * (aspect + 0.5) - 0.25, 0.27), 0.17, 41.0, vec3(1.0), vec3(0.80, 0.85, 0.95));
+	float bx = fract(TIME * 0.02 + 0.1) * (aspect + 0.2) - 0.1;
+	vec2 bq = a - vec2(bx, 0.16 + 0.01 * sin(TIME * 0.6));
+	float balloon = aafill(length(bq * vec2(1.0, 1.15)) - 0.06);
+	col = mix(col, vec3(0.95, 0.30, 0.30), balloon * step(0.5, fract((bq.x) * 18.0 + 0.0)));
+	col = mix(col, vec3(0.98, 0.85, 0.25), balloon * step(fract((bq.x) * 18.0), 0.5));
+	col = mix(col, vec3(0.45, 0.30, 0.18), aafill(sdBox(bq - vec2(0.0, 0.075), vec2(0.016, 0.012))));
+	col = mix(col, vec3(0.30, 0.22, 0.14), aaline(abs(bq.x) - 0.04 * (bq.y - 0.06), 0.002) * step(0.0, bq.y) * step(bq.y, 0.065));
 	for (int i = 0; i < 5; i++) col = flyBird(col, a, TIME, float(i) * 5.7 + 3.0, 0.26, 0.14, 0.082, 0.32);
 	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
 	col *= mix(0.85, 1.0, smoothstep(1.2, 0.2, length(p)));
@@ -1309,6 +1892,89 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Aurora static plate: night sky + airglow + snow-capped mountain ranges + conifers
+# (all static). The starfield, shooting stars and flowing aurora curtains animate.
+const _AURORA_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.03, 0.05, 0.14), vec3(0.05, 0.08, 0.20), uv.y);
+	col += vec3(0.06, 0.12, 0.18) * smoothstep(0.85, 0.0, uv.y) * 0.6;
+	for (int L = 0; L < 3; L++) {
+		float fL = float(L);
+		float f = 1.1 + fL * 0.7;
+		float ph = fL * 3.7;
+		float crest = 0.52 + fL * 0.09;
+		float amp = 0.17 - fL * 0.015;
+		float peaks = abs(fract(uv.x * f + ph) - 0.5) * 2.0;
+		peaks = 0.55 * peaks + 0.45 * abs(fract(uv.x * f * 2.1 + ph * 1.3) - 0.5) * 2.0;
+		peaks += 0.10 * (fbm(vec2(uv.x * 12.0, fL)) - 0.5);
+		float top = crest - amp * peaks;
+		float mMask = aafill(top - uv.y);
+		vec3 mcol = mix(vec3(0.17, 0.21, 0.35), vec3(0.02, 0.03, 0.09), fL * 0.5);
+		mcol *= 0.8 + 0.4 * fbm(vec2(uv.x * 10.0 + fL, uv.y * 10.0));
+		float snowline = top + 0.20 + 0.06 * fbm(vec2(uv.x * 8.0, fL));
+		float snow = smoothstep(snowline, top + 0.004, uv.y);
+		snow *= 0.86 + 0.14 * fbm(vec2(uv.x * 26.0, fL));
+		mcol = mix(mcol, vec3(0.88, 0.93, 1.0), snow);
+		col = mix(col, mcol, mMask);
+	}
+	col = placeTree(col, a, vec2(0.13 * aspect, 0.70), 0.045, 0, 3.0, 0.55);
+	col = placeTree(col, a, vec2(0.25 * aspect, 0.73), 0.040, 0, 8.0, 0.55);
+	col = placeTree(col, a, vec2(0.37 * aspect, 0.71), 0.048, 0, 14.0, 0.55);
+	col = placeTree(col, a, vec2(0.50 * aspect, 0.735), 0.040, 0, 19.0, 0.55);
+	col = placeTree(col, a, vec2(0.63 * aspect, 0.715), 0.046, 0, 23.0, 0.55);
+	col = placeTree(col, a, vec2(0.76 * aspect, 0.74), 0.040, 0, 27.0, 0.55);
+	col = placeTree(col, a, vec2(0.88 * aspect, 0.72), 0.046, 0, 31.0, 0.55);
+	COLOR = vec4(col, 1.0);
+}
+"
+# Aurora dynamic: sample plate, draw the flowing luminous aurora curtains (clipped
+# to the sky above the ridgeline so they sit behind the mountains) + shooting stars.
+const _AURORA_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+// cheap 2-octave noise for the soft aurora curtains (the full 4-octave fbm was the
+// theme's lag — ~10 fbm/pixel across the upper half every frame).
+float anoise(vec2 p) { return 0.62 * gnoise(p) + 0.38 * gnoise(p * 2.3 + 5.0); }
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	if (uv.y < 0.52) {
+		for (int L = 0; L < 5; L++) {
+			float d = float(L);
+			float wave = 0.20 + d * 0.06 + 0.09 * sin(a.x * 3.0 + t * 0.6 + d * 1.3) + 0.04 * sin(a.x * 7.0 - t * 0.4);
+			float band = smoothstep(0.12, 0.0, abs(uv.y - wave));
+			if (band < 0.004) continue;                     // skip the noise outside this curtain's band
+			vec3 ac = mix(vec3(0.15, 1.0, 0.55), vec3(0.35, 0.60, 1.0), d / 4.0);
+			if (L == 4) ac = vec3(0.85, 0.35, 0.95);
+			float curtain = anoise(vec2(a.x * 4.0 - t * 0.2, uv.y * 3.0 + d));
+			col += ac * band * (0.5 + 0.6 * curtain) * smoothstep(wave, wave - 0.26, uv.y) * 0.95;
+			float shimmer = smoothstep(0.60, 0.95, gnoise(vec2(a.x * 16.0, t * 0.1 + d)));
+			col += ac * band * shimmer * 0.5 * smoothstep(wave, wave - 0.30, uv.y);
+		}
+	}
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float period = 5.0 + 3.0 * hash11(fi * 2.1);
+		float phase = (t + fi * 9.0) / period;
+		float seed = floor(phase);
+		float ph = fract(phase);
+		vec2 sp = vec2(hash11(seed + fi * 1.3) * aspect, 0.03 + 0.22 * hash11(seed + fi * 2.7));
+		float ang = 3.14159 * (0.16 + 0.68 * hash11(seed + fi * 3.9));
+		vec2 dir = vec2(cos(ang), sin(ang));
+		vec2 head = sp + dir * ph * (aspect * 1.2);
+		vec2 d = a - head;
+		float along = dot(d, -dir);
+		float perp = dot(d, vec2(-dir.y, dir.x));
+		float trail = smoothstep(0.22, 0.0, along) * step(0.0, along) * smoothstep(0.008, 0.0, abs(perp));
+		float vis = smoothstep(0.0, 0.04, ph) * smoothstep(0.60, 0.40, ph);
+		col += vec3(0.85, 0.95, 1.0) * trail * vis * 0.9;
+		col += vec3(1.0) * smoothstep(0.012, 0.0, length(d)) * vis;
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
 
 const _FAIRIES_SHADER := _HEAD + "
 // A little winged fairy sprite: glowing body + head and two pairs of translucent
@@ -1333,10 +1999,11 @@ vec4 fairyFig(vec2 q, float flap, vec3 tint) {
 }
 vec3 placeFairy(vec3 col, vec2 a, vec2 c, float s, float flap, vec3 tint) {
 	vec2 q = (a - c) / s;
-	if (abs(q.x) > 0.65 || abs(q.y) > 0.55) return col;
-	col += tint * smoothstep(0.55, 0.0, length(q)) * 0.30;
+	if (abs(q.x) > 0.74 || abs(q.y) > 0.64) return col;
+	float win = win1(q.x, -0.68, 0.68, 0.10) * win1(q.y, -0.58, 0.58, 0.10);
+	col += tint * smoothstep(0.55, 0.0, length(q)) * 0.30 * win;
 	vec4 f = fairyFig(q, flap, tint);
-	return mix(col, f.rgb, f.a);
+	return mix(col, f.rgb, f.a * win);
 }
 void fragment() {
 	vec2 uv = UV;
@@ -1355,7 +2022,7 @@ void fragment() {
 	col = mix(col, vec3(0.78, 1.0, 0.82), aafill(gstar));                                   // bright star body
 	col = mix(col, vec3(0.16, 0.82, 0.34), aaline(gstar, 0.0035));                          // crisp green edge
 	col += vec3(0.40, 0.30, 0.10) * aafill(gstar) * smoothstep(0.0, 0.05, gsq.y);           // faint inner facet shading
-	col += vec3(0.5, 1.0, 0.6) * (aaline(gsq.x, 0.0016) * step(abs(gsq.y), 0.075) + aaline(gsq.y, 0.0016) * step(abs(gsq.x), 0.075)) * gtw * 0.55; // sparkle rays
+	col += vec3(0.5, 1.0, 0.6) * (aaline(gsq.x, 0.0016) * (1.0 - smoothstep(0.055, 0.075, abs(gsq.y))) + aaline(gsq.y, 0.0016) * (1.0 - smoothstep(0.055, 0.075, abs(gsq.x)))) * gtw * 0.55; // sparkle rays
 	// periodic magical shooting stars on random paths, blue or flame-coloured; each
 	// re-rolls its start point, angle and colour every cycle so they never repeat
 	for (int i = 0; i < 3; i++) {
@@ -1427,7 +2094,125 @@ void fragment() {
 }
 "
 
-const _DEEPSPACE_SHADER := _HEAD + "
+# --- Fairies, split into a baked static plate + a cheap live props pass --------
+# The static plate is everything that doesn't visibly move (sky, the very-slow
+# bokeh frozen, mossy ground, grass, glowing mushrooms). It's baked to a texture
+# ONCE; per-frame cost is then ~zero for these (no fbm / ground / grass SDF).
+const _FAIRIES_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.18, 0.05, 0.22), vec3(0.30, 0.08, 0.32), uv.y);
+	col += vec3(0.50, 0.20, 0.50) * smoothstep(0.55, 0.92, fbm(a * 3.0)) * 0.28;   // bokeh, frozen
+	float gline = 0.875 + 0.012 * sin(uv.x * 6.0) + 0.006 * sin(uv.x * 17.0);
+	float isG = aafill(gline - uv.y);
+	vec3 soil = mix(vec3(0.16, 0.10, 0.20), vec3(0.07, 0.04, 0.11), smoothstep(gline, 1.0, uv.y));
+	soil = mix(soil, vec3(0.12, 0.30, 0.20), smoothstep(gline + 0.04, gline, uv.y));
+	col = mix(col, soil, isG);
+	for (int i = 0; i < 14; i++) {
+		float fi = float(i);
+		col = placeGrass(col, a, vec2((0.03 + 0.072 * fi) * aspect, gline + 0.012 + 0.008 * hash11(fi * 3.3)), 0.05, fi * 1.7 + 5.0);
+	}
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		float mx = (0.10 + 0.16 * fi) * aspect;
+		float my = gline + 0.012 + 0.01 * hash11(fi * 3.1);
+		col = placeGrass(col, a, vec2(mx - 0.02, my), 0.05, fi * 2.1 + 3.0);
+		col = placeMushroom(col, a, vec2(mx, my), 0.05, fi * 1.7, 1.0, vec3(0.40, 0.85, 0.80));
+		col = placeGrass(col, a, vec2(mx + 0.025, my), 0.05, fi * 3.3 + 7.0);
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+# The live pass: sample the baked plate, then run ONLY the moving props on top.
+# fairyFig/placeFairy are defined here (they live in the original Fairies shader,
+# not in _HEAD). mix(col, base, isG) at the end restores the ground over any
+# bottom sparkles, exactly as the original draw order did.
+const _FAIRIES_DYN := _HEAD + "
+uniform sampler2D static_tex : filter_linear;
+vec4 fairyFig(vec2 q, float flap, vec3 tint) {
+	vec4 acc = vec4(0.0);
+	float fl = 0.18 + 0.18 * flap;
+	for (int si = 0; si < 2; si++) {
+		float s = (si == 0) ? -1.0 : 1.0;
+		vec2 sh = vec2(s * 0.04, -0.05);
+		float uw = ellip(q, sh + vec2(s * 0.20, -0.10), vec2(0.20, 0.11), s * fl);
+		acc = _ov(acc, mix(tint, vec3(1.0), 0.55), aafill(uw) * 0.45);
+		acc = _ov(acc, vec3(1.0), aaline(uw, 0.006) * 0.4);
+		float lw = ellip(q, sh + vec2(s * 0.15, 0.08), vec2(0.13, 0.085), -s * fl * 0.5);
+		acc = _ov(acc, mix(tint, vec3(0.75, 0.9, 1.0), 0.5), aafill(lw) * 0.45);
+	}
+	acc = _ov(acc, vec3(1.0, 0.96, 0.88), aafill(ellip(q, vec2(0.0, 0.02), vec2(0.055, 0.15), 0.0)));
+	acc = _ov(acc, vec3(1.0, 0.92, 0.82), aafill(sdCircle(q - vec2(0.0, -0.19), 0.065)));
+	acc = _ov(acc, vec3(1.0, 0.85, 0.6), aafill(sdCircle(q - vec2(0.0, -0.20), 0.090)) * 0.3);
+	return acc;
+}
+vec3 placeFairy(vec3 col, vec2 a, vec2 c, float s, float flap, vec3 tint) {
+	vec2 q = (a - c) / s;
+	if (abs(q.x) > 0.74 || abs(q.y) > 0.64) return col;
+	float win = win1(q.x, -0.68, 0.68, 0.10) * win1(q.y, -0.58, 0.58, 0.10);
+	col += tint * smoothstep(0.55, 0.0, length(q)) * 0.30 * win;
+	vec4 f = fairyFig(q, flap, tint);
+	return mix(col, f.rgb, f.a * win);
+}
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 base = texture(static_tex, uv).rgb;
+	vec3 col = base;
+	float t = TIME;
+	vec2 gsp = vec2(0.16 * aspect, 0.14);
+	vec2 gsq = a - gsp;
+	float gtw = 0.7 + 0.3 * sin(t * 2.4);
+	float gstar = sdStar5(gsq * rot(t * 0.25), 0.052, 0.42);
+	col += vec3(0.20, 1.0, 0.45) * smoothstep(0.17, 0.0, length(gsq)) * 0.45 * gtw;
+	col += vec3(0.45, 1.0, 0.55) * smoothstep(0.025, 0.0, gstar) * 0.7;
+	col = mix(col, vec3(0.78, 1.0, 0.82), aafill(gstar));
+	col = mix(col, vec3(0.16, 0.82, 0.34), aaline(gstar, 0.0035));
+	col += vec3(0.40, 0.30, 0.10) * aafill(gstar) * smoothstep(0.0, 0.05, gsq.y);
+	col += vec3(0.5, 1.0, 0.6) * (aaline(gsq.x, 0.0016) * (1.0 - smoothstep(0.055, 0.075, abs(gsq.y))) + aaline(gsq.y, 0.0016) * (1.0 - smoothstep(0.055, 0.075, abs(gsq.x)))) * gtw * 0.55;
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		float period = 3.0 + 2.5 * hash11(fi * 2.1);
+		float phase = (t + fi * 7.3) / period;
+		float seed = floor(phase);
+		float ph = fract(phase);
+		vec2 sp = vec2(hash11(seed + fi * 1.3) * aspect, 0.04 + 0.30 * hash11(seed + fi * 2.7));
+		float ang = 3.14159 * (0.18 + 0.64 * hash11(seed + fi * 3.9));
+		vec2 dir = vec2(cos(ang), sin(ang));
+		vec2 head = sp + dir * ph * (aspect * 1.25);
+		vec2 d = a - head;
+		float along = dot(d, -dir);
+		float perp = dot(d, vec2(-dir.y, dir.x));
+		float trail = smoothstep(0.20, 0.0, along) * step(0.0, along) * smoothstep(0.009, 0.0, abs(perp));
+		float vis = smoothstep(0.0, 0.04, ph) * smoothstep(0.62, 0.40, ph);
+		vec3 sc = (hash11(seed + fi * 5.1) < 0.5) ? vec3(0.40, 0.70, 1.0) : vec3(1.0, 0.52, 0.18);
+		col += sc * trail * vis * 0.9;
+		col += sc * smoothstep(0.013, 0.0, length(d)) * vis;
+	}
+	// NOTE: the 30 sparkle-dust + 5 firefly dots used to be per-pixel loops here.
+	// They were the heaviest part of this pass (35 iterations of trig + fwidth over
+	// every screen pixel). They are now drawn as real CPUParticles2D nodes on top of
+	// this layer (see _spawn_fairies_props), so the GPU only touches the few pixels
+	// each dot covers instead of all ~2.5M every frame.
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float yband = mix(0.16, 0.36, step(1.5, fi));
+		vec2 fp = vec2((0.18 + 0.64 * hash11(fi * 4.3)) * aspect + 0.14 * sin(t * 0.4 + fi * 2.2),
+					   yband + 0.05 * cos(t * 0.55 + fi * 1.7));
+		float flap = sin(t * 9.0 + fi * 3.0);
+		vec3 tint = vec3(0.75, 0.85, 1.0);
+		if (int(mod(fi, 3.0)) == 1) tint = vec3(1.0, 0.70, 0.90);
+		if (int(mod(fi, 3.0)) == 2) tint = vec3(0.70, 1.0, 0.80);
+		col = placeFairy(col, a, fp, 0.075, flap, tint);
+	}
+	float gline = 0.875 + 0.012 * sin(uv.x * 6.0) + 0.006 * sin(uv.x * 17.0);
+	float isG = aafill(gline - uv.y);
+	COLOR = vec4(mix(col, base, isG), 1.0);
+}
+"
+
+const _DEEPSPACE_FUNCS := "
 // Irregular, lumpy asteroid silhouette radius (harmonic sum) — high-poly look.
 float astRadius(float ang, float seed) {
 	return 1.0 + 0.16 * sin(ang * 3.0 + seed) + 0.11 * sin(ang * 5.0 + seed * 2.0)
@@ -1458,9 +2243,9 @@ vec4 asteroidShape(vec2 q, float seed) {
 }
 vec3 placeAsteroid(vec3 col, vec2 a, vec2 c, float s, float seed, float ang) {
 	vec2 q = (a - c) / s * rot(ang);
-	if (length(q) > 1.5) return col;
+	if (length(q) > 1.62) return col;
 	vec4 ast = asteroidShape(q, seed);
-	return mix(col, ast.rgb, ast.a);
+	return mix(col, ast.rgb, ast.a * radWin(length(q), 1.48, 1.60));
 }
 // Sleek delta-wing fighter facing +x: fuselage, delta wings, glowing cockpit.
 vec4 shipShape(vec2 q, vec3 hull) {
@@ -1530,11 +2315,14 @@ vec4 stationShape(vec2 q, float t) {
 vec3 placeStation(vec3 col, vec2 a, vec2 c, float s, float t) {
 	vec2 q = (a - c) / s;
 	q.y /= 0.52;                                              // viewed at a tilt
-	if (length(q) > 1.3) return col;
-	col += vec3(0.30, 0.50, 0.80) * smoothstep(1.1, 0.0, length(q)) * 0.14;
+	if (length(q) > 1.42) return col;
+	float win = radWin(length(q), 1.28, 1.40);
+	col += vec3(0.30, 0.50, 0.80) * smoothstep(1.1, 0.0, length(q)) * 0.14 * win;
 	vec4 st = stationShape(q, t);
-	return mix(col, st.rgb, st.a);
+	return mix(col, st.rgb, st.a * win);
 }
+"
+const _DEEPSPACE_SHADER := _HEAD + _DEEPSPACE_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
@@ -1603,6 +2391,93 @@ void fragment() {
 	COLOR = vec4(col, 1.0);
 }
 "
+# Deep Space static plate: just the background gradient + nebula (the nebula's
+# TIME drift is removed so it's frozen). Stars become particles; galaxies,
+# station, asteroids and fighters become sprites over this plate.
+const _DEEPSPACE_STATIC := _HEAD + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = mix(vec3(0.02, 0.01, 0.07), vec3(0.05, 0.02, 0.12), uv.y);
+	col += vec3(0.30, 0.15, 0.50) * smoothstep(0.55, 0.95, fbm(a * 2.2)) * 0.40;
+	col += vec3(0.10, 0.30, 0.60) * smoothstep(0.50, 0.95, fbm(a * 1.8)) * 0.28;
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# Deep Space dynamic pass: sample the baked plate, then draw ONLY the hero props
+# (galaxies, station, asteroids, fighters) over it. The 50-star loop and the two
+# nebula fbm calls — the always-on per-pixel costs — are gone (stars are
+# particles, nebula is in the plate). The fighter draw is wrapped in a tight
+# bounding box so shipShape isn't evaluated over empty space.
+const _DEEPSPACE_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _DEEPSPACE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	col = galaxyAt(col, a, vec2(0.17 * aspect, 0.13), 0.10, 1.0, 0.5, vec3(0.62, 0.58, 0.98), t);
+	col = galaxyAt(col, a, vec2(0.81 * aspect, 0.15), 0.11, 5.0, -0.7, vec3(0.98, 0.74, 0.50), t);
+	col = galaxyAt(col, a, vec2(0.86 * aspect, 0.82), 0.085, 9.0, 1.3, vec3(0.45, 0.92, 0.86), t);
+	col = placeStation(col, a, vec2(0.19 * aspect, 0.83), 0.075, t);
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float ax = fract(hash11(fi * 4.1) + t * 0.02 * (0.5 + hash11(fi))) * (aspect + 0.2) - 0.1;
+		float ay = mix(0.10, 0.88, hash11(fi * 6.7));
+		float s = 0.034 + 0.028 * hash11(fi * 2.1);
+		col = placeAsteroid(col, a, vec2(ax, ay), s, fi * 5.7 + 1.0, t * (0.2 + 0.3 * hash11(fi * 3.3)) + fi);
+	}
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float dir = (hash11(fi * 3.3) < 0.5) ? 1.0 : -1.0;
+		float speed = 0.04 + 0.05 * hash11(fi * 1.9);
+		float span = aspect + 0.5;
+		float prog = mod(t * speed + hash11(fi * 7.1) * span, span) - 0.25;
+		float sx = (dir > 0.0) ? prog : (span - 0.5 - prog);
+		float sy = mix(0.10, 0.26, hash11(fi * 5.7)) + step(2.5, fi) * 0.60;
+		sy += 0.012 * sin(t * 0.6 + fi);
+		vec2 sq = a - vec2(sx, sy);
+		sq.x *= dir;
+		if (abs(sq.x) < 0.26 && abs(sq.y) < 0.10) {
+			float win = win1(sq.x, -0.24, 0.24, 0.04) * win1(sq.y, -0.09, 0.09, 0.025);
+			float ebehind = -sq.x - 0.05;
+			col += vec3(0.30, 0.70, 1.0) * smoothstep(0.12, 0.0, ebehind) * step(0.0, ebehind) * smoothstep(0.006, 0.0, abs(sq.y)) * (0.5 + 0.4 * sin(t * 20.0 + fi)) * win;
+			vec3 hull = vec3(0.62, 0.66, 0.74);
+			if (int(mod(fi, 3.0)) == 1) hull = vec3(0.74, 0.60, 0.55);
+			if (int(mod(fi, 3.0)) == 2) hull = vec3(0.55, 0.64, 0.72);
+			vec4 sh = shipShape(sq, hull);
+			col = mix(col, sh.rgb, sh.a * win);
+			col += vec3(0.5, 0.85, 1.0) * aafill(distance(sq, vec2(-0.055, 0.0)) - 0.010) * 1.1 * win;
+		}
+		if (dir < 0.0) {
+			float fireRate = 0.16 + 0.18 * hash11(fi * 2.7);
+			float fph = t * fireRate + hash11(fi * 6.3) * 5.0;
+			float shot = floor(fph);
+			float fc = fract(fph);
+			if (fc < 0.32 && hash11(shot * 1.7 + fi * 3.1) < 0.55) {
+				float boltX = sx - 0.05 - (fc / 0.32) * 0.7;
+				vec2 bq = a - vec2(boltX, sy);
+				vec3 lcol = (hash11(fi * 9.1 + shot) < 0.5) ? vec3(1.0, 0.28, 0.22) : vec3(0.40, 1.0, 0.34);
+				col += lcol * smoothstep(0.016, 0.0, length(bq * vec2(0.45, 1.7))) * 1.4;
+				col += lcol * smoothstep(0.045, 0.0, length(bq)) * 0.30;
+			}
+		}
+	}
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# Rainbow dynamic pass: sample the baked plate, then draw ONLY the 5 gliding birds
+# (the scene's only animated element).
+const _RAINBOW_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	for (int i = 0; i < 5; i++) col = flyBird(col, a, TIME, float(i) * 7.3 + 1.0, 0.26, 0.12, 0.10, 0.0);
+	COLOR = vec4(col, 1.0);
+}
+"
 
 # ---------------------------------------------------------------------------
 # SKIN BACKGROUNDS — bespoke animated scenes that belong to a complete wheel
@@ -1610,132 +2485,177 @@ void fragment() {
 # screen and the player hasn't equipped a separate paid theme, the skin paints
 # its own world here. Keyed by the skin id in CoinsManager.SIMON_SKINS.
 #
-# VOLCANO ("inferno"): a high-end, fully animated apocalyptic volcanic range.
-# A churning blood-red ash sky, a ridge of FIVE volcanoes that each erupt on
-# their own slow cycle (crater flare + lava fountain + ash plume), dark grey
-# volcanic rock ground veined with flowing molten lava, lava rivers in the
-# foreground, rising embers and drifting ash. Detail lives in the top band and
-# the side gutters / bottom (the circular wheel covers the centre), so the
-# scene reads around the wheel rather than behind it.
+# VOLCANO ("inferno"): a high-end, level-reactive volcanic plain, in the same
+# baked-plate + light-dyn style as the other animated themes. FOUR 3D-looking
+# volcanoes sit one in each corner (seen from front-above so each summit reads as
+# an elliptical caldera), rising from a clean dark-grey volcanic plain. The wheel
+# covers the centre, so the corners carry the detail.
+#
+# It reacts to gameplay: every level completion makes all four volcanoes ERUPT
+# (crater flare + molten fountain + ash/spark plume). Eruption strength escalates
+# with the level (mid / heavy / big) — see theme_props.gd's on_level_complete.
+# The eruptions are driven by a per-volcano `erupt` vec4 uniform pushed each frame
+# by the props node (like the kitty's eye uniforms), NOT a free-running shader
+# cycle, so the scene is calm between levels and bursts to life on success.
+#
+# Split for perf: the whole frozen scene (plain + the four volcano bodies with
+# their baked crater lava-pool glow) bakes into the static plate; the dyn
+# only samples that plate, flickers the already-baked hot pixels (cheap, no fbm),
+# and draws the four eruptions (each box-guarded to its corner). Embers + ash are
+# CPUParticles2D. So no full-screen fbm/SDF runs per frame.
 # ---------------------------------------------------------------------------
-const _VOLCANO_SHADER := _HEAD + "
+# Shared toolbox for all three volcano shaders (plate / dyn / preview).
+const _VOLCANO_FUNCS := "
 float vridge(vec2 p) { return abs(fbm(p) - 0.5) * 2.0; }
+
+// One 3D-looking volcano, unit space q = (a - center)/s, seen from front-above so
+// the summit reads as an elliptical caldera. Lit from the upper-left. Frozen (no
+// TIME) so it bakes into the plate; the hot lava pool is left deliberately bright
+// red/orange so the dyn pass can flicker it for free.
+vec4 volcanoBody(vec2 q, float seed) {
+	vec4 acc = vec4(0.0);
+	float topY = -0.70, botY = 1.08;
+	float ty = clamp((q.y - topY) / (botY - topY), 0.0, 1.0);        // 0 summit .. 1 base
+	float lean = (hash11(seed * 1.3) - 0.5) * 0.12;                  // gentle asymmetry
+	float axis = q.x - lean * (1.0 - ty);                            // offset from the ridge line
+	float hw = mix(0.26, 1.0, pow(ty, 0.80));                        // concave-up flanks
+	float rough = 0.05 * fbm(vec2(q.y * 3.2 + seed, seed)) - 0.025;  // eroded edge
+	float edge = abs(axis) - (hw + rough);
+	float cone = max(edge, max(topY - q.y, q.y - botY));
+	float ca = aafill(cone);
+	float nx = clamp(axis / max(hw, 0.001), -1.0, 1.0);             // approx surface normal.x
+	// rock shading — light from the upper-left, shaped by the (cone) normal
+	float lit = clamp(0.52 - 0.60 * nx + (1.0 - ty) * 0.10, 0.0, 1.0);
+	vec3 body = mix(vec3(0.075, 0.068, 0.085), vec3(0.37, 0.35, 0.39), lit);
+	body *= 0.80 + 0.34 * fbm(q * 7.0 + seed) + 0.13 * fbm(q * 17.0 - seed * 2.0);   // 2-octave rock
+	float gully = 0.5 + 0.5 * sin(nx * 9.0 + seed * 3.0 + fbm(q * 5.0) * 2.0);       // radial strata / gullies
+	body *= 0.88 + 0.18 * gully * smoothstep(0.0, 0.35, ty);
+	body *= mix(1.06, 0.58, smoothstep(0.10, 1.0, ty));                              // ambient occlusion to the base
+	body += vec3(0.5, 0.22, 0.06) * smoothstep(0.42, 0.0, ty) * (0.35 + 0.25 * lit); // crater light on the upper cone
+	acc = _ov(acc, body, ca);
+	acc = _ov(acc, vec3(0.85, 0.78, 0.72), aaline(edge, 0.012) * step(axis, 0.0) * ca * 0.55);  // rim light (lit edge)
+	acc = _ov(acc, vec3(0.03, 0.025, 0.035), aaline(edge, 0.010) * step(0.0, axis) * ca * 0.5); // core shadow (dark edge)
+	// summit caldera, seen from front-above: rocky rim band, shaded bowl, lava pool
+	vec2 cc = vec2(lean * 0.4, topY);
+	float rimOut = ellip(q, cc, vec2(0.40, 0.15), 0.0);
+	float rimIn  = ellip(q, cc + vec2(0.0, 0.012), vec2(0.30, 0.105), 0.0);
+	float rimBand = aafill(rimOut) * (1.0 - aafill(rimIn));
+	acc = _ov(acc, mix(vec3(0.13, 0.12, 0.14), vec3(0.46, 0.42, 0.44), smoothstep(0.10, -0.16, q.y - topY)), rimBand);
+	float bowl = aafill(rimIn);
+	acc = _ov(acc, mix(vec3(0.02, 0.015, 0.02), vec3(0.11, 0.06, 0.05), smoothstep(-0.10, 0.10, q.y - topY)), bowl);
+	vec2 pc = cc + vec2(0.0, 0.03);
+	float poolA = aafill(ellip(q, pc, vec2(0.22, 0.07), 0.0)) * bowl;
+	float hotc = smoothstep(0.9, 0.0, length((q - pc) / vec2(0.22, 0.07)));          // bright molten centre
+	acc = _ov(acc, mix(vec3(0.95, 0.28, 0.04), vec3(1.0, 0.92, 0.55), hotc), poolA);
+	acc = _ov(acc, vec3(1.0, 0.55, 0.15), aaline(rimIn, 0.010) * bowl * step(topY, q.y) * 0.55);  // glowing near lip
+	return acc;
+}
+vec3 placeVolcano(vec3 col, vec2 a, vec2 c, float s, float seed) {
+	vec2 q = (a - c) / s;
+	if (q.x < -1.4 || q.x > 1.4 || q.y < -1.3 || q.y > 1.3) return col;
+	col = mix(col, col * 0.5, aafill(ellip(a, c + vec2(0.0, s * 1.0), vec2(s * 1.05, s * 0.14), 0.0)) * 0.55);   // contact shadow
+	col += vec3(1.0, 0.45, 0.13) * smoothstep(0.55, 0.0, length((q - vec2(0.0, -0.70)) / vec2(0.9, 0.7))) * 0.10;  // resting summit glow
+	vec4 v = volcanoBody(q, seed);
+	float win = win1(q.x, -1.34, 1.34, 0.12) * win1(q.y, -1.24, 1.24, 0.12);
+	return mix(col, v.rgb, v.a * win);
+}
+// The full FROZEN scene: hazy horizon, a clean dark-grey volcanic plain, and the
+// four (smaller) corner volcanoes. No ground lava. Shared by the plate + preview.
+vec3 volcanoScene(vec2 a, vec2 uv) {
+	vec3 col = mix(vec3(0.15, 0.08, 0.075), vec3(0.135, 0.125, 0.145), smoothstep(0.0, 0.20, uv.y));  // hazy horizon -> grey plain
+	col = mix(col, vec3(0.045, 0.042, 0.052), smoothstep(0.20, 1.0, uv.y));                            // near ground darker
+	col += vec3(0.28, 0.10, 0.03) * smoothstep(0.26, 0.0, abs(uv.y - 0.16)) * 0.15;                    // faint distant haze (not lava)
+	float grd = smoothstep(0.14, 0.28, uv.y);
+	col *= 1.0 - 0.14 * grd * fbm(vec2(a.x * 7.0, uv.y * 7.0));                                        // rocky mottle
+	col += vec3(0.04) * grd * vridge(vec2(a.x * 11.0, uv.y * 11.0)) * 0.35;                            // subtle grey facets
+	col = placeVolcano(col, a, vec2(0.12 * aspect, 0.26), 0.12, 3.0);                                  // top-left (distant)
+	col = placeVolcano(col, a, vec2(0.88 * aspect, 0.24), 0.12, 8.0);                                  // top-right (distant)
+	col = placeVolcano(col, a, vec2(0.13 * aspect, 0.80), 0.17, 15.0);                                 // bottom-left (near)
+	col = placeVolcano(col, a, vec2(0.87 * aspect, 0.78), 0.17, 22.0);                                 // bottom-right (near)
+	return col;
+}
+// One eruption over a crater apex, driven by activity e (0 dormant .. ~3 big).
+// Fully derivative-free (smoothstep/length only) so it is seam-safe over its box
+// guard. Crater glow always shows a little; fountain + plume grow with e.
+vec3 eruptAt(vec3 col, vec2 a, vec2 apex, float s, float e, float t, float seed) {
+	float dx = a.x - apex.x;
+	float up = apex.y - a.y;                                    // > 0 above the crater
+	float maxH = s * (0.55 + 1.7 * e);
+	if (up < -0.06 * s || up > maxH + 0.16 || abs(dx) > s * (0.95 + 0.55 * e)) return col;
+	float cg = smoothstep(0.13 * s, 0.0, length(vec2(dx, up * 1.5)));                 // crater glow
+	col += vec3(1.0, 0.52, 0.18) * cg * (0.28 + 1.2 * e) * (0.85 + 0.15 * sin(t * 6.0 + seed));
+	if (up <= 0.0 || e < 0.03) return col;
+	// molten fountain — a noisy glowing column thrown up from the crater
+	float fw = s * (0.11 + 0.05 * e);
+	float fn = gnoise(vec2(dx * 34.0 / s, up * 22.0 / s - t * 5.0));
+	float fmask = smoothstep(fw * (0.5 + 0.6 * fn), 0.0, abs(dx)) * smoothstep(maxH * 0.72, 0.0, up);
+	col = mix(col, mix(vec3(1.0, 0.55, 0.12), vec3(1.0, 0.95, 0.60), smoothstep(0.0, maxH * 0.45, up)), clamp(fmask * (0.4 + 0.9 * e), 0.0, 1.0));
+	// ash + spark plume, rising and drifting overhead
+	float drift = 0.06 * s * sin(up * 8.0 / s + t * 0.7 + seed) + dx * 0.22;
+	float pw = s * (0.24 + 0.20 * e);
+	float pn = gnoise(vec2(dx * 6.0 / s - t * 0.2, up * 5.0 / s - t * 0.6));
+	float pmask = smoothstep(pw, 0.0, abs(dx - drift)) * smoothstep(0.0, 0.06, up) * smoothstep(maxH + 0.13, 0.0, up);
+	col = mix(col, mix(vec3(0.09, 0.06, 0.07), vec3(0.28, 0.12, 0.07), smoothstep(0.2, 0.9, pn)), pmask * clamp(0.35 + 0.7 * e, 0.0, 1.0) * smoothstep(0.15, 0.85, pn) * 0.85);
+	col += vec3(1.0, 0.50, 0.12) * pmask * e * smoothstep(0.76, 0.98, pn) * 1.5;      // glowing lava bombs / sparks
+	return col;
+}
+"
+# Volcano preview / live-fallback shader: the frozen scene + free-running auto
+# eruptions (the shop preview has no gameplay events to drive the uniform).
+const _VOLCANO_SHADER := _HEAD + _VOLCANO_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
 	float t = TIME;
-
-	// ===================== APOCALYPTIC SKY =====================
-	vec3 col = mix(vec3(0.045, 0.020, 0.035), vec3(0.17, 0.045, 0.045), smoothstep(0.0, 0.50, uv.y));
-	col = mix(col, vec3(0.46, 0.11, 0.05), smoothstep(0.40, 0.60, uv.y));
-	// billowing smoke / ash cover, domain-warped so it churns organically
-	vec2 sq = vec2(a.x * 1.6, uv.y * 2.2);
-	vec2 sw = vec2(fbm(sq + vec2(t * 0.035, 0.0)), fbm(sq + vec2(4.7, 2.1) - vec2(t * 0.020, 0.0)));
-	float smk = fbm(sq * 1.2 + sw * 1.8 + vec2(t * 0.030, -t * 0.012));
-	float smkMask = smoothstep(0.46, 0.96, smk) * smoothstep(0.64, 0.02, uv.y);
-	vec3 smkCol = mix(vec3(0.055, 0.045, 0.055), vec3(0.36, 0.14, 0.07), smoothstep(0.30, 0.90, smk));
-	col = mix(col, smkCol, smkMask * 0.88);
-	// dull blood-red sun smothered in the haze, upper-right
-	vec2 sunp = vec2(0.66 * aspect, 0.19);
-	float sd = distance(a, sunp);
-	col += vec3(0.72, 0.17, 0.05) * smoothstep(0.46, 0.0, sd) * 0.55;
-	col = mix(col, vec3(0.88, 0.32, 0.13), aafill(sd - 0.072) * (0.55 + 0.25 * smk));
-
-	// ===================== VOLCANO RANGE =====================
-	float horizon = 0.60;
-	float terrain = horizon;          // upper silhouette of the range (smallest y wins)
-	float craterGlow = 0.0;           // hot glow at each crater, flares while erupting
-	float fountain = 0.0;             // molten fountain spewing during eruptions
-	vec3 plume = vec3(0.0);           // ash plumes + ejected sparks
-	for (int i = 0; i < 5; i++) {
-		float fi = float(i);
-		float cx = (0.10 + 0.20 * fi) * aspect;
-		float pk = 0.40 + 0.08 * hash11(fi * 1.7) - 0.11 * (1.0 - abs(fi - 2.0) * 0.5);  // centre taller
-		float hw = (0.17 + 0.10 * hash11(fi * 3.3)) * aspect;
-		float dx = a.x - cx;
-		float coneY = pk + (horizon - pk) / hw * abs(dx);
-		float craterW = 0.05 * aspect;
-		coneY += 0.030 * smoothstep(craterW, 0.0, abs(dx));          // caldera notch at the apex
-		terrain = min(terrain, coneY);
-
-		// eruption cycle: dormant most of the time, then a building pulse
-		float cyc = fract(t * (0.040 + 0.022 * hash11(fi * 5.1)) + hash11(fi * 7.3));
-		float erupt = smoothstep(0.0, 0.08, cyc) * smoothstep(0.58, 0.16, cyc);
-
-		float above = pk - a.y;                                       // > 0 above the crater
-		float craterD = distance(vec2(dx, above), vec2(0.0, -0.015));
-		craterGlow += smoothstep(0.055, 0.0, craterD) * (0.30 + 1.3 * erupt) * (0.6 + 0.4 * hash11(fi * 2.0));
-
-		// molten fountain — a noisy glowing column thrown up from the crater
-		float fw = (0.018 + 0.016 * erupt) * aspect;
-		float fn = gnoise(vec2(dx * 36.0, a.y * 20.0 - t * 4.5));
-		fountain += smoothstep(fw * (0.6 + fn), 0.0, abs(dx))
-			* smoothstep(0.10 + 0.16 * erupt, 0.0, max(above, 0.0)) * step(0.0, above) * erupt;
-
-		// ash plume rising and drifting from the crater
-		float drift = 0.05 * sin(above * 7.0 + t * 0.6 + fi) + above * 0.18;
-		float pmask = smoothstep(0.11 + 0.06 * erupt, 0.0, abs(dx - drift))
-			* smoothstep(0.0, 0.04, above) * smoothstep(0.60, 0.0, above);
-		float pn = gnoise(vec2(dx * 7.0 - drift * 2.0, above * 6.0 - t * 0.5));
-		plume += vec3(0.13, 0.075, 0.065) * pmask * (0.45 + 0.9 * erupt) * smoothstep(0.15, 0.85, pn);
-		plume += vec3(1.0, 0.46, 0.10) * pmask * erupt * smoothstep(0.72, 0.97, pn) * 1.6;  // sparks
-	}
-	float skyMask = 1.0 - smoothstep(terrain - 0.012, terrain + 0.012, uv.y);
-	col += plume * skyMask;
-	col += vec3(1.0, 0.74, 0.30) * craterGlow * skyMask;
-	col = mix(col, mix(vec3(1.0, 0.52, 0.10), vec3(1.0, 0.96, 0.62), clamp(fountain, 0.0, 1.0)),
-		clamp(fountain, 0.0, 1.0) * skyMask);
-	// hot rim where the molten range meets the sky
-	col += vec3(1.0, 0.34, 0.08) * smoothstep(0.045, 0.0, uv.y - terrain) * step(uv.y, terrain + 0.045) * 0.5;
-
-	// ===================== VOLCANIC GROUND =====================
-	float isGround = step(terrain, uv.y);
-	vec3 rock = mix(vec3(0.115, 0.085, 0.090), vec3(0.045, 0.045, 0.055), smoothstep(horizon, 1.0, uv.y));
-	rock *= 0.78 + 0.5 * fbm(vec2(a.x * 8.0, uv.y * 8.0));                 // rocky mottle
-	rock += vec3(0.10, 0.05, 0.05) * vridge(vec2(a.x * 14.0, uv.y * 14.0)) * 0.4;  // fractured facets
-	// cracked network of glowing lava veins, creeping downhill
-	vec2 vq = vec2(a.x * 5.0, uv.y * 5.0 - t * 0.22);
-	float vein = 1.0 - smoothstep(0.0, 0.05, abs(fbm(vq) - fbm(vq + vec2(3.1, 1.7))));
-	vein *= smoothstep(horizon - 0.04, 1.0, uv.y);                        // grows toward the foreground
-	float vflow = 0.6 + 0.4 * sin(uv.y * 26.0 - t * 3.0);
-	rock = mix(rock, mix(vec3(0.92, 0.26, 0.05), vec3(1.0, 0.9, 0.42), vein * vflow), vein * 0.92);
-	rock += vec3(1.0, 0.42, 0.12) * vein * 0.55;
-	// broad lava rivers winding through the foreground
-	for (int j = 0; j < 3; j++) {
-		float fj = float(j);
-		float rx = (0.16 + 0.34 * fj) * aspect;
-		float wob = 0.05 * sin(uv.y * 6.5 + t * 0.8 + fj * 2.0) + 0.025 * sin(uv.y * 16.0 - t);
-		float river = smoothstep(0.05, 0.0, abs(a.x - rx - wob)) * smoothstep(0.64, 0.82, uv.y);
-		float flow = 0.5 + 0.5 * sin(uv.y * 38.0 - t * 6.0 + fj);
-		rock = mix(rock, mix(vec3(0.96, 0.30, 0.04), vec3(1.0, 0.92, 0.52), flow), river);
-		rock += vec3(1.0, 0.46, 0.12) * river * 0.7;
-	}
-	col = mix(col, rock, isGround);
-
-	// ===================== ATMOSPHERE OVERLAYS =====================
-	// rising embers — additive sparks that flicker as they climb
-	for (int i = 0; i < 20; i++) {
-		float fi = float(i);
-		float ex = hash11(fi * 1.3) * aspect;
-		float ey = fract(hash11(fi * 3.7) - t * (0.05 + 0.12 * hash11(fi * 2.1)));
-		vec2 ep = vec2(ex + 0.02 * sin(t * (1.0 + hash11(fi)) + fi), ey);
-		float tw = 0.5 + 0.5 * sin(t * 4.0 + fi * 2.0);
-		float ed = distance(a, ep);
-		col += vec3(1.0, 0.50, 0.12) * aafill(ed - (0.0016 + 0.0014 * hash11(fi * 5.0))) * (0.6 + 0.8 * tw);
-		col += vec3(1.0, 0.40, 0.10) * smoothstep(0.012, 0.0, ed) * 0.16 * tw;
-	}
-	// drifting ash flakes settling down
-	for (int i = 0; i < 12; i++) {
-		float fi = float(i);
-		float ay = fract(hash11(fi * 6.1) + t * (0.03 + 0.05 * hash11(fi)));
-		vec2 apx = vec2(hash11(fi * 4.3) * aspect + 0.03 * sin(t + fi), ay);
-		col = mix(col, col * 0.45, aafill(distance(a, apx) - 0.0022) * 0.55);
-	}
-	// warm grade, bottom heat bloom + heavy apocalyptic vignette
-	col = mix(col, col * vec3(1.06, 0.86, 0.80), 0.16);
-	col += vec3(0.16, 0.035, 0.0) * smoothstep(0.72, 1.0, uv.y);
+	vec3 col = volcanoScene(a, uv);
+	float e0 = smoothstep(0.0, 0.10, fract(t * 0.13 + 0.00)) * smoothstep(0.70, 0.20, fract(t * 0.13 + 0.00)) * 2.0;
+	float e1 = smoothstep(0.0, 0.10, fract(t * 0.11 + 0.50)) * smoothstep(0.70, 0.20, fract(t * 0.11 + 0.50)) * 2.0;
+	float e2 = smoothstep(0.0, 0.10, fract(t * 0.09 + 0.25)) * smoothstep(0.70, 0.20, fract(t * 0.09 + 0.25)) * 2.4;
+	float e3 = smoothstep(0.0, 0.10, fract(t * 0.10 + 0.75)) * smoothstep(0.70, 0.20, fract(t * 0.10 + 0.75)) * 2.4;
+	col = eruptAt(col, a, vec2(0.12 * aspect, 0.26 - 0.70 * 0.12), 0.12, e0 + 0.12, t, 1.0);
+	col = eruptAt(col, a, vec2(0.88 * aspect, 0.24 - 0.70 * 0.12), 0.12, e1 + 0.12, t, 2.0);
+	col = eruptAt(col, a, vec2(0.13 * aspect, 0.80 - 0.70 * 0.17), 0.17, e2 + 0.12, t, 3.0);
+	col = eruptAt(col, a, vec2(0.87 * aspect, 0.78 - 0.70 * 0.17), 0.17, e3 + 0.12, t, 4.0);
+	col = mix(col, col * vec3(1.06, 0.9, 0.84), 0.12);
 	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-	col *= mix(0.42, 1.0, smoothstep(1.28, 0.22, length(p)));
+	col *= mix(0.5, 1.0, smoothstep(1.3, 0.25, length(p)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Volcano static plate: the whole frozen scene (dark-grey plain + the four corner
+# volcanoes with their detailed rock shading and baked crater lava-pool glow). The
+# volcano SDFs + ground mottle fbm are the cost; frozen into the plate they cost
+# nothing per frame. Eruptions animate in the dyn; embers/ash are particles.
+# Grade + vignette are applied in the dyn (over the whole composite).
+const _VOLCANO_STATIC := _HEAD + _VOLCANO_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(volcanoScene(a, uv), 1.0);
+}
+"
+# Volcano dynamic: sample the plate, flicker the baked hot (lava) pixels for a
+# living glow (cheap — keys off the plate colour, no fbm), then draw the four
+# corner eruptions driven by the per-volcano `erupt` uniform (each box-guarded to
+# its corner inside eruptAt), then grade + vignette the whole composite.
+const _VOLCANO_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\nuniform vec4 erupt = vec4(0.0);\n" + _VOLCANO_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	// living lava — flicker the baked hot (red-dominant) pixels; no fbm, ~free
+	float hot = smoothstep(0.16, 0.5, col.r - col.b) * smoothstep(0.05, 0.35, col.r);
+	float flick = sin(t * 3.1 + a.x * 20.0 + a.y * 15.0) * (0.5 + 0.5 * sin(t * 1.6 + a.x * 4.0));
+	col += col * hot * flick * 0.35;
+	// four corner eruptions (apex = center + (0, -0.80 * s)), from the uniform
+	col = eruptAt(col, a, vec2(0.12 * aspect, 0.26 - 0.70 * 0.12), 0.12, erupt.x, t, 1.0);
+	col = eruptAt(col, a, vec2(0.88 * aspect, 0.24 - 0.70 * 0.12), 0.12, erupt.y, t, 2.0);
+	col = eruptAt(col, a, vec2(0.13 * aspect, 0.80 - 0.70 * 0.17), 0.17, erupt.z, t, 3.0);
+	col = eruptAt(col, a, vec2(0.87 * aspect, 0.78 - 0.70 * 0.17), 0.17, erupt.w, t, 4.0);
+	col = mix(col, col * vec3(1.06, 0.9, 0.84), 0.12);
+	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.5, 1.0, smoothstep(1.3, 0.25, length(p)));
 	COLOR = vec4(col, 1.0);
 }
 "
@@ -1809,20 +2729,138 @@ func _gradient_shader(def: Dictionary) -> String:
 		"}\n"
 
 var _layer: CanvasLayer
-var _bg: ColorRect
+var _bg: ColorRect               # live shader layer (animated themes)
 var _mat: ShaderMaterial
+var _static_rect: TextureRect    # baked still-image layer (fully-static themes)
 var _cache: Dictionary = {}     # theme_id -> Shader
+
+# Themes whose shader contains NO TIME term — they render the exact same pixels
+# every frame, so the per-frame procedural recompute is pure waste. These are
+# baked once to a texture and shown as a still image (~zero per-frame GPU), which
+# looks pixel-for-pixel identical to the live shader. Add a key here once you've
+# confirmed (grep) its shader + every helper it calls is TIME-free.
+const _STATIC_BAKE := {
+	"forest": true,
+}
+
+# Animated themes split into a baked static plate + a cheap live "props" shader
+# that samples that plate. The live shader skips the heavy static work (fbm,
+# ground, grass/mushroom SDFs) entirely, so per-frame cost drops a lot while the
+# animation stays pixel-identical. Maps theme key -> [static_plate_code, dyn_code].
+# Themes rendered as a baked static PLATE + node-based moving props (particles +
+# sprites) on top, so NO full-screen shader runs per frame. The dense per-pixel
+# dot loops (sparkles/stars) were the perf killer; node props draw only where each
+# element actually is. Maps theme key -> static plate shader code. The moving
+# props for each key are built in theme_props.gd (ThemeProps).
+const _NODE_PLATE := {
+	"fairies": _FAIRIES_STATIC,
+	"rainbow": _RAINBOW_STATIC,
+	"deepspace": _DEEPSPACE_STATIC,
+	"desert": _DESERT_STATIC,
+	"speedway": _SPEEDWAY_STATIC,
+	"cosmos": _COSMOS_STATIC,
+	"neon": _NEON_STATIC,
+	"aurora": _AURORA_STATIC,
+	"kitty": _KITTY_STATIC,
+	"reef": _REEF_STATIC,
+	"clouds": _CLOUDS_STATIC,
+	"skin:inferno": _VOLCANO_STATIC,
+}
+const _NODE_DYN := {
+	"fairies": _FAIRIES_DYN,
+	"rainbow": _RAINBOW_DYN,
+	"deepspace": _DEEPSPACE_DYN,
+	"desert": _DESERT_DYN,
+	"speedway": _SPEEDWAY_DYN,
+	"cosmos": _COSMOS_DYN,
+	"neon": _NEON_DYN,
+	"aurora": _AURORA_DYN,
+	"kitty": _KITTY_DYN,
+	"reef": _REEF_DYN,
+	"clouds": _CLOUDS_DYN,
+	"skin:inferno": _VOLCANO_DYN,
+}
+
+# Trivial full-screen blit: paint a baked plate texture across the _bg ColorRect
+# (UV 0..1 over the rect = the whole screen). This is the same display path Stage
+# 1 used successfully, so it fills correctly with no zoom/crop.
+const _BLIT_SHADER := "shader_type canvas_item;\nuniform sampler2D plate_tex : filter_linear;\nvoid fragment() { COLOR = texture(plate_tex, UV); }"
+
+# Bake state for the currently-shown static theme. We hold only the active baked
+# texture (not a cache of all themes) to bound memory on GL/Mali devices. A
+# generation counter guards against a theme-switch landing mid-bake.
+var _bake_gen := 0
+# Plate cache: baked static-plate textures kept in RAM (NOT flash), keyed by theme
+# key. Pre-baked at startup + on equip so entering gameplay is instant. Bounded to
+# the equipped theme (+ whatever is currently displayed) so memory stays ~1-2 plates.
+var _plate_cache: Dictionary = {}   # key -> ImageTexture
+var _baking: Dictionary = {}        # key -> true while a bake is in flight (dedup)
+# Active display state.
+var _node_key := ""                 # node theme currently shown ("" = none)
+var _node_plate: ImageTexture
+var _props_node: Node2D
+var _props_key := ""                # theme the current _props_node was built for
 # Themes are only painted on the gameplay screen now (every other screen wears
 # its own bespoke background). GameManager flips this on/off as it swaps screens,
 # BEFORE the incoming screen builds, so is_themed() is already correct in _ready().
 var _active := false
 
+# DEBUG: set false to hide the on-screen FPS readout before shipping. While true
+# it shows live FPS in the top-left on every screen, so we can compare the cost of
+# each theme (default vs baked-static Forest vs hybrid Fairies) with real numbers.
+const DEBUG_FPS := false
+var _fps_label: Label
+var _render_mode := "none"        # FULL | HYBRID | BAKED | none — which path is live
+
+# Deep Space's dynamic shader, built once at startup with every prop's random
+# constants baked in as literals (so no per-pixel hash11) and every prop box-guarded
+# (so galaxyAt/shipShape/placeAsteroid only run where the prop is). See _build_deepspace_dyn.
+var _deepspace_dyn_code := ""
+
+# sin-free hash matching the shaders' hash11, used to bake prop constants.
+static func _fr(x: float) -> float:
+	return x - floor(x)
+
+static func _h11(p: float) -> float:
+	p = _fr(p * 0.1031)
+	p *= p + 33.33
+	p *= p + p
+	return _fr(p)
+
 func _ready() -> void:
 	_build_layer()
+	_deepspace_dyn_code = _build_deepspace_dyn()             # bake prop constants once
 	CoinsManager.themes_changed.connect(_on_themes_changed)
 	CoinsManager.simon_changed.connect(_on_themes_changed)   # equipping a skin can change the bg
 	get_tree().root.size_changed.connect(_fit_to_viewport)
 	_apply_theme()
+	_prebake_equipped()                                     # warm the cache during the loading screen
+	if DEBUG_FPS:
+		_build_fps_overlay()
+	set_process(DEBUG_FPS)
+
+func _build_fps_overlay() -> void:
+	var cl := CanvasLayer.new()
+	cl.layer = 128                                          # above everything
+	add_child(cl)
+	_fps_label = Label.new()
+	_fps_label.position = Vector2(12, 8)
+	_fps_label.add_theme_color_override("font_color", Color(0, 1, 0))
+	_fps_label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	_fps_label.add_theme_constant_override("outline_size", 6)
+	_fps_label.add_theme_font_size_override("font_size", 28)
+	cl.add_child(_fps_label)
+
+func _process(_dt: float) -> void:
+	if _fps_label:
+		var key := _node_key
+		if key.is_empty():
+			key = _resolved_bg_key()
+		if key.is_empty():
+			key = "default"
+		# Show the actual render path so we can tell if the hybrid actually engaged
+		# (HYBRID) or got stuck on the expensive FULL shader.
+		_fps_label.text = "%d FPS  [%s/%s]" % [Engine.get_frames_per_second(), key, _render_mode]
 
 # Called by GameManager on every screen swap: true only for the gameplay screen.
 func set_active(on: bool) -> void:
@@ -1848,8 +2886,11 @@ func is_themed() -> bool:
 # so they never collide with theme ids — e.g. the "inferno" theme vs. the
 # "inferno" Volcano skin.
 func _resolved_bg_key() -> String:
-	if not _active:
-		return ""
+	return _equipped_bg_key() if _active else ""
+
+# The equipped background key regardless of whether gameplay is active — used to
+# pre-bake the plate off-gameplay (loading screen / shop) so it's ready in time.
+func _equipped_bg_key() -> String:
 	if not CoinsManager.is_simon_manual():
 		var skin: String = CoinsManager.selected_skin
 		if _SKIN_SHADERS.has(skin):
@@ -1917,6 +2958,13 @@ func _build_layer() -> void:
 	_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bg.color = Color(0, 0, 0, 0)
 	_layer.add_child(_bg)
+	# Still-image layer for baked static themes. Sits in the same spot as _bg;
+	# only one of the two is ever visible at a time.
+	_static_rect = TextureRect.new()
+	_static_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_static_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	_static_rect.visible = false
+	_layer.add_child(_static_rect)
 	_mat = ShaderMaterial.new()
 	_fit_to_viewport()
 
@@ -1925,19 +2973,364 @@ func _fit_to_viewport() -> void:
 	if _bg:
 		_bg.position = Vector2.ZERO
 		_bg.size = sz
+	if _static_rect:
+		_static_rect.position = Vector2.ZERO
+		_static_rect.size = sz
 	if _mat:
 		_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
+	# Baked plates are tied to the resolution they were rendered at; on a real size
+	# change (rare — orientation is landscape-locked) drop the cache and re-apply.
+	if _node_plate and Vector2(_node_plate.get_size()) != _native_px():
+		_plate_cache.clear()
+		_node_key = ""
+		_node_plate = null
+		_apply_theme()
+		_prebake_equipped()
 
 func _on_themes_changed() -> void:
 	_apply_theme()
+	# Keep the cache bounded to the equipped (+ currently displayed) theme, then
+	# pre-bake the newly equipped one so it's ready before gameplay.
+	_evict_plates_except([_equipped_bg_key(), _node_key])
+	_prebake_equipped()
 
 func _apply_theme() -> void:
 	var key := _resolved_bg_key()
 	if key.is_empty():
+		_node_key = ""
+		_node_plate = null
+		_clear_props()
+		_show_live(null)
+		_static_rect.visible = false
+		return
+	# Fully-static themes (e.g. forest): show the baked plate. Cached -> instant.
+	if _STATIC_BAKE.has(key):
+		_node_key = ""
+		_node_plate = null
+		_clear_props()
+		if _plate_cache.has(key):
+			_show_plate_blit(_plate_cache[key])
+			_render_mode = "BAKED"
+		else:
+			_show_live(key)                                # paint live until the bake lands
+			_ensure_plate(key)
+		return
+	# Node themes: baked plate + LIGHT hero-prop shader + particle dots. Cached ->
+	# instant (no full-screen shader, no bake hitch on gameplay entry).
+	if _NODE_PLATE.has(key):
+		if _plate_cache.has(key):
+			_node_plate = _plate_cache[key]
+			_node_key = key
+			_show_node_dyn(key, _node_plate)
+			_render_mode = "NODES"
+			_ensure_props(key)
+		else:
+			_node_key = ""
+			_node_plate = null
+			_clear_props()
+			_show_live(key)                                # full shader until the plate lands
+			_ensure_plate(key)
+		return
+	# Other animated themes (skybound/inferno/skins): live full-screen shader.
+	_node_key = ""
+	_node_plate = null
+	_clear_props()
+	_static_rect.visible = false
+	_show_live(key)
+
+# Point the live ColorRect at a theme's shader (or clear it when key is null).
+func _show_live(key: Variant) -> void:
+	if key == null:
 		_bg.material = null
 		_bg.color = Color(0, 0, 0, 0)                       # fully transparent
+		if _render_mode != "BAKED" and _render_mode != "NODES":
+			_render_mode = "none"
 		return
 	_mat.shader = _get_shader(key)
 	_bg.material = _mat
 	_bg.color = Color(1, 1, 1, 1)                           # opaque so shader fills
+	_render_mode = "FULL"
 	_fit_to_viewport()
+
+# Paint a baked plate texture across the full-screen _bg ColorRect (no TextureRect
+# scaling quirks — UV 0..1 maps the texture across the whole screen). Used by both
+# fully-static themes and node themes.
+func _show_plate_blit(tex: Texture2D) -> void:
+	_static_rect.visible = false
+	_mat.shader = _compiled("blit", _BLIT_SHADER)
+	_mat.set_shader_parameter("plate_tex", tex)
+	_bg.material = _mat
+	_bg.color = Color(1, 1, 1, 1)
+	_bg.position = Vector2.ZERO
+	_bg.size = get_viewport().get_visible_rect().size
+
+# The real framebuffer pixel size, so a baked texture matches the live shader's
+# native sharpness (the shader currently renders at window resolution under the
+# canvas_items stretch mode, not the 1280x720 design size).
+func _native_px() -> Vector2:
+	var w := DisplayServer.window_get_size()
+	if w.x > 0 and w.y > 0:
+		return Vector2(w)
+	return get_viewport().get_visible_rect().size
+
+# Compile (and cache) a shader from raw code under an explicit cache key. Used
+# for the split static/dynamic variants that aren't in the _SHADERS dict.
+func _compiled(cache_key: String, code: String) -> Shader:
+	if _cache.has(cache_key):
+		return _cache[cache_key]
+	var sh := Shader.new()
+	sh.code = code
+	_cache[cache_key] = sh
+	return sh
+
+# The plate shader for a theme: node themes bake their static-plate variant;
+# static-bake themes (forest) bake their full shader. Returns null otherwise.
+func _plate_shader_for(key: String) -> Shader:
+	if _NODE_PLATE.has(key):
+		return _compiled("plate:" + key, _NODE_PLATE[key])
+	if _STATIC_BAKE.has(key):
+		return _get_shader(key)
+	return null
+
+# Render a plate shader once into an offscreen SubViewport at native size and
+# return the image as a texture. UPDATE_ONCE + no MSAA, freed right after the read,
+# so it never enters the continuous-redraw path that OOM-crashed the wheel on GL/Mali.
+func _render_plate(shader: Shader) -> ImageTexture:
+	var px := Vector2i(_native_px())
+	px.x = maxi(2, px.x)
+	px.y = maxi(2, px.y)
+	var vp := SubViewport.new()
+	vp.size = px
+	vp.transparent_bg = false
+	vp.msaa_2d = Viewport.MSAA_DISABLED
+	vp.disable_3d = true
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	var rect := ColorRect.new()
+	rect.size = Vector2(px)
+	rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("aspect", float(px.x) / maxf(1.0, float(px.y)))
+	rect.material = mat
+	vp.add_child(rect)
+	add_child(vp)
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	vp.queue_free()
+	return ImageTexture.create_from_image(img)
+
+# Bake `key`'s plate into the RAM cache if not already there (dedup via _baking).
+# Safe to call off-gameplay (pre-bake). After it lands, if this theme is the one
+# waiting to be shown, re-apply so the display swaps from the live shader to the
+# cheap cached plate; and pre-warm its dynamic shader so the first gameplay frame
+# has no compile hitch.
+func _ensure_plate(key: String) -> void:
+	if _plate_cache.has(key) or _baking.get(key, false):
+		return
+	var sh := _plate_shader_for(key)
+	if sh == null:
+		return
+	_baking[key] = true
+	var tex: ImageTexture = await _render_plate(sh)
+	_baking.erase(key)
+	if tex == null:
+		return
+	_plate_cache[key] = tex
+	if _NODE_PLATE.has(key):
+		_prewarm_dyn(key, tex)
+	# If gameplay is already waiting on this theme, show it now.
+	if _active and _resolved_bg_key() == key and _node_key != key:
+		_apply_theme()
+
+# Build (or reuse) the ThemeProps particle tree for `key`.
+func _ensure_props(key: String) -> void:
+	if is_instance_valid(_props_node) and _props_key == key:
+		return
+	_clear_props()
+	var props_script: Script = load("res://theme_props.gd")
+	if props_script == null:
+		return
+	var props: Node2D = props_script.new()
+	_props_node = props
+	_props_key = key
+	_layer.add_child(props)                                 # particle dots, drawn over the dyn shader
+	props.call("setup", key, get_viewport().get_visible_rect().size, self)
+
+# Compile + render a node theme's dynamic shader once (tiny throwaway viewport) so
+# gl_compatibility compiles it now, not on the first gameplay frame.
+func _prewarm_dyn(key: String, plate: Texture2D) -> void:
+	if not _NODE_DYN.has(key):
+		return
+	var code: String = _deepspace_dyn_code if (key == "deepspace" and not _deepspace_dyn_code.is_empty()) else _NODE_DYN[key]
+	var vp := SubViewport.new()
+	vp.size = Vector2i(16, 16)
+	vp.transparent_bg = false
+	vp.msaa_2d = Viewport.MSAA_DISABLED
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	var rect := ColorRect.new()
+	rect.size = Vector2(16, 16)
+	rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = _compiled("dyn:" + key, code)
+	mat.set_shader_parameter("static_tex", plate)
+	mat.set_shader_parameter("aspect", 1.78)
+	rect.material = mat
+	vp.add_child(rect)
+	add_child(vp)
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	vp.queue_free()
+
+# Pre-bake the equipped theme's plate into the cache (no-op for skins/default).
+func _prebake_equipped() -> void:
+	var eq := _equipped_bg_key()
+	if _NODE_PLATE.has(eq) or _STATIC_BAKE.has(eq):
+		_ensure_plate(eq)
+
+# Drop cached plates whose keys aren't in `keep`, to bound RAM to ~1-2 plates.
+func _evict_plates_except(keep: Array) -> void:
+	for k in _plate_cache.keys():
+		if not keep.has(k):
+			_plate_cache.erase(k)
+
+# Drive the _bg ColorRect with a node theme's dynamic shader: it samples the baked
+# plate and draws the hero props on top (pixel-exact size, smooth animation). No
+# per-pixel scene recompute — the heavy static work is baked into the plate.
+func _show_node_dyn(key: String, plate: Texture2D) -> void:
+	_static_rect.visible = false
+	# Deep Space uses the startup-baked, box-guarded variant; others use their const.
+	var code: String = _deepspace_dyn_code if (key == "deepspace" and not _deepspace_dyn_code.is_empty()) else _NODE_DYN[key]
+	_mat.shader = _compiled("dyn:" + key, code)
+	_mat.set_shader_parameter("static_tex", plate)
+	_bg.material = _mat
+	_bg.color = Color(1, 1, 1, 1)
+	_bg.position = Vector2.ZERO
+	var sz := get_viewport().get_visible_rect().size
+	_bg.size = sz
+	_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
+	if key == "kitty":
+		set_kitty_eyes(1.0, 1.0, 0.0)                       # start with eyes open
+	elif key == "skin:inferno":
+		_mat.set_shader_parameter("erupt", Vector4.ZERO)    # start dormant
+
+# Drive the kitty's expression (called every frame by its ThemeProps gesture
+# controller). Harmless if the current shader isn't the kitty (ignored uniforms).
+func set_kitty_eyes(l: float, r: float, smile_amt: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("eye_l", l)
+		_mat.set_shader_parameter("eye_r", r)
+		_mat.set_shader_parameter("smile", smile_amt)
+
+# Drive the volcano's four per-crater eruption activities (called every frame by
+# its ThemeProps controller). Harmless if the current shader isn't the volcano.
+func set_volcano_erupt(a0: float, a1: float, a2: float, a3: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("erupt", Vector4(a0, a1, a2, a3))
+
+# Called by game.gd when the player completes a level. Forwarded to the active
+# theme's props node so it can react (only the kitty does, for now).
+func notify_level_complete(level: int) -> void:
+	if is_instance_valid(_props_node) and _props_node.has_method("on_level_complete"):
+		_props_node.on_level_complete(level)
+
+# Build Deep Space's dynamic shader with each moving prop's random constants baked
+# in as GLSL literals (no per-pixel hash11) and every prop wrapped in a cheap
+# bounding-box guard (so galaxyAt / placeAsteroid / shipShape — which use cos/sin/
+# fbm — only run for the few pixels the prop covers). Galaxies + the station are at
+# fixed positions; asteroids + fighters get their hash-derived constants inlined.
+func _build_deepspace_dyn() -> String:
+	var f := "uniform sampler2D static_tex : filter_linear;\n"
+	f += "void fragment() {\n"
+	f += "\tvec2 uv = UV;\n\tvec2 a = vec2(uv.x * aspect, uv.y);\n\tfloat t = TIME;\n"
+	f += "\tvec3 col = texture(static_tex, uv).rgb;\n"
+	# fixed galaxies (box-guarded; symmetric box >= 1.8 * size covers the rotated disc)
+	f += "\tif (abs(a.x - 0.17 * aspect) < 0.19 && abs(a.y - 0.13) < 0.19) col = galaxyAt(col, a, vec2(0.17 * aspect, 0.13), 0.10, 1.0, 0.5, vec3(0.62, 0.58, 0.98), t);\n"
+	f += "\tif (abs(a.x - 0.81 * aspect) < 0.21 && abs(a.y - 0.15) < 0.21) col = galaxyAt(col, a, vec2(0.81 * aspect, 0.15), 0.11, 5.0, -0.7, vec3(0.98, 0.74, 0.50), t);\n"
+	f += "\tif (abs(a.x - 0.86 * aspect) < 0.16 && abs(a.y - 0.82) < 0.16) col = galaxyAt(col, a, vec2(0.86 * aspect, 0.82), 0.085, 9.0, 1.3, vec3(0.45, 0.92, 0.86), t);\n"
+	# fixed station
+	f += "\tif (abs(a.x - 0.19 * aspect) < 0.13 && abs(a.y - 0.83) < 0.09) col = placeStation(col, a, vec2(0.19 * aspect, 0.83), 0.075, t);\n"
+	# asteroids — drift + tumble, constants baked
+	for i in 4:
+		var fi := float(i)
+		var drift_off := _h11(fi * 4.1)
+		var drift_spd := 0.02 * (0.5 + _h11(fi))
+		var ay := lerpf(0.10, 0.88, _h11(fi * 6.7))
+		var size := 0.034 + 0.028 * _h11(fi * 2.1)
+		var ang_spd := 0.2 + 0.3 * _h11(fi * 3.3)
+		var seed := fi * 5.7 + 1.0
+		var box := size * 1.7
+		f += "\t{ float ax = fract(%f + t * %f) * (aspect + 0.2) - 0.1; if (abs(a.x - ax) < %f && abs(a.y - %f) < %f) col = placeAsteroid(col, a, vec2(ax, %f), %f, %f, t * %f + %f); }\n" % [drift_off, drift_spd, box, ay, box, ay, size, seed, ang_spd, fi]
+	# fighters — fly across, engine glow, occasional laser; constants baked
+	var hulls := ["vec3(0.62, 0.66, 0.74)", "vec3(0.74, 0.60, 0.55)", "vec3(0.55, 0.64, 0.72)"]
+	for i in 5:
+		var fi := float(i)
+		var dir := 1.0 if _h11(fi * 3.3) < 0.5 else -1.0
+		var speed := 0.04 + 0.05 * _h11(fi * 1.9)
+		var off := _h11(fi * 7.1)
+		var base_y := lerpf(0.10, 0.26, _h11(fi * 5.7)) + (0.60 if fi >= 2.5 else 0.0)
+		var hull: String = hulls[i % 3]
+		var sx_expr := "prog" if dir > 0.0 else "(span - 0.5 - prog)"
+		f += "\t{ float span = aspect + 0.5; float prog = mod(t * %f + %f * span, span) - 0.25; float sx = %s; float sy = %f + 0.012 * sin(t * 0.6 + %f); vec2 sq = a - vec2(sx, sy); sq.x *= %f;\n" % [speed, off, sx_expr, base_y, fi, dir]
+		f += "\t\tif (abs(sq.x) < 0.26 && abs(sq.y) < 0.10) { float win = win1(sq.x, -0.24, 0.24, 0.04) * win1(sq.y, -0.09, 0.09, 0.025); float ebehind = -sq.x - 0.05; col += vec3(0.30, 0.70, 1.0) * smoothstep(0.12, 0.0, ebehind) * step(0.0, ebehind) * smoothstep(0.006, 0.0, abs(sq.y)) * (0.5 + 0.4 * sin(t * 20.0 + %f)) * win; vec4 sh = shipShape(sq, %s); col = mix(col, sh.rgb, sh.a * win); col += vec3(0.5, 0.85, 1.0) * aafill(distance(sq, vec2(-0.055, 0.0)) - 0.010) * 1.1 * win; }\n" % [fi, hull]
+		if dir < 0.0:
+			var fire_rate := 0.16 + 0.18 * _h11(fi * 2.7)
+			var fire_off := _h11(fi * 6.3) * 5.0
+			f += "\t\t{ float fph = t * %f + %f; float shot = floor(fph); float fc = fract(fph); if (fc < 0.32 && hash11(shot * 1.7 + %f) < 0.55) { float boltX = sx - 0.05 - (fc / 0.32) * 0.7; vec2 bq = a - vec2(boltX, sy); vec3 lcol = (hash11(%f + shot) < 0.5) ? vec3(1.0, 0.28, 0.22) : vec3(0.40, 1.0, 0.34); col += lcol * smoothstep(0.016, 0.0, length(bq * vec2(0.45, 1.7))) * 1.4; col += lcol * smoothstep(0.045, 0.0, length(bq)) * 0.30; } }\n" % [fire_rate, fire_off, fi * 3.1, fi * 9.1]
+		f += "\t}\n"
+	f += "\tCOLOR = vec4(col, 1.0);\n}\n"
+	return _HEAD + _DEEPSPACE_FUNCS + f
+
+# Public: the shared shader prelude (shader_type + noise/shape/nature helpers) so
+# ThemeProps can compose prop-baking shaders that reuse the exact same SDF art.
+func shader_head() -> String:
+	return _HEAD
+
+# Public: batch-bake a set of prop sprite shaders to transparent textures in ONE
+# frame (each `body` is wrapped with _HEAD). Returns ImageTextures in the same
+# order, or [] if a newer theme switch superseded the bake. Used by ThemeProps.
+func bake_sprites(bodies: Array, px: Vector2i) -> Array:
+	var gen := _bake_gen
+	px.x = maxi(2, px.x)
+	px.y = maxi(2, px.y)
+	var vps: Array = []
+	for body in bodies:
+		var vp := SubViewport.new()
+		vp.size = px
+		vp.transparent_bg = true
+		vp.msaa_2d = Viewport.MSAA_DISABLED
+		vp.disable_3d = true
+		vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+		vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		var rect := ColorRect.new()
+		rect.size = Vector2(px)
+		rect.color = Color(1, 1, 1, 1)
+		var m := ShaderMaterial.new()
+		m.shader = _compiled_uncached(_HEAD + String(body))
+		rect.material = m
+		vp.add_child(rect)
+		add_child(vp)
+		vps.append(vp)
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var out: Array = []
+	for vp in vps:
+		out.append(ImageTexture.create_from_image(vp.get_texture().get_image()))
+		vp.queue_free()
+	if gen != _bake_gen:
+		return []
+	return out
+
+# One-off shader compile that is NOT cached (sprite-bake shaders are transient).
+func _compiled_uncached(code: String) -> Shader:
+	var sh := Shader.new()
+	sh.code = code
+	return sh
+
+func _clear_props() -> void:
+	if is_instance_valid(_props_node):
+		_props_node.queue_free()
+	_props_node = null
+	_props_key = ""

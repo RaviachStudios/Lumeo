@@ -30,6 +30,10 @@ var speed_inc: float
 var _wheel: SimonWheel
 var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
+# True when this game was launched from inside an Arena contest (GameState holds
+# the contest context). Changes Quit -> Forfeit framing and makes the game-over
+# flow route back to the contest + record the result.
+var _is_contest: bool = false
 
 var _status_lbl: Label
 var _status_panel: Panel
@@ -46,6 +50,7 @@ var _earn_indicator: Label
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	_is_contest = GameState.contest_context.has("id")
 	num_buttons = GameState.num_colors
 	flash_time = GameState.flash_time
 	flash_gap = GameState.flash_gap
@@ -169,9 +174,10 @@ func _build_hud() -> void:
 	_watch_ad_btn.visible = false
 	add_child(_watch_ad_btn)
 
-	# Quit — subdued dark-red glass pill, top-right.
+	# Quit — subdued dark-red glass pill, top-right. In a contest it reads as
+	# "Forfeit" (leaving still records the current score for the contest).
 	_quit_btn = Button.new()
-	_quit_btn.text = "✕  Quit"
+	_quit_btn.text = "✕  Forfeit" if _is_contest else "✕  Quit"
 	_quit_btn.position = Vector2(sz.x - HUD_RIGHT_BTN_W - HUD_RIGHT_MARGIN, 20)
 	_quit_btn.size = Vector2(HUD_RIGHT_BTN_W, 48)
 	_quit_btn.focus_mode = Control.FOCUS_NONE
@@ -350,7 +356,7 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	add_child(overlay)
 
 	var lbl := Label.new()
-	lbl.text = "Quit to Home?"
+	lbl.text = "Forfeit game?" if _is_contest else "Quit to Home?"
 	lbl.add_theme_font_size_override("font_size", 30)
 	lbl.add_theme_color_override("font_color", Color.WHITE)
 	lbl.position = Vector2(0, 28)
@@ -359,7 +365,7 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	overlay.add_child(lbl)
 
 	var sub := Label.new()
-	sub.text = "Your progress will be lost."
+	sub.text = "Your current score will count." if _is_contest else "Your progress will be lost."
 	sub.add_theme_font_size_override("font_size", 15)
 	sub.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	sub.position = Vector2(0, 72)
@@ -368,12 +374,12 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	overlay.add_child(sub)
 
 	var yes := Button.new()
-	yes.text = "Yes, Quit"
+	yes.text = "Yes, Forfeit" if _is_contest else "Yes, Quit"
 	yes.position = Vector2(24, 120)
 	yes.size = Vector2(155, 52)
 	yes.add_theme_font_size_override("font_size", 18)
 	_flat_btn(yes, Color(0.55, 0.12, 0.12))
-	yes.pressed.connect(func() -> void: game_manager.show_home())
+	yes.pressed.connect(_on_quit_confirmed)
 	overlay.add_child(yes)
 
 	var no := Button.new()
@@ -463,6 +469,7 @@ func _player_pressed(idx: int) -> void:
 		var earned := CoinsManager.award_for_level(GameState.difficulty, level)
 		if earned > 0:
 			_show_earn_indicator(earned)
+		BackgroundManager.notify_level_complete(level)      # kitty theme winks + cheers
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 
@@ -481,6 +488,17 @@ func _on_replay() -> void:
 
 func _on_quit() -> void:
 	get_node("QuitDialog").visible = true
+
+# "Yes" in the quit dialog. Normal play → home. Contest play → forfeit, which
+# runs the normal game-over flow so the current score is recorded for the
+# contest (game_over.gd sees GameState.contest_context and routes back).
+func _on_quit_confirmed() -> void:
+	get_node("QuitDialog").visible = false
+	if _is_contest:
+		if _state != "gameover":
+			_game_over()
+	else:
+		game_manager.show_home()
 
 func _on_watch_ad() -> void:
 	if _state != "input":

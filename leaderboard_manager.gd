@@ -313,28 +313,44 @@ func load_global(difficulty: String) -> Dictionary:
 func load_daily(difficulty: String) -> Dictionary:
 	return await _load_board("daily_" + difficulty, {"date": _today_utc()})
 
+# Emitted by a worker each time one board finishes, so _load_all can wait for the
+# whole batch without awaiting the boards one-at-a-time.
+signal _board_loaded
+
 # Loads all three all-time boards at once. Shape: { easy: {...}, moderate: {...},
 # hard: {...}, ok: bool }.
 func load_all_globals() -> Dictionary:
-	var out := {}
-	var ok := true
-	for diff in DIFFS:
-		var d := await load_global(diff)
-		if not d.get("ok", false): ok = false
-		out[diff] = d
-	out["ok"] = ok
-	return out
+	return await _load_all("global_", {})
 
 # Loads all three daily boards at once.
 func load_all_dailies() -> Dictionary:
+	return await _load_all("daily_", {"date": _today_utc()})
+
+# Loads all three boards of one family CONCURRENTLY. Each _load_board coroutine
+# fires its first HTTP request before it suspends, so kicking them all off (without
+# awaiting in between) puts every request in flight at once; we then wait for the
+# batch via the _board_loaded signal. Cuts the screen-open wait from ~6 serial
+# round-trips to ~1.
+func _load_all(prefix: String, extra_eq: Dictionary) -> Dictionary:
 	var out := {}
+	var pending := {"left": DIFFS.size()}
+	for diff in DIFFS:
+		_load_board_into(prefix + diff, extra_eq, diff, out, pending)
+	while pending["left"] > 0:
+		await _board_loaded
 	var ok := true
 	for diff in DIFFS:
-		var d := await load_daily(diff)
-		if not d.get("ok", false): ok = false
-		out[diff] = d
+		if not out[diff].get("ok", false): ok = false
 	out["ok"] = ok
 	return out
+
+# Worker: loads one board into `out[key]`, then decrements the batch counter and
+# signals completion. Called WITHOUT await so the boards run in parallel.
+func _load_board_into(collection: String, extra_eq: Dictionary, key: String,
+		out: Dictionary, pending: Dictionary) -> void:
+	out[key] = await _load_board(collection, extra_eq)
+	pending["left"] -= 1
+	_board_loaded.emit()
 
 # Returns:
 #   { rows: Array<{uid, name, score, is_me}>,
