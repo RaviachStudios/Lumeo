@@ -35,7 +35,10 @@ signal contest_updated(contest_id: String)
 # ---- caps (v1; shop upgrades add to the base later) ----
 const JOIN_LIMIT_BASE := 2
 const CREATE_LIMIT_BASE := 1
-const MAX_MEMBERS := 50
+const MAX_MEMBERS := 45
+# Contest titles are player-authored; displayed big and clamped to this length
+# everywhere (mirrors ArenaUI.TITLE_MAX + titleOk() in firestore.rules).
+const TITLE_MAX := 15
 
 const TYPES: Array[String] = ["one_game", "one_hour", "one_day", "daily"]
 const DIFFS: Array[String] = ["easy", "moderate", "hard"]
@@ -122,8 +125,30 @@ func get_my_counts() -> Dictionary:
 #  CREATE
 # =====================================================================
 
+# Funny fallback contest names (all within TITLE_MAX). Offered as suggestions on the
+# create screen and used when a player leaves the name blank.
+const FUNNY_NAMES: Array[String] = [
+	"Thumb Wars", "Combo Chaos", "Brain Freeze", "Simon Smackdown",
+	"Tap Titans", "Recall Rumble", "Pattern Panic", "Mind Meltdown",
+	"Button Mashers", "Sequence Slam", "The Gauntlet", "Neuron Nuke",
+	"Flashback Fight", "Echo Chamber", "Total Recall", "Memory Lane",
+	"Blinkin' Havoc", "Colour Clash", "Rapid Recall", "Simon Says No",
+]
+
+static func random_title() -> String:
+	return FUNNY_NAMES[randi() % FUNNY_NAMES.size()]
+
+# Sanitizes a player-authored title to the shared limit; blank -> a random funny name.
+static func clean_title(raw: String) -> String:
+	var s := raw.strip_edges()
+	if s.is_empty():
+		return random_title()
+	if s.length() > TITLE_MAX:
+		s = s.substr(0, TITLE_MAX)
+	return s
+
 # Returns {ok, id} or {ok:false, error}.
-func create_contest(type: String, difficulty: String) -> Dictionary:
+func create_contest(type: String, difficulty: String, title: String = "") -> Dictionary:
 	if _uid().is_empty() or not FirebaseManager.has_display_name():
 		return {"ok": false, "error": "auth"}
 	if not TYPES.has(type) or not DIFFS.has(difficulty):
@@ -139,6 +164,7 @@ func create_contest(type: String, difficulty: String) -> Dictionary:
 			continue
 		var meta := {
 			"id": cid,
+			"title": clean_title(title),
 			"creator_uid": _uid(),
 			"creator_name": _name(),
 			"type": type,
@@ -390,6 +416,7 @@ func load_my_contests() -> Array:
 			continue
 		out.append({
 			"id": cid,
+			"title": String(meta.get("title", "Contest")),
 			"type": String(meta.get("type", "")),
 			"difficulty": String(meta.get("difficulty", "easy")),
 			"status": String(meta.get("status", "lobby")),
@@ -433,6 +460,27 @@ func finalize_now(cid: String) -> Dictionary:
 	meta = await _do_finalize(cid, meta, members)
 	emit_signal("contest_updated", cid)
 	return {"ok": true, "meta": meta}
+
+# Creator explicitly deletes the whole contest (any status). Tears down every
+# member row first (each rule-allowed as the creator), then the contest doc.
+# member_count is dropped to 0 before the contest delete so the rule's
+# empty-delete path also covers us if the creator lookup is momentarily stale.
+func delete_contest(cid: String) -> Dictionary:
+	var meta := await _load_meta(cid)
+	if meta.is_empty():
+		await _delete_member(cid, _uid())
+		emit_signal("my_contests_changed")
+		return {"ok": true}
+	if String(meta.get("creator_uid", "")) != _uid():
+		return {"ok": false, "error": "not_creator"}
+	var members := await _load_members(cid)
+	for m in members:
+		await _delete_member(cid, String(m.get("uid", "")))
+	await _write_contest(cid, {"member_count": 0}, true)
+	await _delete_contest(cid)
+	emit_signal("my_contests_changed")
+	emit_signal("contest_updated", cid)
+	return {"ok": true}
 
 # =====================================================================
 #  LEAVE  (+ cleanup / deletion)

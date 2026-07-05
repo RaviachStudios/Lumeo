@@ -179,11 +179,28 @@ func _ready() -> void:
 	# and the change only becomes visible after navigating back to home.
 	CoinsManager.themes_changed.connect(_sync_local_background)
 	_render_category(_current_cat)
+	# Warm the compiler for every THEMES preview shader up front (spread one-per-frame),
+	# so scrolling the grid never hitches on a first-draw shader compile. Live previews
+	# themselves are unchanged — this only pre-compiles their shaders.
+	for c in CATEGORIES:
+		if c["key"] == "themes":
+			BackgroundManager.prewarm_previews(c.get("items", []))
+			break
+	# Same warm-up for each SPECIAL SKINS card's bespoke background (e.g. the Volcano
+	# night-castle scene) — it's a plain invisible ColorRect until that tab is shown,
+	# so its (large) shader would otherwise compile on the first draw right as the
+	# player taps SPECIAL SKINS. The wheel's own coal/lava materials don't need this:
+	# apply_skin already kicks its SubViewport into UPDATE_ALWAYS for an animated skin,
+	# so those compile in the background the moment _prebuild_panels runs below.
+	var skin_ids: Array[String] = []
+	for d in SKIN_DEFS:
+		skin_ids.append(String(d["id"]))
+	BackgroundManager.prewarm_skin_previews(skin_ids)
 	# Pre-build the SIMON and SKINS panels one frame after the shop paints, while
 	# they're still hidden. Both are built lazily on first toggle otherwise, which
-	# is what makes the first tab switch hitch — constructing the live SimonWheel
-	# previews + tiles is the cost, not any Firestore fetch (all that data is
-	# already in CoinsManager). Deferring keeps the shop's first paint snappy.
+	# avoids a construction hitch — constructing the live SimonWheel previews + tiles
+	# is real CPU cost, not any Firestore fetch (all that data is already in
+	# CoinsManager). Deferring keeps the shop's first paint snappy.
 	call_deferred("_prebuild_panels")
 
 # Builds the non-default category panels ahead of time so switching to them is
@@ -1146,10 +1163,7 @@ func _style_swatch(swatch: SimonPartIcon, category: String, color_id: String) ->
 	if category == "level_number":
 		swatch.setup(category, null, CoinsManager.simon_number_font(color_id))
 		return
-	var tint: Variant = null
-	if color_id != CoinsManager.SIMON_DEFAULT_COLOR:
-		tint = CoinsManager.simon_color_value(color_id)
-	swatch.setup(category, tint)
+	swatch.setup(category, CoinsManager.simon_part_style(category, color_id))
 
 func _refresh_simon_panel() -> void:
 	if _simon_root == null:
@@ -1187,15 +1201,12 @@ func _simon_number_pack() -> Variant:
 		return null
 	return CoinsManager.simon_number_font(id)
 
-# The Color tint a part wears right now, or null for the stock look — mirrors
-# game.gd._resolved_simon_tint so the preview matches the real in-game wheel.
+# The look a part wears right now (Color / pattern-motif Dictionary / null) —
+# mirrors game.gd._resolved_simon_tint so the preview matches the in-game wheel.
 func _simon_tint(category: String) -> Variant:
 	if not CoinsManager.is_simon_manual():
 		return null
-	var id := CoinsManager.equipped_simon_color(category)
-	if id == CoinsManager.SIMON_DEFAULT_COLOR:
-		return null
-	return CoinsManager.simon_color_value(id)
+	return CoinsManager.simon_part_style(category, CoinsManager.equipped_simon_color(category))
 
 # ---------------- colour popup ----------------
 
@@ -1339,10 +1350,7 @@ func _make_color_card(category: String, color_id: String) -> Dictionary:
 	if category == "level_number":
 		swatch.setup(category, null, CoinsManager.simon_number_font(color_id))
 	else:
-		var card_tint: Variant = null
-		if color_id != CoinsManager.SIMON_DEFAULT_COLOR:
-			card_tint = CoinsManager.simon_color_value(color_id)
-		swatch.setup(category, card_tint)
+		swatch.setup(category, CoinsManager.simon_part_style(category, color_id))
 	root.add_child(swatch)
 
 	var name_lbl := Label.new()

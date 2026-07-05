@@ -7,6 +7,11 @@ signal signed_out
 # or a sign-out that clears it). Subscribers persist it (CoinsManager) and
 # propagate it (LeaderboardManager rename).
 signal display_name_changed(new_name: String)
+# Account-deletion outcome. On success this fires alongside `signed_out` (the
+# same local-state reset applies either way); on failure the account and its
+# data are untouched and the caller should let the player retry.
+signal account_deleted
+signal account_delete_failed(error: String)
 
 const SAVE_PATH := "user://user_profile.cfg"
 
@@ -60,6 +65,40 @@ func sign_out_user() -> void:
 		_on_sign_out(true)
 		return
 	Firebase.auth.sign_out()
+
+# Permanently deletes the signed-in player's account and every server-side
+# trace of it: Arena/contest membership, leaderboard rows, the wallet doc
+# (coins, cosmetics, purchase history), then the Firebase Auth user itself.
+# The social/shared data is purged FIRST, while still authenticated — Firestore
+# rules key every delete on request.auth, so doing it after the auth account
+# is gone would just get rejected.
+#
+# Does NOT touch the Google Play purchase record for the non-consumable
+# "remove ads" upgrade: Play still owns that, so PurchaseManager's normal
+# startup query re-grants it for free next time this Google account signs in.
+# Consumable coins already converted to balance have no such replay — once
+# the wallet doc is gone, real-money coins bought with it are gone for good.
+func delete_account() -> Dictionary:
+	if not is_signed_in():
+		return {"ok": false, "error": "not_signed_in"}
+	for c in await ContestManager.load_my_contests():
+		await ContestManager.leave_contest(String(c.get("id", "")))
+	await LeaderboardManager.delete_all_my_rows()
+	await CoinsManager.delete_wallet_doc()
+
+	if _is_editor:
+		_on_sign_out(true)
+		account_deleted.emit()
+		return {"ok": true}
+
+	Firebase.auth.delete_current_user()
+	var success: bool = await Firebase.auth.user_deleted
+	if not success:
+		account_delete_failed.emit("delete_failed")
+		return {"ok": false, "error": "delete_failed"}
+	_on_sign_out(true)
+	account_deleted.emit()
+	return {"ok": true}
 
 # Sets uid + google_name. Only keeps a chosen display_name if it belongs to
 # THIS uid (so a different account on the same device must pick a new name).

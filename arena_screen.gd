@@ -1,24 +1,36 @@
 extends Control
 
-# Arena hub: the player's active contests + entry points to create one or join by
-# ID. Reads happen on open and on explicit refresh only (Firebase I/O is
-# expensive — no background polling).
+# Arena hub (THE COLOSSEUM): the player's active contests + entry points to create
+# one or join by ID. Contests show one-at-a-time in a centered carousel with
+# ◀ ▶ arrows and page dots. Reads happen on open and on explicit refresh only
+# (Firebase I/O is expensive — no background polling).
 
 const ArenaUI := preload("res://arena_ui.gd")
+const ArenaFX := preload("res://arena_fx.gd")
 
 var game_manager: Node
 
 var _bg: ColorRect
+var _fx: ArenaFX
 var _back: Button
 var _title: Label
-var _caps_lbl: Label
+
+# Carousel.
+var _card: Button
+var _card_title: Label
+var _card_info: Label            # bottom-left: "N registered | 1 Hour | Moderate"
+var _card_host: Label            # bottom-right: "You host this contest"
+var _prev_btn: Button
+var _next_btn: Button
+var _dots: Control
+var _empty_lbl: Label
+
+# Bottom actions.
 var _create_btn: Button
 var _join_btn: Button
-var _refresh_btn: Button
-var _list_panel: Panel
-var _scroll: ScrollContainer
-var _list: VBoxContainer
-var _empty_lbl: Label
+var _create_cap: Label
+var _join_cap: Label
+
 var _overlay: Panel
 var _overlay_lbl: Label
 var _toast: Label
@@ -28,14 +40,24 @@ var _join_modal: Panel
 var _join_edit: LineEdit
 var _join_msg: Label
 
+var _contests: Array = []
+var _idx := 0
 var _counts: Dictionary = {"join": 0, "create": 0, "join_limit": 2, "create_limit": 1}
 var _busy := false
+
+const CARD_MAX_W := 520.0
+const CARD_H := 296.0
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_bg = ArenaUI.make_bg()
+	_bg = ArenaUI.make_bg("hub")
 	add_child(_bg)
+
+	# Ambient flourish (spotlights / confetti / winged Simon fly-by) behind the UI.
+	_fx = ArenaFX.new()
+	add_child(_fx)
+	_fx.setup(get_viewport_rect().size)
 
 	_back = ArenaUI.make_back_button()
 	_back.pressed.connect(func() -> void: game_manager.show_home())
@@ -44,46 +66,19 @@ func _ready() -> void:
 	_title = ArenaUI.title("ARENA")
 	add_child(_title)
 
-	_caps_lbl = Label.new()
-	_caps_lbl.add_theme_font_size_override("font_size", 16)
-	_caps_lbl.add_theme_color_override("font_color", ArenaUI.MUTED)
-	_caps_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_caps_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_caps_lbl)
+	_build_carousel()
 
-	_create_btn = ArenaUI.pill_button("＋  Create", ArenaUI.ACCENT, true)
+	_create_btn = ArenaUI.pill_button("＋  Create Contest", ArenaUI.ACCENT, true)
 	_create_btn.pressed.connect(_on_create)
 	add_child(_create_btn)
+	_create_cap = _make_cap()
+	add_child(_create_cap)
 
-	_join_btn = ArenaUI.pill_button("⮕  Join by ID", Color(0.40, 0.62, 1.0))
+	_join_btn = ArenaUI.pill_button("⮕  Join by ID", ArenaUI.SAND)
 	_join_btn.pressed.connect(_open_join_modal)
 	add_child(_join_btn)
-
-	_refresh_btn = ArenaUI.pill_button("⟳", Color(0.55, 0.62, 0.85))
-	_refresh_btn.add_theme_font_size_override("font_size", 22)
-	_refresh_btn.pressed.connect(func() -> void: _refresh())
-	add_child(_refresh_btn)
-
-	_list_panel = ArenaUI.glass_panel()
-	add_child(_list_panel)
-
-	_scroll = ScrollContainer.new()
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(_scroll)
-	_list = VBoxContainer.new()
-	_list.add_theme_constant_override("separation", 12)
-	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_scroll.add_child(_list)
-
-	_empty_lbl = Label.new()
-	_empty_lbl.text = "You're not in any contests yet.\nCreate one or join a friend's with their ID."
-	_empty_lbl.add_theme_font_size_override("font_size", 18)
-	_empty_lbl.add_theme_color_override("font_color", ArenaUI.MUTED)
-	_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_empty_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_empty_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_empty_lbl.visible = false
-	add_child(_empty_lbl)
+	_join_cap = _make_cap()
+	add_child(_join_cap)
 
 	_build_overlay()
 	_build_toast()
@@ -92,53 +87,207 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_layout)
 	_refresh()
 
+# ---------------- carousel construction ----------------
+
+func _build_carousel() -> void:
+	_card = Button.new()
+	_card.focus_mode = Control.FOCUS_NONE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.09, 0.10, 0.20, 0.93)
+	s.set_corner_radius_all(18)
+	s.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.85)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.35)
+	s.shadow_size = 18
+	_card.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(0.13, 0.15, 0.28, 0.96)
+	_card.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.07, 0.08, 0.16, 0.96)
+	_card.add_theme_stylebox_override("pressed", sp)
+	_card.pressed.connect(func() -> void:
+		if _idx >= 0 and _idx < _contests.size():
+			game_manager.show_contest_detail(String(_contests[_idx].get("id", ""))))
+	add_child(_card)
+
+	_card_title = ArenaUI.big_title("")
+	_card_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_card.add_child(_card_title)
+
+	# Bottom-left: the compact stat line ("N registered  |  1 Hour  |  Moderate").
+	_card_info = Label.new()
+	_card_info.add_theme_font_size_override("font_size", 16)
+	_card_info.add_theme_color_override("font_color", ArenaUI.MUTED)
+	_card_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_card_info.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_card_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_card.add_child(_card_info)
+
+	# Bottom-right: host tag.
+	_card_host = Label.new()
+	_card_host.text = "You host this contest"
+	_card_host.add_theme_font_size_override("font_size", 16)
+	_card_host.add_theme_color_override("font_color", ArenaUI.GOLD)
+	_card_host.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_card_host.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_card_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_card.add_child(_card_host)
+
+	_prev_btn = _make_arrow(-1.0)
+	_prev_btn.pressed.connect(func() -> void: _step(-1))
+	add_child(_prev_btn)
+	_next_btn = _make_arrow(1.0)
+	_next_btn.pressed.connect(func() -> void: _step(1))
+	add_child(_next_btn)
+
+	_dots = Control.new()
+	_dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dots.draw.connect(_draw_dots)
+	add_child(_dots)
+
+	_empty_lbl = Label.new()
+	_empty_lbl.text = "No contests yet.\nCreate one, or join a friend's with their ID."
+	_empty_lbl.add_theme_font_size_override("font_size", 19)
+	_empty_lbl.add_theme_color_override("font_color", ArenaUI.MUTED)
+	_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_empty_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_empty_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_empty_lbl.visible = false
+	add_child(_empty_lbl)
+
+# A small muted caption shown under a bottom action button (its used/limit tally).
+func _make_cap() -> Label:
+	var l := Label.new()
+	l.add_theme_font_size_override("font_size", 14)
+	l.add_theme_color_override("font_color", ArenaUI.MUTED)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.visible = false
+	return l
+
+func _make_arrow(dir: float) -> Button:
+	var b := Button.new()
+	b.focus_mode = Control.FOCUS_NONE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.09, 0.10, 0.20, 0.9)
+	s.set_corner_radius_all(30)
+	s.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.8)
+	s.set_border_width_all(2)
+	s.shadow_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.35)
+	s.shadow_size = 12
+	b.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(0.14, 0.16, 0.30, 0.95)
+	b.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.06, 0.07, 0.15, 0.96)
+	b.add_theme_stylebox_override("pressed", sp)
+	var sd := s.duplicate() as StyleBoxFlat
+	sd.bg_color = Color(0.08, 0.09, 0.14, 0.4)
+	sd.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.2)
+	b.add_theme_stylebox_override("disabled", sd)
+	# A drawn, glowing chevron arrow (much crisper than a font glyph).
+	var icon := Control.new()
+	icon.size = Vector2(60, 60)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.draw.connect(_draw_arrow_icon.bind(icon, dir))
+	b.add_child(icon)
+	return b
+
+# A bold, gold, double-chevron arrow with a soft glow, pointing `dir` (−1 left / +1
+# right). Drawn into a 60×60 icon box centred on the button.
+func _draw_arrow_icon(c: Control, dir: float) -> void:
+	var ctr := Vector2(30, 30)
+	var gold := ArenaUI.ACCENT.lightened(0.35)
+	var glow := Color(gold.r, gold.g, gold.b, 0.30)
+	var core := Color(1.0, 0.95, 0.82)
+	# two nested chevrons, tip leading in `dir`
+	for k in 2:
+		var off := dir * (k * 9.0 - 4.5)
+		var tip := ctr + Vector2(off + dir * 8.0, 0)
+		var top := ctr + Vector2(off - dir * 6.0, -11.0)
+		var bot := ctr + Vector2(off - dir * 6.0, 11.0)
+		c.draw_polyline(PackedVector2Array([top, tip, bot]), glow, 9.0, true)
+		c.draw_polyline(PackedVector2Array([top, tip, bot]), gold, 5.0, true)
+		c.draw_polyline(PackedVector2Array([top, tip, bot]), core, 1.6, true)
+
+func _draw_dots() -> void:
+	var n := _contests.size()
+	if n <= 1:
+		return
+	var gap := 20.0
+	var total := gap * (n - 1)
+	var x := _dots.size.x * 0.5 - total * 0.5
+	var y := _dots.size.y * 0.5
+	for i in n:
+		var on: bool = i == _idx
+		var col: Color = ArenaUI.GOLD if on else ArenaUI.MUTED
+		_dots.draw_circle(Vector2(x + i * gap, y), 6.0 if on else 4.0, Color(col.r, col.g, col.b, 1.0 if on else 0.5))
+
+# ---------------- layout ----------------
+
 func _layout() -> void:
 	var sz := get_viewport_rect().size
 	ArenaUI.size_bg(_bg, sz)
+	if _fx:
+		_fx.relayout(sz)
 	var cx := sz.x * 0.5
 	if _back:
 		_back.position = Vector2(20, 20)
 	if _title:
 		_title.size = Vector2(sz.x, 52)
 		_title.position = Vector2(0, 22)
-	if _caps_lbl:
-		_caps_lbl.size = Vector2(sz.x, 22)
-		_caps_lbl.position = Vector2(0, 76)
 
-	# action row (create / join / refresh), centered
-	var by := 112.0
-	if _create_btn:
-		_create_btn.size = Vector2(180, 50)
-	if _join_btn:
-		_join_btn.size = Vector2(200, 50)
-	if _refresh_btn:
-		_refresh_btn.size = Vector2(56, 50)
-	var gap := 14.0
-	var total := 180.0 + 200.0 + 56.0 + gap * 2.0
-	var x := cx - total * 0.5
-	if _create_btn:
-		_create_btn.position = Vector2(x, by); x += 180.0 + gap
-	if _join_btn:
-		_join_btn.position = Vector2(x, by); x += 200.0 + gap
-	if _refresh_btn:
-		_refresh_btn.position = Vector2(x, by)
-
-	# list panel fills the rest
-	var top := 184.0
-	var pw: float = minf(720.0, sz.x - 80.0)
-	var px := cx - pw * 0.5
-	var ph := sz.y - top - 30.0
-	if _list_panel:
-		_list_panel.position = Vector2(px, top)
-		_list_panel.size = Vector2(pw, ph)
-	if _scroll:
-		_scroll.position = Vector2(px + 14, top + 14)
-		_scroll.size = Vector2(pw - 28, ph - 28)
-	if _list:
-		_list.custom_minimum_size = Vector2(_scroll.size.x, 0)
+	var card_w: float = minf(CARD_MAX_W, sz.x - 200.0)
+	var card_top := 150.0
+	if _card:
+		_card.size = Vector2(card_w, CARD_H)
+		_card.position = Vector2(cx - card_w * 0.5, card_top)
+		# card inner content: title centred, stat line bottom-left, host tag bottom-right
+		_card_title.position = Vector2(24, CARD_H * 0.5 - 44)
+		_card_title.size = Vector2(card_w - 48, 88)
+		_card_info.position = Vector2(24, CARD_H - 44)
+		_card_info.size = Vector2(card_w * 0.55 - 24, 26)
+		_card_host.position = Vector2(card_w * 0.45, CARD_H - 44)
+		_card_host.size = Vector2(card_w * 0.55 - 24, 26)
+	if _prev_btn:
+		_prev_btn.size = Vector2(60, 60)
+		_prev_btn.position = Vector2(cx - card_w * 0.5 - 74, card_top + CARD_H * 0.5 - 30)
+	if _next_btn:
+		_next_btn.size = Vector2(60, 60)
+		_next_btn.position = Vector2(cx + card_w * 0.5 + 14, card_top + CARD_H * 0.5 - 30)
+	if _dots:
+		_dots.position = Vector2(cx - 150, card_top + CARD_H + 12)
+		_dots.size = Vector2(300, 24)
+		_dots.queue_redraw()
 	if _empty_lbl:
-		_empty_lbl.position = Vector2(px, top + ph * 0.5 - 40)
-		_empty_lbl.size = Vector2(pw, 80)
+		_empty_lbl.position = Vector2(cx - card_w * 0.5, card_top + CARD_H * 0.5 - 40)
+		_empty_lbl.size = Vector2(card_w, 80)
+
+	# bottom action row (create / join), centered
+	var by := card_top + CARD_H + 56.0
+	by = minf(by, sz.y - 88.0)
+	if _create_btn:
+		_create_btn.size = Vector2(240, 58)
+	if _join_btn:
+		_join_btn.size = Vector2(210, 58)
+	var gap := 18.0
+	var total := 240.0 + 210.0 + gap
+	var x := cx - total * 0.5
+	var cap_y := by + 58.0 + 6.0
+	if _create_btn:
+		_create_btn.position = Vector2(x, by)
+		if _create_cap:
+			_create_cap.position = Vector2(x, cap_y)
+			_create_cap.size = Vector2(240, 20)
+		x += 240.0 + gap
+	if _join_btn:
+		_join_btn.position = Vector2(x, by)
+		if _join_cap:
+			_join_cap.position = Vector2(x, cap_y)
+			_join_cap.size = Vector2(210, 20)
+
 	if _overlay:
 		_overlay.position = Vector2.ZERO
 		_overlay.size = sz
@@ -147,7 +296,7 @@ func _layout() -> void:
 		_overlay_lbl.position = Vector2(0, sz.y * 0.5 - 20)
 	if _toast:
 		_toast.size = Vector2(sz.x, 30)
-		_toast.position = Vector2(0, sz.y - 96)
+		_toast.position = Vector2(0, sz.y - 40)
 	_layout_join_modal(sz)
 
 # ---------------- data ----------------
@@ -161,98 +310,64 @@ func _refresh() -> void:
 	var contests := await ContestManager.load_my_contests()
 	if not is_inside_tree():
 		return
-	_populate(contests)
+	_contests = contests
+	_idx = clampi(_idx, 0, maxi(0, _contests.size() - 1))
+	_show_current()
 	_update_caps()
 	_set_overlay(false)
 	_busy = false
 
 func _update_caps() -> void:
-	_caps_lbl.text = "Joined %d/%d   ·   Created %d/%d" % [
-		int(_counts.get("join", 0)), int(_counts.get("join_limit", 2)),
-		int(_counts.get("create", 0)), int(_counts.get("create_limit", 1))]
-	var can_create: bool = int(_counts.get("create", 0)) < int(_counts.get("create_limit", 1))
-	var can_join: bool = int(_counts.get("join", 0)) < int(_counts.get("join_limit", 2))
+	var created := int(_counts.get("create", 0))
+	var create_limit := int(_counts.get("create_limit", 1))
+	var joined := int(_counts.get("join", 0))
+	var join_limit := int(_counts.get("join_limit", 2))
+	# Create tally shows once anything is created; join tally only when it's maxed out.
+	if _create_cap:
+		_create_cap.visible = created > 0
+		_create_cap.text = "You've already created %d/%d contests" % [created, create_limit]
+	if _join_cap:
+		_join_cap.visible = joined >= join_limit
+		_join_cap.text = "You've already joined %d/%d contests" % [joined, join_limit]
+	var can_create: bool = created < create_limit
+	var can_join: bool = joined < join_limit
 	if _create_btn:
 		_create_btn.disabled = not can_create
 	if _join_btn:
 		_join_btn.disabled = not can_join
 
-func _populate(contests: Array) -> void:
-	for c in _list.get_children():
-		c.queue_free()
-	_empty_lbl.visible = contests.is_empty()
-	for c: Dictionary in contests:
-		_list.add_child(_make_row(c))
+func _step(dir: int) -> void:
+	var n := _contests.size()
+	if n <= 1:
+		return
+	_idx = (_idx + dir + n) % n
+	_show_current()
 
-func _make_row(c: Dictionary) -> Control:
-	var cid := String(c.get("id", ""))
-	var status := String(c.get("status", "lobby"))
+func _show_current() -> void:
+	var has := not _contests.is_empty()
+	_card.visible = has
+	_empty_lbl.visible = not has
+	var multi := _contests.size() > 1
+	_prev_btn.visible = has
+	_next_btn.visible = has
+	_prev_btn.disabled = not multi
+	_next_btn.disabled = not multi
+	_prev_btn.modulate.a = 1.0 if multi else 0.4      # dim the drawn chevron when idle
+	_next_btn.modulate.a = 1.0 if multi else 0.4
+	_dots.queue_redraw()
+	if not has:
+		return
+
+	var c: Dictionary = _contests[_idx]
 	var type := String(c.get("type", ""))
 	var diff := String(c.get("difficulty", "easy"))
+	var count := int(c.get("member_count", 1))
 
-	var row := Button.new()
-	row.custom_minimum_size = Vector2(0, 74)
-	row.focus_mode = Control.FOCUS_NONE
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.10, 0.10, 0.20, 0.6)
-	s.set_corner_radius_all(16)
-	s.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.35)
-	s.set_border_width_all(1)
-	row.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.14, 0.14, 0.28, 0.75)
-	row.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.08, 0.08, 0.16, 0.85)
-	row.add_theme_stylebox_override("pressed", sp)
-	row.pressed.connect(func() -> void: game_manager.show_contest_detail(cid))
-
-	# Title line: "1 Hour · Moderate"  + ID
-	var titlelbl := Label.new()
-	titlelbl.text = "%s  ·  %s" % [ContestManager.type_label(type), ContestManager.diff_label(diff)]
-	titlelbl.add_theme_font_size_override("font_size", 20)
-	titlelbl.add_theme_color_override("font_color", ArenaUI.TEXT)
-	titlelbl.position = Vector2(18, 10)
-	titlelbl.size = Vector2(320, 26)
-	titlelbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(titlelbl)
-
-	var sub := Label.new()
-	var sub_text := "ID %s   ·   %d player%s" % [cid, int(c.get("member_count", 1)),
-		"" if int(c.get("member_count", 1)) == 1 else "s"]
-	if bool(c.get("is_creator", false)):
-		sub_text += "   ·   👑 You host"
-	if status == "active":
-		var tl := ArenaUI.time_left(int(c.get("deadline_at", 0)))
-		if tl != "" and type != "one_game":
-			sub_text += "   ·   " + tl
-	sub.text = sub_text
-	sub.add_theme_font_size_override("font_size", 14)
-	sub.add_theme_color_override("font_color", ArenaUI.MUTED)
-	sub.position = Vector2(18, 40)
-	sub.size = Vector2(420, 22)
-	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(sub)
-
-	# Status pill on the right. "YOUR TURN" overrides when the player still owes a
-	# one_game play.
-	var pill_txt := ArenaUI.status_text(status)
-	var pill_acc := ArenaUI.status_accent(status)
-	if status == "active" and type == "one_game" and not bool(c.get("my_done", false)):
-		pill_txt = "YOUR TURN"
-		pill_acc = Color(1.0, 0.72, 0.25)
-	var pill := ArenaUI.status_pill(pill_txt, pill_acc, 118, 30)
-	# Pin to the right-center of the row regardless of the row's dynamic width.
-	pill.anchor_left = 1.0
-	pill.anchor_right = 1.0
-	pill.anchor_top = 0.5
-	pill.anchor_bottom = 0.5
-	pill.offset_left = -16.0 - 118.0
-	pill.offset_right = -16.0
-	pill.offset_top = -15.0
-	pill.offset_bottom = 15.0
-	row.add_child(pill)
-	return row
+	_card_title.text = ArenaUI.clamp_title(String(c.get("title", "Contest")))
+	# Bottom-left stat line: registered · duration · difficulty.
+	_card_info.text = "%d registered   |   %s   |   %s" % [
+		count, ContestManager.type_label(type), ContestManager.diff_label(diff)]
+	_card_host.visible = bool(c.get("is_creator", false))
 
 # ---------------- create / join ----------------
 
@@ -299,7 +414,7 @@ func _do_join() -> void:
 func _build_overlay() -> void:
 	_overlay = Panel.new()
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.02, 0.02, 0.06, 0.72)
+	s.bg_color = Color(0.03, 0.02, 0.01, 0.72)
 	_overlay.add_theme_stylebox_override("panel", s)
 	_overlay.visible = false
 	add_child(_overlay)
@@ -332,22 +447,15 @@ func _show_toast(msg: String) -> void:
 	tw.tween_property(_toast, "modulate:a", 0.0, 0.6)
 
 func _build_join_modal() -> void:
-	_join_modal = Panel.new()
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.05, 0.05, 0.14, 0.98)
-	s.set_corner_radius_all(20)
-	s.border_color = Color(0.5, 0.6, 1.0, 0.7)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(0.3, 0.4, 1.0, 0.4)
-	s.shadow_size = 20
-	_join_modal.add_theme_stylebox_override("panel", s)
+	_join_modal = ArenaUI.stone_panel(ArenaUI.SAND)
+	_join_modal.mouse_filter = Control.MOUSE_FILTER_STOP
 	_join_modal.visible = false
 	add_child(_join_modal)
 
 	var title := Label.new()
 	title.text = "Join a Contest"
 	title.add_theme_font_size_override("font_size", 26)
-	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_color", ArenaUI.TEXT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.position = Vector2(0, 22)
 	title.size = Vector2(400, 34)

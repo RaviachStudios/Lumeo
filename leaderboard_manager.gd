@@ -60,6 +60,25 @@ func _ready() -> void:
 func reset_session() -> void:
 	pass
 
+# Erases every row this account has across all six boards (global/daily x
+# easy/moderate/hard), for the account-deletion flow. Rows are keyed by uid,
+# so this is a direct delete per collection — no query needed.
+func delete_all_my_rows() -> void:
+	var my_uid := _uid()
+	if my_uid.is_empty():
+		return
+	if _is_editor:
+		for diff in DIFFS:
+			for table in [_sim_global, _sim_daily]:
+				var g: Dictionary = table.get(diff, {})
+				g.erase(my_uid)
+				table[diff] = g
+		return
+	for diff in DIFFS:
+		for coll in ["global_" + diff, "daily_" + diff]:
+			Firebase.firestore.delete_document(coll, my_uid)
+			await Firebase.firestore.delete_task_completed
+
 # A rename only touches existing leaderboard rows — we MUST NOT create empty
 # rows for a user just because they picked a name. So for each (collection,
 # uid) we read first and only write if the row already exists. We propagate to

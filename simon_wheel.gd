@@ -105,8 +105,9 @@ var _num_glow: Label                 # the soft outer-glow layer (recoloured by 
 var _num_holder: Control             # holds the numeral layers (scaled for the shop preview)
 var _dot: Panel                      # status light below the numeral
 
-# Equipped Simon customization (set via apply_skin). Each is a Color tint or
-# null = keep the stock graphite/white look:
+# Equipped Simon customization (set via apply_skin). Each is a Color tint, a
+# pattern/motif Dictionary {"pattern": int, "a": Color, "b": Color} (shop styles,
+# rendered via _STYLE_SHADER), or null = keep the stock graphite/white look:
 #   _outer_tint -> the metallic rim/frame rings around the buttons
 #   _inner_tint -> the centre hub disc
 #   _num_pack   -> the level numeral's font package (Dictionary) or null = stock
@@ -467,8 +468,9 @@ func _rebuild() -> void:
 		var hub := _disc_no_mat(HUB_R, HUB_H)
 		# Hub wears the INNER tint (the "CENTER HUB" shop slot); _ring_material is
 		# routed through _outer() and would otherwise tint the hub with the rim
-		# colour, so equipping a centre-hub colour produced no visible change.
-		hub.material_override = _metal_mat(_inner(Color(0.11, 0.11, 0.14)), 0.5, 0.3)
+		# colour, so equipping a centre-hub colour produced no visible change. A
+		# motif style (Dictionary) instead paints a little drawing across the disc.
+		hub.material_override = _hub_material(Color(0.11, 0.11, 0.14))
 		hub.position.y = 0.06
 		_wheel_root.add_child(hub)
 
@@ -664,7 +666,38 @@ func _burn_color(col: Color) -> Color:
 func _ring_material(stock: Color, metal: float, rough: float, heat: float) -> Material:
 	if _skin_id == "inferno":
 		return _coal_material(heat)
+	# A patterned outer-ring style (Dictionary) paints the rim via the shared style
+	# shader; `shade` carries this ring's graphite value so grooves stay darker than
+	# the raised rim and the machined depth survives under the pattern.
+	if _outer_tint is Dictionary:
+		var d: Dictionary = _outer_tint
+		var shade := clampf(stock.v * 2.2 + 0.35, 0.5, 1.0)
+		return _style_material(int(d["pattern"]), d["a"], d["b"], shade, 1.0)
 	return _metal_mat(_outer(stock), metal, rough)
+
+# Hub material: a motif style (Dictionary) draws across the disc via the style
+# shader (normalised to the hub radius); otherwise the stock/flat-tinted metal.
+func _hub_material(stock: Color) -> Material:
+	if _inner_tint is Dictionary:
+		var d: Dictionary = _inner_tint
+		return _style_material(int(d["pattern"]), d["a"], d["b"], 1.0, HUB_R)
+	return _metal_mat(_inner(stock), 0.5, 0.3)
+
+# Shared style shader (rim patterns + hub motifs), compiled once like _coal_shader.
+var _style_shader: Shader
+
+func _style_material(pat: int, a: Color, b: Color, shade: float, unit: float) -> ShaderMaterial:
+	if _style_shader == null:
+		_style_shader = Shader.new()
+		_style_shader.code = _STYLE_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = _style_shader
+	m.set_shader_parameter("pat", pat)
+	m.set_shader_parameter("col_a", Vector3(a.r, a.g, a.b))
+	m.set_shader_parameter("col_b", Vector3(b.r, b.g, b.b))
+	m.set_shader_parameter("shade", shade)
+	m.set_shader_parameter("unit", unit)
+	return m
 
 # Shared 3D shader compiled lazily — every ring/hub material for inferno points
 # at the same Shader resource, so the GPU only compiles it once.
@@ -937,6 +970,132 @@ void fragment() {
 	METALLIC = 0.0;
 	ROUGHNESS = 0.88;
 	SPECULAR = 0.05;
+}
+"
+
+# Shared style shader for the shop "SIMON" patterns/motifs. Object-space VERTEX
+# (like the coal shader) keeps a pattern continuous across the wheel's separate
+# ring meshes. `pat` selects the look: 1-10 are angular/radial RIM patterns, 20-29
+# are centred HUB motifs (SDF-ish masks). Same int table as CoinsManager +
+# SimonPartIcon. col_a/col_b are the two inks; `shade` darkens rim grooves; `unit`
+# normalises hub coords to the hub radius.
+const _STYLE_SHADER := "
+shader_type spatial;
+render_mode cull_disabled;
+
+uniform int pat = 0;
+uniform vec3 col_a = vec3(0.6);
+uniform vec3 col_b = vec3(1.0);
+uniform float shade = 1.0;
+uniform float unit = 1.0;
+varying vec3 v_pos;
+
+vec3 hsv2rgb(vec3 c) {
+	vec4 K = vec4(1.0, 0.6666667, 0.3333333, 3.0);
+	vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+	return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+void vertex() { v_pos = VERTEX; }
+
+void fragment() {
+	vec2 q = vec2(v_pos.x, v_pos.z);
+	float ang = atan(q.y, q.x);
+	float rad = length(q);
+	float u = ang / TAU + 0.5;
+	vec3 a = col_a;
+	vec3 b = col_b;
+	vec3 col = a;
+	float emis = 0.12;
+
+	if (pat < 20) {
+		// ---- outer rim patterns ----
+		if (pat == 1) {
+			col = mix(a, b, step(0.5, fract(u * 12.0)));
+		} else if (pat == 2) {
+			col = hsv2rgb(vec3(fract(u), 0.85, 1.0));
+		} else if (pat == 3) {
+			vec2 f = fract(q * 13.0) - 0.5;
+			col = mix(a, b, 1.0 - smoothstep(0.26, 0.33, length(f)));
+		} else if (pat == 4) {
+			col = mix(a, b, step(0.5, fract((q.x + q.y) * 7.0)));
+		} else if (pat == 5) {
+			vec2 g = floor(q * 9.0);
+			col = mix(a, b, mod(g.x + g.y, 2.0));
+		} else if (pat == 6) {
+			float w = fract(u * 13.0 + 0.08 * sin(rad * 40.0));
+			col = mix(a, b, step(0.62, abs(w - 0.5) * 2.0));
+		} else if (pat == 7) {
+			vec2 g = q * 11.0;
+			vec2 id = floor(g);
+			vec2 f = fract(g) - 0.5;
+			f += 0.22 * vec2(sin(id.x * 3.1 + id.y * 1.7), cos(id.y * 2.3 + id.x * 1.1));
+			col = mix(a, b, 1.0 - smoothstep(0.22, 0.30, length(f)));
+		} else if (pat == 8) {
+			col = mix(a, b, 0.5 + 0.5 * sin(ang * 2.0));
+		} else if (pat == 9) {
+			vec2 g = q * 10.0;
+			vec2 id = floor(g);
+			vec2 f = fract(g) - 0.5;
+			float st = (1.0 - smoothstep(0.04, 0.12, length(f))) * step(0.72, rnd(id));
+			col = mix(a, b, st);
+			emis = 0.25;
+		} else if (pat == 10) {
+			col = mix(a, b, 0.5 + 0.5 * sin(rad * 26.0));
+		}
+		col *= mix(0.7, 1.15, shade);
+	} else {
+		// ---- inner hub motifs ----
+		vec2 p = q / unit;
+		float r = length(p);
+		if (pat == 20) {
+			float x = p.x * 1.1;
+			float y = -p.y * 1.1;
+			float h = x * x + y * y - 1.0;
+			float d = h * h * h - x * x * y * y * y;
+			col = mix(a, b, 1.0 - smoothstep(-0.06, 0.06, d));
+		} else if (pat == 21) {
+			float rs = mix(0.30, 0.64, pow(max(0.0, cos(5.0 * ang)), 0.5));
+			col = mix(a, b, 1.0 - smoothstep(rs - 0.05, rs + 0.05, r));
+		} else if (pat == 22) {
+			float rp = 0.34 + 0.24 * abs(cos(3.0 * ang));
+			col = mix(a, b, 1.0 - smoothstep(rp - 0.05, rp + 0.05, r));
+			col = mix(col, vec3(1.0, 0.84, 0.28), 1.0 - smoothstep(0.14, 0.18, r));
+		} else if (pat == 23) {
+			float eyes = 1.0 - smoothstep(0.10, 0.14, min(length(p - vec2(-0.34, 0.28)), length(p - vec2(0.34, 0.28))));
+			float smile = (1.0 - smoothstep(0.05, 0.09, abs(length(p - vec2(0.0, -0.02)) - 0.48))) * step(p.y, 0.02);
+			col = mix(a, b, max(eyes, smile));
+		} else if (pat == 24) {
+			vec2 f = fract(p * 2.4) - 0.5;
+			col = mix(a, b, 1.0 - smoothstep(0.22, 0.30, length(f)));
+		} else if (pat == 25) {
+			float pad = 1.0 - smoothstep(0.34, 0.40, length((p - vec2(0.0, -0.18)) / vec2(1.05, 0.9)));
+			float toes = 0.0;
+			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(-0.42, 0.30))));
+			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(-0.15, 0.50))));
+			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(0.15, 0.50))));
+			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(0.42, 0.30))));
+			col = mix(a, b, max(pad, toes));
+		} else if (pat == 26) {
+			col = mix(a, b, step(0.5, fract(r * 3.2)));
+		} else if (pat == 27) {
+			col = mix(a, b, step(0.5, 0.5 + 0.5 * sin(ang + r * 11.0)));
+		} else if (pat == 28) {
+			col = hsv2rgb(vec3(clamp(r, 0.0, 1.0), 0.8, 1.0));
+		} else if (pat == 29) {
+			float rs = 0.10 + 0.58 * pow(max(0.0, cos(2.0 * ang)), 3.0);
+			col = mix(a, b, 1.0 - smoothstep(rs - 0.04, rs + 0.04, r));
+			emis = 0.28;
+		}
+	}
+
+	ALBEDO = col;
+	EMISSION = col * emis;
+	METALLIC = 0.2;
+	ROUGHNESS = 0.5;
+	SPECULAR = 0.4;
 }
 "
 

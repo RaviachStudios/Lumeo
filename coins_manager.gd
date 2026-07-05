@@ -92,6 +92,41 @@ const SIMON_COLORS := {
 	"gold":     {"name": "Gold",     "price": 350, "color": Color(0.95, 0.78, 0.26)},
 }
 
+# Patterned OUTER-RING styles (no flat colour — the rim wears a repeating pattern).
+# `pattern` is a small int shared verbatim by SimonWheel's _STYLE_SHADER (3D wheel)
+# and SimonPartIcon (2D shop swatch); `color`/`color2` are the two pattern inks.
+# Rim pattern codes: 1 zebra · 2 rainbow · 3 dots · 4 candy · 5 checker ·
+#                    6 tiger · 7 leopard · 8 gradient · 9 stars · 10 wave
+const SIMON_OUTER_PATTERNS := {
+	"zebra":    {"name": "Zebra",       "price": 180, "pattern": 1,  "color": Color(0.08, 0.08, 0.10), "color2": Color(0.96, 0.96, 0.98)},
+	"prism":    {"name": "Rainbow",     "price": 300, "pattern": 2,  "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
+	"pinkdots": {"name": "Pink Dots",   "price": 150, "pattern": 3,  "color": Color(0.96, 0.45, 0.72), "color2": Color(1.0, 1.0, 1.0)},
+	"candy":    {"name": "Candy Cane",  "price": 200, "pattern": 4,  "color": Color(0.90, 0.16, 0.22), "color2": Color(1.0, 0.98, 0.98)},
+	"checker":  {"name": "Checker",     "price": 160, "pattern": 5,  "color": Color(0.10, 0.11, 0.16), "color2": Color(0.96, 0.96, 0.98)},
+	"tiger":    {"name": "Tiger",       "price": 220, "pattern": 6,  "color": Color(0.98, 0.55, 0.10), "color2": Color(0.08, 0.06, 0.05)},
+	"leopard":  {"name": "Leopard",     "price": 250, "pattern": 7,  "color": Color(0.87, 0.66, 0.34), "color2": Color(0.32, 0.18, 0.07)},
+	"sunset":   {"name": "Sunset",      "price": 240, "pattern": 8,  "color": Color(1.0, 0.48, 0.32),  "color2": Color(0.95, 0.30, 0.66)},
+	"starry":   {"name": "Starry Night","price": 300, "pattern": 9,  "color": Color(0.09, 0.12, 0.34), "color2": Color(1.0, 0.95, 0.72)},
+	"ocean":    {"name": "Ocean Wave",  "price": 260, "pattern": 10, "color": Color(0.10, 0.52, 0.80), "color2": Color(0.58, 0.90, 0.96)},
+}
+
+# Drawn CENTER-HUB styles — a motif rendered on the hub disc. Same `pattern`/
+# `color`/`color2` contract as SIMON_OUTER_PATTERNS, with codes in the 20s.
+# Hub motif codes: 20 heart · 21 star · 22 flower · 23 smiley · 24 dots ·
+#                  25 paw · 26 target · 27 swirl · 28 rainbow · 29 sparkle
+const SIMON_INNER_MOTIFS := {
+	"heart":    {"name": "Sweetheart",  "price": 200, "pattern": 20, "color": Color(0.98, 0.52, 0.70), "color2": Color(1.0, 1.0, 1.0)},
+	"star":     {"name": "Gold Star",   "price": 180, "pattern": 21, "color": Color(0.20, 0.24, 0.46), "color2": Color(1.0, 0.84, 0.30)},
+	"daisy":    {"name": "Daisy",       "price": 250, "pattern": 22, "color": Color(0.74, 0.64, 0.96), "color2": Color(1.0, 1.0, 1.0)},
+	"smiley":   {"name": "Smiley",      "price": 200, "pattern": 23, "color": Color(1.0, 0.82, 0.24),  "color2": Color(0.14, 0.10, 0.04)},
+	"bubbles":  {"name": "Bubbles",     "price": 150, "pattern": 24, "color": Color(0.56, 0.40, 0.92), "color2": Color(1.0, 1.0, 1.0)},
+	"paw":      {"name": "Paw Print",   "price": 200, "pattern": 25, "color": Color(0.98, 0.70, 0.80), "color2": Color(0.55, 0.28, 0.36)},
+	"target":   {"name": "Bullseye",    "price": 160, "pattern": 26, "color": Color(0.90, 0.24, 0.28), "color2": Color(1.0, 1.0, 1.0)},
+	"swirl":    {"name": "Swirl",       "price": 220, "pattern": 27, "color": Color(0.16, 0.78, 0.74), "color2": Color(1.0, 1.0, 1.0)},
+	"rainbow":  {"name": "Rainbow",     "price": 300, "pattern": 28, "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
+	"sparkle":  {"name": "Sparkle",     "price": 260, "pattern": 29, "color": Color(0.15, 0.10, 0.30), "color2": Color(1.0, 0.95, 0.72)},
+}
+
 # Complete pre-made wheel skins, each a single bundled look (rings, hub, numeral,
 # plus any procedural overlay like flames). Equipping one switches simon_mode to
 # SKIN and overrides the manual per-part colours; equipping a per-part colour
@@ -131,12 +166,64 @@ const SIMON_NUMBER_FONTS := {
 	"script":  {"name": "Script",  "price": 180, "font": "res://fonts/orange_juice.ttf",
 		"color": Color(1.0, 0.96, 0.86), "glow": Color(0.90, 0.75, 0.50, 0.45), "glow_size": 9,
 		"outline": Color(0.12, 0.07, 0.03, 1.0), "outline_size": 4},
+	# Softer, girlier looks — the rounded handwritten face (orange_juice) in candy
+	# tones, plus a couple of bright playful colourways on the stock face.
+	"bubblegum": {"name": "Bubblegum", "price": 160, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.62, 0.82), "glow": Color(1.0, 0.45, 0.72, 0.7), "glow_size": 14,
+		"outline": Color(0.55, 0.12, 0.30, 1.0), "outline_size": 5},
+	"candy":   {"name": "Candy",   "price": 200, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.90, 0.98), "glow": Color(0.85, 0.35, 0.95, 0.7), "glow_size": 14,
+		"outline": Color(0.45, 0.10, 0.55, 1.0), "outline_size": 5},
+	"lavender": {"name": "Lavender", "price": 140, "font": "",
+		"color": Color(0.80, 0.70, 1.0), "glow": Color(0.60, 0.45, 1.0, 0.65), "glow_size": 13,
+		"outline": Color(0.20, 0.12, 0.40, 1.0), "outline_size": 4},
+	"mint":    {"name": "Mint",    "price": 140, "font": "",
+		"color": Color(0.65, 1.0, 0.85), "glow": Color(0.30, 0.95, 0.75, 0.65), "glow_size": 13,
+		"outline": Color(0.04, 0.28, 0.22, 1.0), "outline_size": 4},
+	"sky":     {"name": "Sky",     "price": 120, "font": "",
+		"color": Color(0.62, 0.86, 1.0), "glow": Color(0.35, 0.70, 1.0, 0.65), "glow_size": 13,
+		"outline": Color(0.05, 0.16, 0.38, 1.0), "outline_size": 4},
 }
 
-# The catalog backing a category: the font packages for "level_number", flat
-# colours for the ring/hub parts.
+# The catalog backing a category: font packages for "level_number", and per-part
+# style sets for the ring/hub — each is the shared flat colours PLUS that part's
+# own patterns (outer) or motifs (inner). Built once, lazily (see _build_style_catalogs).
+var _outer_catalog: Dictionary = {}
+var _inner_catalog: Dictionary = {}
+
 func simon_catalog(category: String) -> Dictionary:
-	return SIMON_NUMBER_FONTS if category == "level_number" else SIMON_COLORS
+	if category == "level_number":
+		return SIMON_NUMBER_FONTS
+	if _outer_catalog.is_empty():
+		_build_style_catalogs()
+	return _inner_catalog if category == "inner_circle" else _outer_catalog
+
+# Merge the shared flat colours with each part's extra styles. Order matters for
+# the shop grid: flat colours first (cheapest, familiar), then the fancy styles.
+func _build_style_catalogs() -> void:
+	_outer_catalog = SIMON_COLORS.duplicate(true)
+	for k in SIMON_OUTER_PATTERNS:
+		_outer_catalog[k] = SIMON_OUTER_PATTERNS[k]
+	_inner_catalog = SIMON_COLORS.duplicate(true)
+	for k in SIMON_INNER_MOTIFS:
+		_inner_catalog[k] = SIMON_INNER_MOTIFS[k]
+
+# The look a ring/hub part wears for a catalog id, resolved for both the 3D wheel
+# (SimonWheel.apply_skin) and the 2D shop swatch (SimonPartIcon):
+#   null       -> stock graphite (the "default" id)
+#   Color      -> a flat tint (legacy colour styles)
+#   Dictionary -> a pattern/motif: {"pattern": int, "a": Color, "b": Color}
+func simon_part_style(category: String, id: String) -> Variant:
+	if id == SIMON_DEFAULT_COLOR:
+		return null
+	var meta: Dictionary = simon_catalog(category).get(id, {})
+	if meta.has("pattern"):
+		return {
+			"pattern": int(meta["pattern"]),
+			"a": meta.get("color", Color.GRAY),
+			"b": meta.get("color2", Color.WHITE),
+		}
+	return meta.get("color", Color.GRAY)
 
 # The free/stock default id for a category (font "classic" vs colour "default").
 func simon_default_id(category: String) -> String:
@@ -235,6 +322,11 @@ var purchase_history: Dictionary = {}     # sku -> { iso_timestamp: true }. Stor
 # the durable source of truth — PurchaseManager re-acknowledges with Play on
 # every fresh install, but it's CoinsManager that the rest of the app reads.
 var has_remove_ads: bool = false
+# Whether this account has already seen the first-run home-screen tour. The
+# server-side half of the "seen" flag (the local half lives in user://prefs.cfg,
+# owned by the home screen) so a signed-in player who saw the tour on one device
+# won't be shown it again on another.
+var tutorial_seen: bool = false
 
 # --- in-game session ---
 var session_earned: int = 0              # cleared in start_game_session()
@@ -406,6 +498,33 @@ func set_remove_ads_owned(sku: String = "") -> void:
 		fields["purchase_history"] = purchase_history
 	remove_ads_changed.emit()
 	_save_partial(fields)
+
+# Record that this account has seen the first-run home tour. Idempotent; a no-op
+# for guests (their "seen" flag is the local file, not the wallet doc).
+func mark_tutorial_seen() -> void:
+	if not FirebaseManager.is_signed_in():
+		return
+	if tutorial_seen:
+		return
+	tutorial_seen = true
+	_save_partial({"tutorial_seen": true})
+
+# Permanently erases the wallet doc (coins, streak, owned cosmetics, purchase
+# history, remove-ads flag) for the account-deletion flow. Note this does NOT
+# revoke the non-consumable "remove ads" Play purchase itself — Play still
+# owns that record, so PurchaseManager's startup query silently re-grants it
+# on the next sign-in. Consumable coin purchases have no such replay: once
+# this doc is gone, any coins bought with real money are gone for good, same
+# as any other in-game currency tied to a deleted save.
+func delete_wallet_doc() -> void:
+	var doc_uid := FirebaseManager.uid
+	if doc_uid.is_empty():
+		return
+	if _is_editor:
+		_sim_db.erase(doc_uid)
+		return
+	Firebase.firestore.delete_document(_COLL, doc_uid)
+	await Firebase.firestore.delete_task_completed
 
 # --- theme API ---
 
@@ -672,6 +791,7 @@ func _on_signed_out() -> void:
 	earned_coins = 0
 	purchase_history = {}
 	has_remove_ads = false
+	tutorial_seen = false
 	session_earned = 0
 	_loaded_for_uid = ""
 	balance_changed.emit(balance)
@@ -785,6 +905,7 @@ func _apply_doc(doc: Dictionary) -> void:
 					copy[String(ts)] = true
 				purchase_history[String(sku)] = copy
 	has_remove_ads = bool(doc.get("has_remove_ads", false))
+	tutorial_seen = bool(doc.get("tutorial_seen", false))
 	# If FirebaseManager already knows a newer name (e.g. user just picked it
 	# and the doc on the server hasn't caught up), push the local pick back
 	# up so /users stays the canonical mirror.

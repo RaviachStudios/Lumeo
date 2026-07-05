@@ -2480,182 +2480,735 @@ void fragment() {
 "
 
 # ---------------------------------------------------------------------------
-# SKIN BACKGROUNDS — bespoke animated scenes that belong to a complete wheel
-# SKIN (not a purchasable theme). When a skin is equipped on the gameplay
-# screen and the player hasn't equipped a separate paid theme, the skin paints
-# its own world here. Keyed by the skin id in CoinsManager.SIMON_SKINS.
+# SKIN BACKGROUND — "inferno" (the Volcano skin: the lava wheel is unchanged and
+# lives in simon_wheel.gd). Its old volcanic-plain BACKGROUND is replaced here by
+# a NIGHT-CASTLE world. A wide open night sky (NO mountains): a cratered moon high
+# on the right (breathing halo + thin clouds drifting across its face), a scatter
+# of stars, and — receding into the distance — two rolling home-hill bands (a far
+# hamlet and an even-further, hazier one) plus a tall stone castle on the LEFT with
+# a warmly-lit, barred tower window holding an imprisoned princess and a great
+# roaring blaze engulfing its doorway. Every so often an impressive fire-dragon
+# glides in past the castle — wings flapping, sometimes breathing fire — then leaves.
+# Separately, a lone knight occasionally marches in on foot from the right, stops
+# a respectful distance from the tower to size it up, then loses his nerve and
+# marches back out the way he came.
 #
-# VOLCANO ("inferno"): a high-end, level-reactive volcanic plain, in the same
-# baked-plate + light-dyn style as the other animated themes. FOUR 3D-looking
-# volcanoes sit one in each corner (seen from front-above so each summit reads as
-# an elliptical caldera), rising from a clean dark-grey volcanic plain. The wheel
-# covers the centre, so the corners carry the detail.
-#
-# It reacts to gameplay: every level completion makes all four volcanoes ERUPT
-# (crater flare + molten fountain + ash/spark plume). Eruption strength escalates
-# with the level (mid / heavy / big) — see theme_props.gd's on_level_complete.
-# The eruptions are driven by a per-volcano `erupt` vec4 uniform pushed each frame
-# by the props node (like the kitty's eye uniforms), NOT a free-running shader
-# cycle, so the scene is calm between levels and bursts to life on success.
-#
-# Split for perf: the whole frozen scene (plain + the four volcano bodies with
-# their baked crater lava-pool glow) bakes into the static plate; the dyn
-# only samples that plate, flickers the already-baked hot pixels (cheap, no fbm),
-# and draws the four eruptions (each box-guarded to its corner). Embers + ash are
-# CPUParticles2D. So no full-screen fbm/SDF runs per frame.
+# Same baked-plate + light-dyn split as every other animated theme: the whole
+# frozen scene (sky, stars, home hills, castle, moon disc) bakes into the static
+# plate and costs nothing per frame; the dyn samples that plate and only draws
+# the cheap animated overlay — the moon's halo/wisps, the window candle flicker,
+# and the box-guarded dragon + knight. Both are gated to their own short active
+# window and skipped entirely (no SDF work at all) the rest of the time, so this
+# adds no steady per-frame cost. So NO full-screen fbm/SDF runs per frame.
 # ---------------------------------------------------------------------------
-# Shared toolbox for all three volcano shaders (plate / dyn / preview).
-const _VOLCANO_FUNCS := "
-float vridge(vec2 p) { return abs(fbm(p) - 0.5) * 2.0; }
-
-// One 3D-looking volcano, unit space q = (a - center)/s, seen from front-above so
-// the summit reads as an elliptical caldera. Lit from the upper-left. Frozen (no
-// TIME) so it bakes into the plate; the hot lava pool is left deliberately bright
-// red/orange so the dyn pass can flicker it for free.
-vec4 volcanoBody(vec2 q, float seed) {
+# Shared toolbox for all three night-castle shaders (plate / dyn / preview).
+const _NIGHT_FUNCS := "
+// ---- Moon: softly-shaded cratered disc, seen face-on. Frozen (bakes into the
+// plate); the dyn adds a breathing halo + drifting cloud wisps. q = (a - c)/s. ----
+vec4 moonBody(vec2 q) {
 	vec4 acc = vec4(0.0);
-	float topY = -0.70, botY = 1.08;
-	float ty = clamp((q.y - topY) / (botY - topY), 0.0, 1.0);        // 0 summit .. 1 base
-	float lean = (hash11(seed * 1.3) - 0.5) * 0.12;                  // gentle asymmetry
-	float axis = q.x - lean * (1.0 - ty);                            // offset from the ridge line
-	float hw = mix(0.26, 1.0, pow(ty, 0.80));                        // concave-up flanks
-	float rough = 0.05 * fbm(vec2(q.y * 3.2 + seed, seed)) - 0.025;  // eroded edge
-	float edge = abs(axis) - (hw + rough);
-	float cone = max(edge, max(topY - q.y, q.y - botY));
-	float ca = aafill(cone);
-	float nx = clamp(axis / max(hw, 0.001), -1.0, 1.0);             // approx surface normal.x
-	// rock shading — light from the upper-left, shaped by the (cone) normal
-	float lit = clamp(0.52 - 0.60 * nx + (1.0 - ty) * 0.10, 0.0, 1.0);
-	vec3 body = mix(vec3(0.075, 0.068, 0.085), vec3(0.37, 0.35, 0.39), lit);
-	body *= 0.80 + 0.34 * fbm(q * 7.0 + seed) + 0.13 * fbm(q * 17.0 - seed * 2.0);   // 2-octave rock
-	float gully = 0.5 + 0.5 * sin(nx * 9.0 + seed * 3.0 + fbm(q * 5.0) * 2.0);       // radial strata / gullies
-	body *= 0.88 + 0.18 * gully * smoothstep(0.0, 0.35, ty);
-	body *= mix(1.06, 0.58, smoothstep(0.10, 1.0, ty));                              // ambient occlusion to the base
-	body += vec3(0.5, 0.22, 0.06) * smoothstep(0.42, 0.0, ty) * (0.35 + 0.25 * lit); // crater light on the upper cone
-	acc = _ov(acc, body, ca);
-	acc = _ov(acc, vec3(0.85, 0.78, 0.72), aaline(edge, 0.012) * step(axis, 0.0) * ca * 0.55);  // rim light (lit edge)
-	acc = _ov(acc, vec3(0.03, 0.025, 0.035), aaline(edge, 0.010) * step(0.0, axis) * ca * 0.5); // core shadow (dark edge)
-	// summit caldera, seen from front-above: rocky rim band, shaded bowl, lava pool
-	vec2 cc = vec2(lean * 0.4, topY);
-	float rimOut = ellip(q, cc, vec2(0.40, 0.15), 0.0);
-	float rimIn  = ellip(q, cc + vec2(0.0, 0.012), vec2(0.30, 0.105), 0.0);
-	float rimBand = aafill(rimOut) * (1.0 - aafill(rimIn));
-	acc = _ov(acc, mix(vec3(0.13, 0.12, 0.14), vec3(0.46, 0.42, 0.44), smoothstep(0.10, -0.16, q.y - topY)), rimBand);
-	float bowl = aafill(rimIn);
-	acc = _ov(acc, mix(vec3(0.02, 0.015, 0.02), vec3(0.11, 0.06, 0.05), smoothstep(-0.10, 0.10, q.y - topY)), bowl);
-	vec2 pc = cc + vec2(0.0, 0.03);
-	float poolA = aafill(ellip(q, pc, vec2(0.22, 0.07), 0.0)) * bowl;
-	float hotc = smoothstep(0.9, 0.0, length((q - pc) / vec2(0.22, 0.07)));          // bright molten centre
-	acc = _ov(acc, mix(vec3(0.95, 0.28, 0.04), vec3(1.0, 0.92, 0.55), hotc), poolA);
-	acc = _ov(acc, vec3(1.0, 0.55, 0.15), aaline(rimIn, 0.010) * bowl * step(topY, q.y) * 0.55);  // glowing near lip
+	float d = length(q) - 1.0;
+	float a0 = aafill(d);
+	float lit = clamp(0.60 - 0.42 * q.x - 0.30 * q.y, 0.0, 1.0);          // lit toward upper-left
+	vec3 base = mix(vec3(0.60, 0.62, 0.72), vec3(0.93, 0.95, 1.0), lit);
+	base *= 0.93 + 0.12 * fbm(q * 3.0 + 5.0);
+	acc = _ov(acc, base, a0);
+	acc = _ov(acc, vec3(0.50, 0.53, 0.64), aafill(ellip(q, vec2(-0.24, -0.08), vec2(0.34, 0.26), 0.5)) * a0 * 0.55);   // maria
+	acc = _ov(acc, vec3(0.48, 0.51, 0.62), aafill(ellip(q, vec2(0.26, 0.24), vec2(0.24, 0.19), -0.3)) * a0 * 0.5);
+	acc = _ov(acc, vec3(0.52, 0.55, 0.66), aafill(ellip(q, vec2(0.06, -0.34), vec2(0.15, 0.13), 0.0)) * a0 * 0.5);
+	for (int i = 0; i < 5; i++) { float fi = float(i);
+		vec2 cp = vec2(0.52 * sin(fi * 2.3) - 0.08, 0.5 * cos(fi * 1.7) + 0.06);
+		acc = _ov(acc, vec3(0.44, 0.47, 0.58), aaline(length(q - cp) - (0.08 + 0.05 * hash11(fi * 1.9)), 0.012) * a0 * 0.5);
+	}
+	acc = _ov(acc, vec3(1.0), aaline(d, 0.02) * smoothstep(0.4, -0.7, q.x + q.y) * a0 * 0.55);   // bright limb
 	return acc;
 }
-vec3 placeVolcano(vec3 col, vec2 a, vec2 c, float s, float seed) {
-	vec2 q = (a - c) / s;
-	if (q.x < -1.4 || q.x > 1.4 || q.y < -1.3 || q.y > 1.3) return col;
-	col = mix(col, col * 0.5, aafill(ellip(a, c + vec2(0.0, s * 1.0), vec2(s * 1.05, s * 0.14), 0.0)) * 0.55);   // contact shadow
-	col += vec3(1.0, 0.45, 0.13) * smoothstep(0.55, 0.0, length((q - vec2(0.0, -0.70)) / vec2(0.9, 0.7))) * 0.10;  // resting summit glow
-	vec4 v = volcanoBody(q, seed);
-	float win = win1(q.x, -1.34, 1.34, 0.12) * win1(q.y, -1.24, 1.24, 0.12);
-	return mix(col, v.rgb, v.a * win);
+// ---- A stone castle block: moonlit from the right, subtle mortar courses, a rim
+// light on the lit (right) edge + a shadow on the left. Returns rgba for _ov. ----
+vec4 stoneBox(vec2 a, vec2 c, vec2 h) {
+	float d = sdBox(a - c, h);
+	float m = aafill(d);
+	float sx = clamp((a.x - (c.x - h.x)) / (2.0 * h.x), 0.0, 1.0);        // 0 left .. 1 right (moon side)
+	vec3 col = mix(vec3(0.07, 0.07, 0.11), vec3(0.21, 0.22, 0.30), 0.15 + 0.85 * sx);
+	col *= 0.9 + 0.1 * fbm(a * 26.0);                                     // stone grain
+	col *= 1.0 - 0.16 * aaline(fract(a.y * 44.0) - 0.5, 0.06);            // mortar courses
+	vec4 acc = vec4(col, m);
+	acc.rgb = mix(acc.rgb, vec3(0.44, 0.47, 0.60), aaline(d, 0.007) * step(c.x, a.x) * 0.55);
+	acc.rgb = mix(acc.rgb, vec3(0.02, 0.02, 0.04), aaline(d, 0.006) * step(a.x, c.x) * 0.4);
+	return acc;
 }
-// The full FROZEN scene: hazy horizon, a clean dark-grey volcanic plain, and the
-// four (smaller) corner volcanoes. No ground lava. Shared by the plate + preview.
-vec3 volcanoScene(vec2 a, vec2 uv) {
-	vec3 col = mix(vec3(0.15, 0.08, 0.075), vec3(0.135, 0.125, 0.145), smoothstep(0.0, 0.20, uv.y));  // hazy horizon -> grey plain
-	col = mix(col, vec3(0.045, 0.042, 0.052), smoothstep(0.20, 1.0, uv.y));                            // near ground darker
-	col += vec3(0.28, 0.10, 0.03) * smoothstep(0.26, 0.0, abs(uv.y - 0.16)) * 0.15;                    // faint distant haze (not lava)
-	float grd = smoothstep(0.14, 0.28, uv.y);
-	col *= 1.0 - 0.14 * grd * fbm(vec2(a.x * 7.0, uv.y * 7.0));                                        // rocky mottle
-	col += vec3(0.04) * grd * vridge(vec2(a.x * 11.0, uv.y * 11.0)) * 0.35;                            // subtle grey facets
-	col = placeVolcano(col, a, vec2(0.12 * aspect, 0.26), 0.12, 3.0);                                  // top-left (distant)
-	col = placeVolcano(col, a, vec2(0.88 * aspect, 0.24), 0.12, 8.0);                                  // top-right (distant)
-	col = placeVolcano(col, a, vec2(0.13 * aspect, 0.80), 0.17, 15.0);                                 // bottom-left (near)
-	col = placeVolcano(col, a, vec2(0.87 * aspect, 0.78), 0.17, 22.0);                                 // bottom-right (near)
+// ---- Crenellated top: a row of merlons sitting on y = topY, centred at cx. ----
+vec3 battlements(vec3 col, vec2 a, float cx, float halfW, float topY, int n, float mw) {
+	for (int i = 0; i < 10; i++) {
+		if (i >= n) break;
+		float fx = cx - halfW + (float(i) + 0.5) * (2.0 * halfW / float(n));
+		vec4 b = stoneBox(a, vec2(fx, topY - mw * 0.9), vec2(mw * 0.42, mw * 0.9));
+		col = mix(col, b.rgb, b.a);
+	}
 	return col;
 }
-// One eruption over a crater apex, driven by activity e (0 dormant .. ~3 big).
-// Fully derivative-free (smoothstep/length only) so it is seam-safe over its box
-// guard. Crater glow always shows a little; fountain + plume grow with e.
-vec3 eruptAt(vec3 col, vec2 a, vec2 apex, float s, float e, float t, float seed) {
-	float dx = a.x - apex.x;
-	float up = apex.y - a.y;                                    // > 0 above the crater
-	float maxH = s * (0.55 + 1.7 * e);
-	if (up < -0.06 * s || up > maxH + 0.16 || abs(dx) > s * (0.95 + 0.55 * e)) return col;
-	float cg = smoothstep(0.13 * s, 0.0, length(vec2(dx, up * 1.5)));                 // crater glow
-	col += vec3(1.0, 0.52, 0.18) * cg * (0.28 + 1.2 * e) * (0.85 + 0.15 * sin(t * 6.0 + seed));
-	if (up <= 0.0 || e < 0.03) return col;
-	// molten fountain — a noisy glowing column thrown up from the crater
-	float fw = s * (0.11 + 0.05 * e);
-	float fn = gnoise(vec2(dx * 34.0 / s, up * 22.0 / s - t * 5.0));
-	float fmask = smoothstep(fw * (0.5 + 0.6 * fn), 0.0, abs(dx)) * smoothstep(maxH * 0.72, 0.0, up);
-	col = mix(col, mix(vec3(1.0, 0.55, 0.12), vec3(1.0, 0.95, 0.60), smoothstep(0.0, maxH * 0.45, up)), clamp(fmask * (0.4 + 0.9 * e), 0.0, 1.0));
-	// ash + spark plume, rising and drifting overhead
-	float drift = 0.06 * s * sin(up * 8.0 / s + t * 0.7 + seed) + dx * 0.22;
-	float pw = s * (0.24 + 0.20 * e);
-	float pn = gnoise(vec2(dx * 6.0 / s - t * 0.2, up * 5.0 / s - t * 0.6));
-	float pmask = smoothstep(pw, 0.0, abs(dx - drift)) * smoothstep(0.0, 0.06, up) * smoothstep(maxH + 0.13, 0.0, up);
-	col = mix(col, mix(vec3(0.09, 0.06, 0.07), vec3(0.28, 0.12, 0.07), smoothstep(0.2, 0.9, pn)), pmask * clamp(0.35 + 0.7 * e, 0.0, 1.0) * smoothstep(0.15, 0.85, pn) * 0.85);
-	col += vec3(1.0, 0.50, 0.12) * pmask * e * smoothstep(0.76, 0.98, pn) * 1.5;      // glowing lava bombs / sparks
+// ---- The imprisoned-princess window: a warm glowing arched opening, a small
+// dark princess silhouette and vertical prison bars. wc centre, wh half-size.
+// (Steady glow bakes into the plate; the dyn adds a candle flicker over it.) ----
+vec3 princessWindow(vec3 col, vec2 a, vec2 wc, vec2 wh) {
+	float open = min(sdBox(a - wc, vec2(wh.x, wh.y)), length(a - (wc - vec2(0.0, wh.y))) - wh.x);
+	float oa = aafill(open);
+	float g = smoothstep(1.15, 0.0, length((a - wc + vec2(0.0, wh.y * 0.2)) / vec2(wh.x, wh.y)));
+	col = mix(col, mix(vec3(0.85, 0.40, 0.14), vec3(1.0, 0.86, 0.52), g), oa);   // warm interior
+	vec2 pp = (a - wc) / wh.y;                                                   // window-local units
+	float gown = wedge(vec2(-(pp.y - 0.95), pp.x), 1.6, 0.55);                   // dress: base low, apex up
+	float head = length(pp - vec2(0.0, -0.30)) - 0.26;
+	float hair = length(pp - vec2(0.0, -0.34)) - 0.34;
+	col = mix(col, vec3(0.06, 0.03, 0.05), aafill(hair - 0.02) * oa * 0.55);     // hair halo
+	col = mix(col, vec3(0.05, 0.02, 0.04), aafill(min(gown, head)) * oa);        // silhouette
+	for (int i = 0; i < 3; i++) {
+		float bx = wc.x + (float(i) - 1.0) * wh.x * 0.62;
+		col = mix(col, vec3(0.03, 0.03, 0.04), aaline(a.x - bx, 0.0055) * oa);   // vertical bars
+	}
+	col = mix(col, vec3(0.02, 0.02, 0.03), aaline(a.y - (wc.y - wh.y * 0.15), 0.0045) * oa);   // cross bar
+	col = mix(col, vec3(0.26, 0.26, 0.32), aaline(open, 0.008));                 // carved frame
+	return col;
+}
+// ---- A plain unlit window elsewhere on the castle. ----
+vec3 darkWindow(vec3 col, vec2 a, vec2 wc, vec2 wh) {
+	float open = min(sdBox(a - wc, vec2(wh.x, wh.y)), length(a - (wc - vec2(0.0, wh.y))) - wh.x);
+	col = mix(col, vec3(0.015, 0.015, 0.03), aafill(open));
+	col = mix(col, vec3(0.20, 0.21, 0.27), aaline(open, 0.006));
+	return col;
+}
+// ---- The whole castle, rooted on the left. Drawn in a-space (x already *aspect). ----
+vec3 castle(vec3 col, vec2 a, vec2 uv) {
+	float cx = 0.135 * aspect;
+	col = mix(col, col * 0.5, aafill(ellip(a, vec2(cx, 0.985), vec2(0.30, 0.05), 0.0)) * 0.7);   // ground shadow
+	// lower part / battered foundations, drawn first so the towers rise out of them
+	float ltx0 = cx - 0.135;
+	vec4 baseK = stoneBox(a, vec2(cx, 0.95), vec2(0.125, 0.06));                         // keep footing
+	col = mix(col, baseK.rgb, baseK.a);
+	vec4 baseT = stoneBox(a, vec2(ltx0, 0.94), vec2(0.076, 0.08));                       // princess-tower footing (wider base)
+	col = mix(col, baseT.rgb, baseT.a);
+	float tdoor = min(sdBox(a - vec2(ltx0, 0.965), vec2(0.017, 0.03)), length(a - vec2(ltx0, 0.935)) - 0.017);
+	col = mix(col, vec3(0.02, 0.015, 0.03), aafill(tdoor));                              // arched door at the foot
+	col = mix(col, vec3(0.22, 0.16, 0.12), aaline(tdoor, 0.005));
+	// main keep
+	vec4 keep = stoneBox(a, vec2(cx, 0.75), vec2(0.10, 0.24));
+	col = mix(col, keep.rgb, keep.a);
+	col = battlements(col, a, cx, 0.10, 0.51, 5, 0.036);
+	float gate = min(sdBox(a - vec2(cx, 0.94), vec2(0.035, 0.055)), length(a - vec2(cx, 0.885)) - 0.035);
+	col = mix(col, vec3(0.02, 0.015, 0.03), aafill(gate));
+	col = mix(col, vec3(0.22, 0.18, 0.14), aaline(gate, 0.006));
+	col = darkWindow(col, a, vec2(cx - 0.045, 0.66), vec2(0.016, 0.026));
+	col = darkWindow(col, a, vec2(cx + 0.045, 0.66), vec2(0.016, 0.026));
+	// left (princess) tower — tallest, conical roof
+	float ltx = cx - 0.135;
+	vec4 lt = stoneBox(a, vec2(ltx, 0.66), vec2(0.058, 0.33));
+	col = mix(col, lt.rgb, lt.a);
+	float roof = wedge(vec2(0.33 - a.y, a.x - ltx), 0.10, 0.082);
+	col = mix(col, vec3(0.20, 0.09, 0.15), aafill(roof));
+	col = mix(col, vec3(0.42, 0.20, 0.28), aaline(roof, 0.006) * step(ltx, a.x));
+	col = princessWindow(col, a, vec2(ltx, 0.50), vec2(0.030, 0.050));
+	// right tower — mid height, conical roof, flag
+	float rtx = cx + 0.125;
+	vec4 rt = stoneBox(a, vec2(rtx, 0.70), vec2(0.05, 0.28));
+	col = mix(col, rt.rgb, rt.a);
+	float roof2 = wedge(vec2(0.42 - a.y, a.x - rtx), 0.085, 0.07);
+	col = mix(col, vec3(0.20, 0.09, 0.15), aafill(roof2));
+	col = mix(col, vec3(0.42, 0.20, 0.28), aaline(roof2, 0.006) * step(rtx, a.x));
+	col = mix(col, vec3(0.30, 0.30, 0.34), aaline(a.x - rtx, 0.003) * step(0.30, a.y) * step(a.y, 0.42));   // flag pole
+	col = mix(col, vec3(0.62, 0.16, 0.20), aafill(wedge(vec2(a.x - rtx, a.y - 0.32), 0.05, 0.028)));        // pennant
+	col = darkWindow(col, a, vec2(rtx, 0.64), vec2(0.014, 0.022));
+	return col;
+}
+// ---- Segment + general-triangle SDFs, used to build the dragon's wing membrane,
+// finger bones, veins, sail and fins (IQ's triangle SDF). ----
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a, ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+float sdTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+	vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+	vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
+	vec2 pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+	vec2 pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+	vec2 pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+	float s = sign(e0.x * e2.y - e0.y * e2.x);
+	vec2 d = min(min(vec2(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+	                 vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+	                 vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+	return -sqrt(d.x) * sign(d.y);
+}
+// ---- One membranous wing. ws = sweep angle (more negative = raised); far>0.5
+// darkens it and skips the fine detail (used for the far wing behind the body). ----
+vec4 drawWing(vec4 acc, vec2 p, float ws, float far, float t) {
+	vec2 sh = vec2(0.12, -0.16);
+	vec2 elbow = sh + vec2(cos(ws + 0.10), sin(ws + 0.10)) * 0.44;
+	vec2 wrist = elbow + vec2(cos(ws - 0.20), sin(ws - 0.20)) * 0.42;
+	vec2 hip = vec2(-0.42, -0.02);
+	vec2 f0 = wrist + vec2(cos(ws + 0.30), sin(ws + 0.30)) * 0.98;
+	vec2 f1 = wrist + vec2(cos(ws - 0.12), sin(ws - 0.12)) * 1.16;
+	vec2 f2 = wrist + vec2(cos(ws - 0.55), sin(ws - 0.55)) * 1.06;
+	vec2 f3 = wrist + vec2(cos(ws - 1.02), sin(ws - 1.02)) * 0.86;
+	// membrane = union of triangles fanning from the wrist + inner panels to the body
+	float m = sdTriangle(p, wrist, f0, f1);
+	m = min(m, sdTriangle(p, wrist, f1, f2));
+	m = min(m, sdTriangle(p, wrist, f2, f3));
+	m = min(m, sdTriangle(p, sh, wrist, f0));
+	m = min(m, sdTriangle(p, sh, wrist, hip));
+	m = min(m, sdTriangle(p, wrist, f3, hip));
+	// scallop the trailing edges (carve concave scoops between the finger tips)
+	vec2 c0 = mix(f0, f1, 0.5); m = max(m, -(length(p - (c0 + normalize(c0 - wrist) * 0.14)) - 0.24));
+	vec2 c1 = mix(f1, f2, 0.5); m = max(m, -(length(p - (c1 + normalize(c1 - wrist) * 0.16)) - 0.26));
+	vec2 c2 = mix(f2, f3, 0.5); m = max(m, -(length(p - (c2 + normalize(c2 - wrist) * 0.14)) - 0.24));
+	float wa = aafill(m);
+	// panels are thin/backlit away from the bones, thick/dark along them
+	float boneD = min(min(sdSeg(p, wrist, f0), sdSeg(p, wrist, f1)), min(sdSeg(p, wrist, f2), sdSeg(p, wrist, f3)));
+	boneD = min(boneD, min(sdSeg(p, sh, wrist), sdSeg(p, wrist, hip)));
+	float thin = smoothstep(0.02, 0.18, boneD);
+	vec3 mem = mix(vec3(0.16, 0.05, 0.07), vec3(0.80, 0.30, 0.14), thin * (0.6 + 0.2 * sin(t)));
+	mem *= 0.78 + 0.22 * smoothstep(-1.0, 1.0, p.x - wrist.x);
+	mem = mix(mem, mem * vec3(0.34, 0.30, 0.42), far * 0.72);
+	acc = _ov(acc, mem, wa);
+	if (far < 0.5) {
+		acc = _ov(acc, vec3(0.14, 0.05, 0.07), smoothstep(0.012, 0.0, boneD) * wa * 0.6);                                  // veins
+		vec3 bone = vec3(0.22, 0.11, 0.11);
+		acc = _ov(acc, bone, smoothstep(0.024, 0.0, sdSeg(p, sh, elbow)));
+		acc = _ov(acc, bone, smoothstep(0.021, 0.0, sdSeg(p, elbow, wrist)));
+		acc = _ov(acc, bone, smoothstep(0.017, 0.0, boneD));
+		acc = _ov(acc, vec3(0.92, 0.87, 0.76), aafill(sdCircle(p - f0, 0.030)));                                          // claws
+		acc = _ov(acc, vec3(0.92, 0.87, 0.76), aafill(sdCircle(p - f1, 0.030)));
+		acc = _ov(acc, vec3(0.90, 0.85, 0.74), aafill(sdCircle(p - f2, 0.028)));
+		acc = _ov(acc, vec3(0.88, 0.83, 0.72), aafill(sdCircle(p - f3, 0.026)));
+		acc = _ov(acc, vec3(0.95, 0.42, 0.16), aaline(m, 0.008) * wa * 0.5);                                              // bright trailing rim
+	}
+	return acc;
+}
+// ---- The impressive FIRE-DRAGON, side profile, facing +x. flap in [-1,1] beats
+// the wings; fire>0 breathes a layered plume; t drives shimmer/flicker. p=(a-pos)/s. ----
+vec4 dragonBody(vec2 p, float flap, float fire, float t) {
+	vec4 acc = vec4(0.0);
+	float ws = -0.60 - 0.95 * flap;                        // wing sweep: up on the up-beat
+	// far wing (behind the body)
+	acc = drawWing(acc, p - vec2(0.05, 0.06), ws * 0.72 - 0.22, 1.0, t);
+	// tail: tapering chain of scaled segments, undulating with a travelling wave
+	for (int i = 0; i < 7; i++) { float fi = float(i); float tt = fi / 6.0;
+		float wv = sin(t * 3.5 - tt * 5.0);
+		vec2 tp = vec2(-0.50 - tt * 1.25 + 0.03 * tt * wv, 0.02 + tt * 0.12 + 0.13 * tt * tt * wv);
+		float tw = 0.17 * (1.0 - tt) + 0.02;
+		acc = _ov(acc, mix(vec3(0.30, 0.10, 0.10), vec3(0.13, 0.05, 0.07), tt), aafill(sdCircle(p - tp, tw)));
+	}
+	// tail fin (twin-lobe arrowhead) swaying at the tip
+	{
+		float wv = sin(t * 3.5 - 5.0);
+		vec2 te = vec2(-1.75 + 0.03 * wv, 0.14 + 0.13 * wv);
+		mat2 R = rot(0.4 * wv);
+		float fin = sdTriangle(p, te + R * vec2(0.26, -0.02), te + R * vec2(-0.18, -0.22), te + R * vec2(-0.04, 0.0));
+		fin = min(fin, sdTriangle(p, te + R * vec2(0.26, -0.02), te + R * vec2(-0.18, 0.22), te + R * vec2(-0.04, 0.0)));
+		acc = _ov(acc, vec3(0.50, 0.16, 0.11), aafill(fin));
+		acc = _ov(acc, vec3(0.72, 0.24, 0.14), aaline(fin, 0.007) * 0.5);
+		acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(sdCircle(p - te, 0.05)));
+	}
+	// hind leg (behind the body) + talons
+	{
+		float lw = sin(t * 2.4 + 1.2);
+		vec2 knee = vec2(-0.20 + 0.03 * lw, 0.34); vec2 foot = vec2(-0.06 + 0.07 * lw, 0.52 + 0.03 * lw);
+		acc = _ov(acc, vec3(0.30, 0.11, 0.10), aafill(ellip(p, vec2(-0.26, 0.16), vec2(0.21, 0.17), 0.4)));   // thigh
+		acc = _ov(acc, vec3(0.17, 0.06, 0.08), smoothstep(0.075, 0.04, sdSeg(p, knee, foot)));                // shin
+		for (int i = 0; i < 3; i++) { float fi = float(i);
+			acc = _ov(acc, vec3(0.90, 0.85, 0.75), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.02 + fi * 0.05)), 0.08, 0.017)));
+		}
+	}
+	// body: scaled hide with a cool moonlit back, warm underbelly + glowing lava cracks
+	{
+		float bd = ellip(p, vec2(0.0, 0.02), vec2(0.66, 0.36), -0.08);
+		float ba = aafill(bd);
+		float ly = clamp((p.y + 0.34) / 0.72, 0.0, 1.0);
+		vec3 bc = mix(vec3(0.20, 0.10, 0.12), vec3(0.42, 0.12, 0.10), smoothstep(0.0, 0.5, ly));
+		bc = mix(bc, vec3(0.62, 0.22, 0.11), smoothstep(0.55, 1.0, ly));
+		vec2 g = p * vec2(11.0, 15.0);
+		g.x += 0.5 * floor(mod(g.y, 2.0));
+		float scl = length((fract(g) - 0.5) * vec2(1.0, 1.25));
+		bc *= 0.86 + 0.24 * smoothstep(0.5, 0.15, scl);                                       // domed scale highlight
+		bc = mix(bc, bc * 0.62, smoothstep(0.42, 0.5, scl));                                  // scale groove
+		float crack = smoothstep(0.44, 0.5, scl) * smoothstep(0.55, 0.78, fbm(p * 3.0 + 3.0));
+		bc += vec3(1.0, 0.42, 0.10) * crack * (0.35 + 0.65 * ly);                             // molten cracks
+		bc *= 0.8 + 0.2 * smoothstep(-0.7, 0.7, p.x);                                         // AO to the rear
+		acc = _ov(acc, bc, ba);
+		acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(bd, 0.016) * smoothstep(0.3, -0.6, p.y) * ba * 0.6);   // moonlit rim
+		acc = _ov(acc, vec3(0.95, 0.42, 0.14), aaline(bd, 0.020) * smoothstep(-0.1, 0.6, p.y) * ba * 0.5);   // warm under-rim
+	}
+	// spinal sail: graduated spikes with a warm translucent membrane between them
+	for (int i = 0; i < 8; i++) { float fi = float(i); float u = fi / 7.0;
+		vec2 b1 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), u); b1.y -= 0.12 * sin(u * 3.14159);
+		float h1 = 0.30 * sin(u * 3.14159) + 0.05;
+		acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(wedge(vec2(-(p.y - b1.y), p.x - b1.x), h1, 0.042)));
+		if (i < 7) {
+			float un = (fi + 1.0) / 7.0;
+			vec2 b2 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), un); b2.y -= 0.12 * sin(un * 3.14159);
+			float h2 = 0.30 * sin(un * 3.14159) + 0.05;
+			float sail = sdTriangle(p, b1, b1 + vec2(0.0, -h1), b2);
+			sail = min(sail, sdTriangle(p, b1 + vec2(0.0, -h1), b2 + vec2(0.0, -h2), b2));
+			acc = _ov(acc, vec3(0.48, 0.15, 0.10), aafill(sail) * 0.72);
+		}
+	}
+	// foreleg (in front of the body) + talons
+	{
+		float lw = sin(t * 2.4 - 1.4);
+		vec2 knee = vec2(0.34 + 0.025 * lw, 0.34); vec2 foot = vec2(0.44 + 0.06 * lw, 0.50 + 0.03 * lw);
+		acc = _ov(acc, vec3(0.32, 0.11, 0.10), aafill(ellip(p, vec2(0.30, 0.18), vec2(0.15, 0.15), 0.2)));    // upper leg
+		acc = _ov(acc, vec3(0.19, 0.07, 0.09), smoothstep(0.07, 0.038, sdSeg(p, knee, foot)));                // shin
+		for (int i = 0; i < 3; i++) { float fi = float(i);
+			acc = _ov(acc, vec3(0.92, 0.87, 0.76), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.01 + fi * 0.05)), 0.075, 0.016)));
+		}
+	}
+	// neck: overlapping scaled segments arching up to the head, with a moonlit rim
+	for (int i = 0; i < 5; i++) { float fi = float(i); float nt = fi / 4.0;
+		vec2 np = mix(vec2(0.44, -0.04), vec2(0.96, -0.44), nt) + vec2(0.0, -0.07 * sin(nt * 3.14159));
+		float nr = 0.22 - 0.08 * nt;
+		float nd = sdCircle(p - np, nr);
+		float na = aafill(nd);
+		float lyn = clamp((p.y - (np.y - nr)) / (2.0 * nr), 0.0, 1.0);
+		vec3 ncol = mix(vec3(0.18, 0.08, 0.10), vec3(0.50, 0.16, 0.10), smoothstep(0.0, 0.6, lyn));
+		ncol = mix(ncol, vec3(0.62, 0.22, 0.11), smoothstep(0.6, 1.0, lyn));
+		acc = _ov(acc, ncol, na);
+		acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(nd, 0.012) * smoothstep(0.2, -0.5, p.y - np.y) * na * 0.5);
+	}
+	// head: skull, snout, jaw, teeth, glowing slit eye, horns, cheek spikes, ear frill
+	{
+		vec2 hp = vec2(1.02, -0.46);
+		acc = _ov(acc, vec3(0.42, 0.14, 0.12), aafill(sdTriangle(p, hp + vec2(-0.10, -0.06), hp + vec2(-0.36, -0.14), hp + vec2(-0.18, 0.16))) * 0.85);   // ear frill
+		float jaw = wedge(vec2(p.x - hp.x + 0.02, p.y - (hp.y + 0.13)), 0.36, 0.075);
+		acc = _ov(acc, vec3(0.28, 0.10, 0.09), aafill(jaw));
+		acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(-(p.y - (hp.y + 0.15)), p.x - (hp.x + 0.12)), 0.05, 0.014)));   // lower fang
+		float skull = ellip(p, hp, vec2(0.22, 0.19), -0.15);
+		float ska = aafill(skull);
+		float lyh = clamp((p.y - (hp.y - 0.19)) / 0.38, 0.0, 1.0);
+		acc = _ov(acc, mix(vec3(0.22, 0.10, 0.11), vec3(0.46, 0.15, 0.10), smoothstep(0.0, 0.7, lyh)), ska);
+		vec2 sq = p - hp; sq.y -= 0.10 * (sq.x / 0.4) * (sq.x / 0.4);
+		float snout = wedge(vec2(sq.x + 0.05, sq.y + 0.02), 0.44, 0.115);
+		acc = _ov(acc, mix(vec3(0.44, 0.15, 0.10), vec3(0.24, 0.09, 0.09), smoothstep(-0.05, 0.16, sq.y)), aafill(snout));
+		acc = _ov(acc, vec3(0.05, 0.02, 0.03), aafill(ellip(p, hp + vec2(0.37, -0.05), vec2(0.020, 0.030), 0.4)));   // nostril
+		for (int i = 0; i < 4; i++) { float fi = float(i);
+			acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(p.y - (hp.y + 0.06), p.x - (hp.x + 0.06 + fi * 0.09)), 0.05 - 0.006 * fi, 0.013)));   // upper teeth
+		}
+		acc = _ov(acc, vec3(0.16, 0.06, 0.08), aafill(ellip(p, hp + vec2(-0.02, -0.10), vec2(0.16, 0.06), -0.25)));   // brow ridge
+		vec2 ep = hp + vec2(0.03, -0.02);
+		acc.rgb += vec3(1.0, 0.55, 0.10) * smoothstep(0.14, 0.0, length(p - ep)) * 0.55;                              // eye glow
+		acc = _ov(acc, vec3(1.0, 0.74, 0.16), aafill(ellip(p, ep, vec2(0.066, 0.040), -0.2)));                        // iris
+		acc = _ov(acc, vec3(0.06, 0.02, 0.0), aafill(ellip(p, ep, vec2(0.013, 0.036), -0.2)));                        // slit pupil
+		acc = _ov(acc, vec3(1.0, 1.0, 0.9), aafill(sdCircle(p - (ep + vec2(-0.02, -0.012)), 0.008)));                 // catchlight
+		for (int i = 0; i < 5; i++) { float fi = float(i); float u = fi / 4.0;                                        // main horn
+			vec2 hc = hp + vec2(-0.04, -0.14) + vec2(-0.32, -0.14) * u + vec2(0.0, 0.20 * u * u);
+			float hr = 0.078 * (1.0 - 0.75 * u);
+			acc = _ov(acc, mix(vec3(0.86, 0.80, 0.70), vec3(0.48, 0.42, 0.42), u), aafill(sdCircle(p - hc, hr)));
+		}
+		for (int i = 0; i < 4; i++) { float fi = float(i); float u = fi / 3.0;                                        // secondary horn
+			vec2 hc = hp + vec2(0.04, -0.15) + vec2(-0.20, -0.11) * u;
+			acc = _ov(acc, mix(vec3(0.80, 0.75, 0.66), vec3(0.44, 0.40, 0.40), u), aafill(sdCircle(p - hc, 0.046 * (1.0 - 0.7 * u))));
+		}
+		acc = _ov(acc, vec3(0.80, 0.74, 0.66), aafill(wedge(vec2(-(p.x - (hp.x - 0.12)), p.y - (hp.y + 0.11)), 0.13, 0.028)));   // cheek spike
+	}
+	// layered fire breath (drawn before the near wing, so the wing overlaps it)
+	if (fire > 0.01) {
+		vec2 mo = vec2(1.42, -0.34);
+		acc.rgb += vec3(1.0, 0.8, 0.3) * smoothstep(0.13, 0.0, length(p - mo)) * fire;                                // hot root
+		for (int i = 0; i < 5; i++) { float fi = float(i); float u = fi / 4.0;
+			vec2 fp = mo + vec2(0.14 + u * 0.95, 0.05 * sin(u * 6.0 + t * 8.0));
+			float fr = (0.06 + 0.15 * u) * fire * (0.7 + 0.3 * sin(t * 20.0 + fi));
+			acc = _ov(acc, mix(vec3(1.0, 0.95, 0.6), vec3(1.0, 0.28, 0.05), u), smoothstep(fr, fr * 0.3, length(p - fp)) * fire);
+		}
+		for (int i = 0; i < 6; i++) { float fi = float(i); float u = fract(t * 1.5 + fi * 0.37);
+			vec2 spk = mo + vec2(0.2 + u * 1.15, (hash11(fi + 1.0) - 0.5) * 0.5 * u);
+			acc.rgb += vec3(1.0, 0.7, 0.2) * smoothstep(0.018, 0.0, length(p - spk)) * fire * (1.0 - u);
+		}
+	}
+	// near wing (in front)
+	acc = drawWing(acc, p, ws, 0.0, t);
+	return acc;
+}
+vec3 placeDragon(vec3 col, vec2 a, vec2 pos, float s, float flap, float fire, float t, float face) {
+	vec2 dp = (a - pos) / s;
+	dp.x *= face;                                   // mirror to face left when face = -1
+	if (dp.x < -2.3 || dp.x > 2.7 || dp.y < -1.9 || dp.y > 1.5) return col;
+	vec4 d = dragonBody(dp, flap, fire, t);
+	float win = win1(dp.x, -2.25, 2.65, 0.25) * win1(dp.y, -1.85, 1.45, 0.25);
+	col = mix(col, d.rgb, d.a * win);
+	if (fire > 0.01) col += vec3(1.0, 0.5, 0.14) * smoothstep(1.1, 0.0, length(dp - vec2(2.05, -0.34))) * 0.6 * fire * win;
+	return col;
+}
+// ---- A lone wandering KNIGHT, side profile, authored facing +x (mirrored via
+// `face` in placeKnight so he faces whichever way he's currently walking). Legs
+// scissor with a walking gait while `stride`>0, arms counter-swinging with them;
+// gauntleted hands grip a shield and a drawn sword, and a cape trails behind.
+// When `idle`>0 (standing sizing up the tower before losing his nerve) he plants
+// still, sways his weight, and shakes his head 'no'. p = (a-pos)/s, feet planted
+// at p.y = 0. Cheap: a few dozen SDF primitives, no fbm/noise — and only ever
+// evaluated inside placeKnight's tight box during his short walk-in/pause/walk-out
+// window (see nightAnim), so he costs nothing the rest of the time. ----
+vec4 knightBody(vec2 p, float stride, float idle, float t) {
+	vec4 acc = vec4(0.0);
+	vec3 steel = vec3(0.34, 0.35, 0.40);
+	vec3 steelDk = vec3(0.15, 0.15, 0.19);
+	vec3 steelLt = vec3(0.62, 0.62, 0.68);
+	vec3 trim = vec3(0.62, 0.48, 0.16);
+	vec3 cape = vec3(0.44, 0.07, 0.07);
+	float shake = idle * 0.045 * sin(t * 6.0);                                // 'no' head-shake as he loses his nerve
+	p.x -= idle * 0.015 * sin(t * 1.6);                                       // idle weight-shift while he waits
+	float gait = stride * sin(t * 7.0);
+	float swing = 0.05 * gait;                                                // arms counter-swing with the stride
+	// legs: a thick line each, hip to foot, scissoring oppositely on the gait
+	vec2 hip = vec2(0.0, -0.34);
+	vec2 footA = hip + vec2(0.05 + 0.13 * gait, 0.34);
+	vec2 footB = hip + vec2(-0.05 - 0.13 * gait, 0.34);
+	acc = _ov(acc, steelDk, smoothstep(0.050, 0.020, sdSeg(p, hip, footB)));   // back leg
+	acc = _ov(acc, steel, smoothstep(0.055, 0.022, sdSeg(p, hip, footA)));     // front leg
+	acc = _ov(acc, vec3(0.08, 0.07, 0.08), aafill(ellip(p, footA, vec2(0.055, 0.024), 0.0)));   // sabatons
+	acc = _ov(acc, vec3(0.08, 0.07, 0.08), aafill(ellip(p, footB, vec2(0.055, 0.024), 0.0)));
+	p.y -= 0.020 * abs(gait);                                                 // a small bounce through the torso/head
+	// a trailing cape behind the torso, fluttering more while marching than while idle
+	float flut = 0.05 * sin(t * (3.0 + 3.0 * stride)) * (0.35 + 0.65 * max(stride, idle));
+	vec2 capeTop = vec2(-0.05, -0.76);
+	vec2 capeBot = vec2(-0.20 - flut, -0.06 + 0.10 * abs(gait));
+	float capeD = sdTriangle(p, capeTop + vec2(0.05, 0.0), capeTop + vec2(-0.03, 0.02), capeBot);
+	acc = _ov(acc, mix(cape, cape * 0.5, smoothstep(-0.90, -0.10, p.y)), aafill(capeD));
+	acc = _ov(acc, trim, aaline(capeD, 0.010) * 0.5);
+	// torso: a rounded breastplate with a trim belt and a heraldic emblem
+	float chest = ellip(p, vec2(0.0, -0.58), vec2(0.15, 0.24), 0.0);
+	float ca = aafill(chest);
+	acc = _ov(acc, mix(steelDk, steel, clamp(0.5 - 1.4 * p.x, 0.0, 1.0)), ca);
+	acc = _ov(acc, trim, aaline(p.y + 0.42, 0.014) * ca);                     // belt
+	acc = _ov(acc, steelLt, aaline(chest, 0.008) * ca * 0.5);                 // plate rim light
+	acc = _ov(acc, trim, aafill(sdCircle(p - vec2(0.0, -0.60), 0.030)) * ca);
+	acc = _ov(acc, steelDk, aafill(sdCircle(p - vec2(0.0, -0.60), 0.014)) * ca);
+	// shield arm: upper arm to the grip, the shield itself, and the gauntlet gripping it
+	vec2 shc = vec2(0.20 - swing * 0.3, -0.52 + swing);
+	vec2 shHand = shc + vec2(-0.06, 0.03);
+	acc = _ov(acc, steel, smoothstep(0.026, 0.010, sdSeg(p, vec2(0.14, -0.72), shHand)));
+	float sh = ellip(p, shc, vec2(0.11, 0.16), 0.0);
+	acc = _ov(acc, vec3(0.30, 0.09, 0.08), aafill(sh));
+	acc = _ov(acc, trim, aaline(sh, 0.010));
+	acc = _ov(acc, trim, aaline(length(p - shc) - 0.05, 0.008));              // boss ring
+	acc = _ov(acc, steelLt, aafill(sdCircle(p - shc - vec2(0.02, -0.02), 0.012)) * 0.8);   // boss glint
+	acc = _ov(acc, steel, aafill(sdCircle(p - shHand, 0.028 + idle * 0.003 * sin(t * 4.0))));   // gauntlet
+	// rear arm: upper arm to the sword grip at the hip, the gauntlet, and the drawn sword
+	vec2 grip = vec2(-0.12 + swing * 0.3, -0.46 - swing * 0.5);
+	acc = _ov(acc, steel, smoothstep(0.028, 0.010, sdSeg(p, vec2(-0.10, -0.72), grip)));
+	acc = _ov(acc, steel, aafill(sdCircle(p - grip, 0.026 + idle * 0.003 * sin(t * 4.0 + 1.7))));   // gauntlet
+	vec2 bladeDir = normalize(vec2(0.05, 1.0));
+	vec2 bladePerp = vec2(-bladeDir.y, bladeDir.x);
+	vec2 bq = p - grip;
+	vec2 bl = vec2(dot(bq, bladeDir), dot(bq, bladePerp));
+	float bladeFill = smoothstep(0.026, 0.008, wedge(bl, 0.48, 0.020));
+	acc = _ov(acc, steelLt, bladeFill);                                       // tapered blade, point down
+	acc = _ov(acc, steel, aaline(bl.y, 0.004) * bladeFill);                   // fuller
+	acc = _ov(acc, trim, smoothstep(0.020, 0.006, sdSeg(p, grip + bladePerp * 0.055, grip - bladePerp * 0.055)));   // crossguard
+	acc = _ov(acc, trim, aafill(sdCircle(p - (grip - bladeDir * 0.03), 0.020)));   // pommel
+	// shoulder pauldrons
+	acc = _ov(acc, steel, aafill(sdCircle(p - vec2(0.14, -0.78), 0.078)));
+	acc = _ov(acc, steelDk, aafill(sdCircle(p - vec2(-0.14, -0.78), 0.075)));
+	acc = _ov(acc, steelLt, aaline(sdCircle(p - vec2(0.14, -0.78), 0.078), 0.006) * 0.5);
+	// head: helmet dome, narrow visor slit, a proud double plume; shakes 'no' while idle
+	vec2 hd = vec2(0.02 + shake, -0.98);
+	acc = _ov(acc, vec3(0.46, 0.13, 0.09), aafill(wedge(vec2(-(p.y - (hd.y - 0.10)), p.x - (hd.x - 0.02)), 0.13, 0.028)));   // plume
+	acc = _ov(acc, vec3(0.58, 0.16, 0.11), aafill(wedge(vec2(-(p.y - (hd.y - 0.09)), p.x - (hd.x - 0.05)), 0.09, 0.020)));  // second feather
+	acc = _ov(acc, steel, aafill(sdCircle(p - hd, 0.115)));
+	acc = _ov(acc, steelDk, aaline(p.y - hd.y, 0.012) * aafill(sdCircle(p - hd, 0.10)));   // visor slit
+	acc = _ov(acc, steelLt, aaline(sdCircle(p - hd, 0.115), 0.008) * 0.6);  // rim light
+	return acc;
+}
+vec3 placeKnight(vec3 col, vec2 a, vec2 pos, float s, float stride, float idle, float t, float face) {
+	vec2 dp = (a - pos) / s;
+	dp.x *= face;
+	if (dp.x < -0.9 || dp.x > 0.9 || dp.y < -1.35 || dp.y > 0.20) return col;
+	col = mix(col, col * 0.5, aafill(ellip(a, pos, vec2(s * 0.30, s * 0.05), 0.0)) * 0.5);   // contact shadow
+	vec4 k = knightBody(dp, stride, idle, t);
+	float win = win1(dp.x, -0.85, 0.85, 0.15) * win1(dp.y, -1.30, 0.12, 0.08);
+	col = mix(col, k.rgb, k.a * win);
+	return col;
+}
+// ---- Two rolling home-hill silhouettes at different depths (no mountains now):
+// hillCrestFar = the more distant band (higher on screen, hazier); hillCrestNear =
+// the nearer hamlet the larger cottages cluster on. ----
+float hillCrestFar(float x) {
+	return 0.585 - 0.038 * sin(x * 2.3 + 1.1) - 0.024 * gnoise(vec2(x * 1.3, 5.0)) - 0.014 * sin(x * 5.7 + 0.6);
+}
+float hillCrestNear(float x) {
+	return 0.705 - 0.05 * sin(x * 2.7 + 0.7) - 0.035 * gnoise(vec2(x * 1.5, 2.0)) - 0.02 * sin(x * 6.3 + 2.0);
+}
+// Fill one hill silhouette (everything below its crest) with a vertical gradient,
+// then trace a moonlit crest rim. `top`=colour at the crest, `deep`=colour far below,
+// `glow`=strength of the moonlit rim (distant bands are lighter/hazier + dimmer rim). ----
+vec3 hillBand(vec3 col, vec2 a, vec2 uv, float crest, vec3 top, vec3 deep, float glow) {
+	float below = aafill(crest - uv.y);
+	vec3 hc = mix(top, deep, smoothstep(crest, crest + 0.30, uv.y));
+	hc *= 0.92 + 0.12 * fbm(a * 7.0);
+	col = mix(col, hc, below);
+	col = mix(col, vec3(0.34, 0.38, 0.54), aaline(uv.y - crest, 0.003) * glow * (0.20 + 0.55 * smoothstep(0.2, 1.4, uv.x)));   // moonlit crest
+	return col;
+}
+// ---- A little hillside cottage, foot planted at `foot`, size `sc`. `haze` fades it
+// toward the cool night haze so the further-away band reads as more distant. The
+// warm-lit window bakes into the plate; the campfire beside it is animated in nightAnim. ----
+vec3 home(vec3 col, vec2 a, vec2 foot, float sc, float haze) {
+	vec3 hz = vec3(0.13, 0.14, 0.23);                                                          // distant night-haze tint
+	float bw = 0.030 * sc, bh = 0.034 * sc, rh = 0.030 * sc;
+	vec2 bc = foot + vec2(0.0, -bh);
+	float wd = sdBox(a - bc, vec2(bw, bh));
+	col = mix(col, mix(vec3(0.13, 0.11, 0.12) * (0.9 + 0.1 * fbm(a * 40.0)), hz, haze), aafill(wd));           // wall
+	col = mix(col, mix(vec3(0.36, 0.40, 0.54), hz, haze), aaline(wd, 0.0022) * step(bc.x, a.x) * 0.6);         // moonlit right edge
+	col = mix(col, mix(vec3(0.02, 0.02, 0.03), hz, haze * 0.7), aaline(wd, 0.0018) * step(a.x, bc.x) * 0.5);   // shadowed left edge
+	vec2 apex = bc + vec2(0.0, -bh - rh);
+	float rf = sdTriangle(a, apex, bc + vec2(-bw * 1.28, -bh), bc + vec2(bw * 1.28, -bh));
+	col = mix(col, mix(vec3(0.08, 0.06, 0.08), hz, haze), aafill(rf));                                         // thatched roof
+	col = mix(col, mix(vec3(0.30, 0.33, 0.46), hz, haze), aaline(rf, 0.0022) * step(apex.x, a.x) * 0.5);       // roof rim
+	float win = sdBox(a - (bc + vec2(0.0, bh * 0.05)), vec2(bw * 0.30, bh * 0.40));
+	col += vec3(1.0, 0.60, 0.22) * smoothstep(bh * 2.4, 0.0, length((a - bc) / vec2(1.3, 1.0))) * 0.22 * (1.0 - 0.7 * haze);   // window glow bleed
+	col = mix(col, mix(vec3(1.0, 0.74, 0.34), vec3(0.62, 0.56, 0.52), haze), aafill(win) * (1.0 - 0.35 * haze));              // warm window
+	return col;
+}
+// ---- Foreground undergrowth: a dark bushy band with a cool moonlit crest and a
+// scatter of grass blades poking up. Frontmost plate layer (over the castle foot). ----
+vec3 undergrowth(vec3 col, vec2 a, vec2 uv) {
+	float bx = a.x;
+	float top = 0.905 - 0.028 * sin(bx * 8.0) - 0.03 * gnoise(vec2(bx * 5.0, 7.0)) - 0.018 * sin(bx * 21.0 + 1.0);
+	top -= 0.028 * smoothstep(0.55, 1.0, gnoise(vec2(bx * 3.0, 3.0)));
+	float below = aafill(top - uv.y);
+	vec3 gc = mix(vec3(0.035, 0.055, 0.045), vec3(0.008, 0.018, 0.02), smoothstep(top, 1.0, uv.y));
+	gc *= 0.9 + 0.14 * fbm(a * 18.0);
+	col = mix(col, gc, below);
+	col = mix(col, vec3(0.13, 0.20, 0.15), aaline(uv.y - top, 0.0026) * (0.25 + 0.5 * smoothstep(0.2, 1.4, uv.x)));   // moonlit crest
+	for (int i = 0; i < 30; i++) { float fi = float(i);
+		float gx = hash11(fi * 1.7) * aspect;
+		float gbase = 0.905 - 0.028 * sin(gx * 8.0);
+		float gh = 0.028 + 0.032 * hash11(fi * 2.3);
+		float lean = (hash11(fi * 3.1) - 0.5) * 0.5;
+		float bd = wedge(vec2(gbase - a.y, a.x - gx - lean * clamp(gbase - a.y, 0.0, gh)), gh, 0.0035);
+		col = mix(col, vec3(0.02, 0.045, 0.03), aafill(bd));
+	}
+	return col;
+}
+// ---- An animated campfire: a warm ground pool + flickering flame tongues, a hot
+// core and rising embers. base = foot of the fire, sz its scale, seed decorrelates
+// several fires. Added over the plate in nightAnim (next to homes / in the yard). ----
+vec3 campfire(vec3 col, vec2 a, vec2 base, float sz, float t, float seed) {
+	float fl = 0.62 + 0.38 * sin(t * 9.0 + seed * 5.0) * sin(t * 13.7 + seed);
+	col += vec3(1.0, 0.48, 0.15) * smoothstep(sz * 3.2, 0.0, length((a - base) / vec2(1.35, 1.0))) * (0.30 + 0.16 * fl);   // warm ground pool
+	float near = length(a - base);
+	if (near < sz * 3.0) {
+		float w = radWin(near, sz * 2.4, sz * 3.0);
+		for (int i = 0; i < 3; i++) { float fi = float(i);
+			float ph = t * 8.0 + seed * 3.0 + fi * 2.1;
+			float h = sz * (1.7 + 0.5 * sin(ph)) * (1.0 - 0.16 * fi);
+			float ww = sz * (0.52 - 0.12 * fi);
+			float sway = 0.16 * sz * sin(ph * 1.3);
+			vec2 fx = base + vec2(sway + (fi - 1.0) * sz * 0.26, 0.0);
+			float fd = wedge(vec2(fx.y - a.y, a.x - fx.x), h, ww);
+			vec3 fc = mix(vec3(1.0, 0.86, 0.38), vec3(1.0, 0.34, 0.07), fi / 2.0);
+			col = mix(col, fc, aafill(fd) * w * (0.9 - 0.12 * fi));
+		}
+		col += vec3(1.0, 0.82, 0.42) * smoothstep(sz * 0.7, 0.0, length(a - base - vec2(0.0, -sz * 0.4))) * fl * w;   // hot core
+		for (int i = 0; i < 4; i++) { float fi = float(i);
+			float u = fract(t * 0.7 + hash11(fi + seed) * 1.3);
+			vec2 ep = base + vec2((hash11(fi * 2.3 + seed) - 0.5) * sz * 1.3, -u * sz * 3.2);
+			col += vec3(1.0, 0.62, 0.22) * smoothstep(sz * 0.05, 0.0, length(a - ep)) * (1.0 - u) * 0.9 * w;   // rising embers
+		}
+	}
+	return col;
+}
+// ---- The tower's GREAT BLAZE — a wide, roaring fire that engulfs the whole tower
+// entrance. Deliberately distinct from the little house campfires: many more flame
+// tongues fanned across the full doorway width, much taller, a hot white-gold core
+// and a broad ember shower. base = centre of the tower-door foot; sz scales it all. ----
+vec3 towerFire(vec3 col, vec2 a, vec2 base, float sz, float t) {
+	float fl = 0.62 + 0.38 * sin(t * 8.0) * sin(t * 12.3 + 1.0);
+	col += vec3(1.0, 0.42, 0.13) * smoothstep(sz * 4.8, 0.0, length((a - base) / vec2(1.7, 1.0))) * (0.42 + 0.20 * fl);   // broad warm pool over the tower foot
+	float near = length((a - base) / vec2(1.5, 1.0));
+	if (near < sz * 4.4) {
+		float w = radWin(near, sz * 3.5, sz * 4.4);
+		// nine flame tongues fanned across the whole entrance, tallest in the middle
+		for (int i = 0; i < 9; i++) { float fi = float(i);
+			float sp = (fi - 4.0) / 4.0;                                                        // -1 .. 1 across the doorway
+			float ph = t * 7.0 + fi * 1.7 + hash11(fi * 3.1) * 4.0;
+			float tall = 1.0 - 0.5 * abs(sp);                                                   // centre tongues reach highest
+			float h = sz * (3.6 * tall + 0.7 * sin(ph));
+			float ww = sz * (0.62 - 0.14 * abs(sp));
+			float sway = sz * (0.30 * sin(ph * 1.2) + sp * 0.12);
+			vec2 fx = base + vec2(sp * sz * 2.2 + sway, 0.0);
+			float fd = wedge(vec2(fx.y - a.y, a.x - fx.x), h, ww);
+			float u = clamp((base.y - a.y) / max(h, 1e-4), 0.0, 1.0);                           // 0 root -> 1 tip
+			vec3 fc = mix(vec3(1.0, 0.90, 0.42), vec3(1.0, 0.28, 0.05), u);                     // gold root -> red tip
+			col = mix(col, fc, aafill(fd) * w);
+		}
+		col += vec3(1.0, 0.86, 0.5) * smoothstep(sz * 1.6, 0.0, length((a - base - vec2(0.0, -sz * 0.8)) / vec2(1.3, 1.0))) * (0.7 + 0.3 * fl) * w;   // hot white-gold core in the doorway
+		for (int i = 0; i < 10; i++) { float fi = float(i);
+			float u = fract(t * 0.6 + hash11(fi * 1.7) * 1.3);
+			vec2 ep = base + vec2((hash11(fi * 2.3) - 0.5) * sz * 4.0, -u * sz * 5.2);
+			col += vec3(1.0, 0.60, 0.20) * smoothstep(sz * 0.06, 0.0, length(a - ep)) * (1.0 - u) * 0.9 * w;   // broad ember shower
+		}
+	}
+	return col;
+}
+// ---- The full FROZEN night scene (sky, stars, two home-hill bands + cottages,
+// castle, ground, undergrowth, moon disc), shared by the plate + the preview. No TIME. ----
+vec3 nightScene(vec2 a, vec2 uv) {
+	vec3 col = mix(vec3(0.015, 0.02, 0.07), vec3(0.05, 0.06, 0.15), smoothstep(0.0, 0.6, uv.y));
+	col = mix(col, vec3(0.10, 0.09, 0.17), smoothstep(0.55, 0.78, uv.y));
+	col += vec3(0.10, 0.11, 0.16) * smoothstep(0.5, 0.0, distance(a, vec2(0.86 * aspect, 0.20))) * 0.5;   // moon sky-glow
+	for (int i = 0; i < 46; i++) { float fi = float(i);
+		vec2 sp = vec2(hash11(fi * 1.7) * aspect, 0.03 + 0.56 * hash11(fi * 2.9));
+		float br = 0.35 + 0.65 * hash11(fi * 3.7);
+		col += vec3(0.90, 0.93, 1.0) * br * aafill(distance(a, sp) - 0.0015);
+		col += vec3(0.65, 0.72, 0.95) * br * smoothstep(0.010, 0.0, distance(a, sp)) * 0.22;
+	}
+	{
+		vec2 mc = vec2(0.86 * aspect, 0.20);
+		vec2 mq = (a - mc) / 0.13;
+		if (abs(mq.x) < 1.3 && abs(mq.y) < 1.3) {
+			vec4 m = moonBody(mq);
+			float win = win1(mq.x, -1.25, 1.25, 0.1) * win1(mq.y, -1.25, 1.25, 0.1);
+			col = mix(col, m.rgb, m.a * win);
+		}
+	}
+	// No mountains — an open night sky. Depth is carried entirely by rolling
+	// home-hill bands: the furthest hamlet high + hazy, a nearer hamlet below it, and
+	// the tower on its own foreground ground in front. More sky than before.
+	// --- furthest band: homes even further away (highest, hazy blue, tiny cottages) ---
+	col = hillBand(col, a, uv, hillCrestFar(a.x), vec3(0.15, 0.16, 0.26), vec3(0.10, 0.11, 0.19), 0.30);
+	col = home(col, a, vec2(0.55, hillCrestFar(0.55)), 0.55, 0.70);
+	col = home(col, a, vec2(1.00, hillCrestFar(1.00)), 0.48, 0.74);
+	col = home(col, a, vec2(1.45, hillCrestFar(1.45)), 0.58, 0.68);
+	// --- far band: the nearer hamlet (lower, darker, larger cottages) ---
+	col = hillBand(col, a, uv, hillCrestNear(a.x), vec3(0.10, 0.11, 0.18), vec3(0.045, 0.05, 0.11), 0.55);
+	col = home(col, a, vec2(1.18, hillCrestNear(1.18)), 0.95, 0.14);
+	col = home(col, a, vec2(1.55, hillCrestNear(1.55)), 0.82, 0.16);
+	// --- front: the tower's own ground, the castle, and the foreground undergrowth ---
+	float gy = 0.86 + 0.015 * sin(a.x * 5.0);
+	col = mix(col, vec3(0.03, 0.03, 0.06), aafill(gy - uv.y));
+	col = castle(col, a, uv);
+	col = undergrowth(col, a, uv);                                                    // frontmost foliage band
+	return col;
+}
+// ---- The cheap animated overlay: moon halo + drifting wisps, princess-window
+// candle flicker, and the patrolling dragon. Added over the baked plate. ----
+vec3 nightAnim(vec3 col, vec2 a, vec2 uv, float t) {
+	vec2 mc = vec2(0.86 * aspect, 0.20);
+	float md = distance(a, mc);
+	if (md < 0.42) {
+		col += vec3(0.52, 0.58, 0.76) * smoothstep(0.36, 0.0, md) * (0.16 + 0.06 * sin(t * 0.6));   // breathing halo
+		// a pulsing shine glint riding the moon's lit highlight
+		float shp = 0.55 + 0.45 * sin(t * 1.3);
+		vec2 gp = mc + vec2(-0.05, -0.045);
+		float rx = smoothstep(0.10, 0.0, abs(a.x - gp.x)) * smoothstep(0.008, 0.0, abs(a.y - gp.y));
+		float ry = smoothstep(0.10, 0.0, abs(a.y - gp.y)) * smoothstep(0.008, 0.0, abs(a.x - gp.x));
+		col += vec3(1.0, 1.0, 0.96) * max(rx, ry) * shp * 0.6 * smoothstep(0.16, 0.0, md);
+		if (md < 0.15) {
+			float wisp = fbm(vec2((a.x - mc.x) * 5.0 + t * 0.06, (a.y - mc.y) * 9.0));
+			float band = smoothstep(0.52, 0.72, wisp) * smoothstep(0.15, 0.11, md);
+			col = mix(col, col * vec3(0.72, 0.75, 0.85) + vec3(0.04, 0.04, 0.06), band * 0.55);      // clouds cross the face
+		}
+	}
+	{
+		vec2 wc = vec2(0.135 * aspect - 0.135, 0.50);
+		float wd = length((a - wc) / vec2(0.045, 0.075));
+		if (wd < 1.4) {
+			float fl = 0.6 + 0.4 * sin(t * 7.0) * sin(t * 11.3 + 1.0);
+			col += vec3(0.9, 0.42, 0.12) * smoothstep(1.4, 0.0, wd) * 0.12 * fl;                     // candle flicker
+		}
+	}
+	// blinking stars — twinkle over the frozen sky (kept high so mountains don't cross them)
+	for (int i = 0; i < 40; i++) { float fi = float(i);
+		vec2 sp = vec2(hash11(fi * 1.3 + 0.5) * aspect, 0.02 + 0.38 * hash11(fi * 2.1 + 0.2));
+		if (distance(a, sp) > 0.02) continue;
+		if (distance(sp, vec2(0.86 * aspect, 0.20)) < 0.2) continue;                                  // clear of the moon
+		float tw = 0.5 + 0.5 * sin(t * (1.4 + 2.6 * hash11(fi * 3.3)) + fi * 1.7);
+		float br = (0.35 + 0.65 * hash11(fi * 4.7)) * tw;
+		col += vec3(0.95, 0.97, 1.0) * br * smoothstep(0.0035, 0.0, distance(a, sp));
+		col += vec3(0.70, 0.80, 1.0) * br * smoothstep(0.013, 0.0, distance(a, sp)) * 0.16;
+	}
+	// small campfires beside the near-hamlet cottages (the furthest homes are too
+	// distant for their own fire to read), then the tower's own great blaze — a
+	// distinct, wider, many-tongued fire that engulfs the whole tower entrance.
+	col = campfire(col, a, vec2(1.18, hillCrestNear(1.18)), 0.015, t, 1.0);
+	col = campfire(col, a, vec2(1.55, hillCrestNear(1.55)), 0.014, t, 2.0);
+	col = towerFire(col, a, vec2(0.135 * aspect - 0.135, 0.965), 0.05, t);   // roaring blaze over the tower doorway
+	{
+		float vel = 0.20;
+		float span = aspect + 1.6;                                                                   // travel distance + margins
+		float cyc = (span + 6.2) / vel;                                                              // one crossing + off-screen gap
+		float tc = t + 7.0;
+		float n = floor(tc / cyc);                                                                   // crossing index
+		float ph = mod(tc, cyc) * vel;                                                               // distance travelled this crossing
+		float face = (mod(n, 2.0) < 0.5) ? 1.0 : -1.0;                                               // alternate L->R, R->L, L->R ...
+		float dx = (face > 0.0) ? (-0.8 + ph) : (span - 0.8 - ph);                                   // enter from the facing side
+		float lane = 0.24 + 0.03 * sin(t * 0.5);
+		float flap = sin(t * 2.4);
+		float fire = clamp(sin(t * 0.8) * 3.0 - 1.5, 0.0, 1.0) * (0.6 + 0.4 * sin(t * 6.0));         // periodic bursts
+		col = placeDragon(col, a, vec2(dx, lane), 0.18, flap, clamp(fire, 0.0, 1.0), t, face);
+	}
+	{
+		// A lone knight occasionally marches in from the right, stops a respectful
+		// distance from the tower to size it up, then loses his nerve and marches
+		// back out. Fully idle (zero SDF work) outside his short active window.
+		float tWalk = 5.5;
+		float tPause = 2.2;
+		float tGap = 15.0;
+		float cyc = tWalk * 2.0 + tPause + tGap;
+		float ph = mod(t + 4.0, cyc);
+		if (ph < tWalk * 2.0 + tPause) {
+			float startX = aspect + 0.35;
+			float stopX = 0.135 * aspect + 0.95;
+			float kx; float stride; float idle; float face;
+			if (ph < tWalk) {
+				kx = mix(startX, stopX, ph / tWalk);
+				stride = 1.0; idle = 0.0; face = -1.0;
+			} else if (ph < tWalk + tPause) {
+				kx = stopX; stride = 0.0; idle = 1.0; face = -1.0;
+			} else {
+				kx = mix(stopX, startX, (ph - tWalk - tPause) / tWalk);
+				stride = 1.0; idle = 0.0; face = 1.0;
+			}
+			col = placeKnight(col, a, vec2(kx, 0.895), 0.10, stride, idle, t, face);
+		}
+	}
 	return col;
 }
 "
-# Volcano preview / live-fallback shader: the frozen scene + free-running auto
-# eruptions (the shop preview has no gameplay events to drive the uniform).
-const _VOLCANO_SHADER := _HEAD + _VOLCANO_FUNCS + "
+# Night-castle preview / live-fallback shader: the full frozen scene + animated
+# overlay, free-running (the shop preview has no plate to sample).
+const _NIGHT_SHADER := _HEAD + _NIGHT_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
 	float t = TIME;
-	vec3 col = volcanoScene(a, uv);
-	float e0 = smoothstep(0.0, 0.10, fract(t * 0.13 + 0.00)) * smoothstep(0.70, 0.20, fract(t * 0.13 + 0.00)) * 2.0;
-	float e1 = smoothstep(0.0, 0.10, fract(t * 0.11 + 0.50)) * smoothstep(0.70, 0.20, fract(t * 0.11 + 0.50)) * 2.0;
-	float e2 = smoothstep(0.0, 0.10, fract(t * 0.09 + 0.25)) * smoothstep(0.70, 0.20, fract(t * 0.09 + 0.25)) * 2.4;
-	float e3 = smoothstep(0.0, 0.10, fract(t * 0.10 + 0.75)) * smoothstep(0.70, 0.20, fract(t * 0.10 + 0.75)) * 2.4;
-	col = eruptAt(col, a, vec2(0.12 * aspect, 0.26 - 0.70 * 0.12), 0.12, e0 + 0.12, t, 1.0);
-	col = eruptAt(col, a, vec2(0.88 * aspect, 0.24 - 0.70 * 0.12), 0.12, e1 + 0.12, t, 2.0);
-	col = eruptAt(col, a, vec2(0.13 * aspect, 0.80 - 0.70 * 0.17), 0.17, e2 + 0.12, t, 3.0);
-	col = eruptAt(col, a, vec2(0.87 * aspect, 0.78 - 0.70 * 0.17), 0.17, e3 + 0.12, t, 4.0);
-	col = mix(col, col * vec3(1.06, 0.9, 0.84), 0.12);
-	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-	col *= mix(0.5, 1.0, smoothstep(1.3, 0.25, length(p)));
+	vec3 col = nightScene(a, uv);
+	col = nightAnim(col, a, uv, t);
+	col = mix(col, col * vec3(0.90, 0.94, 1.08), 0.14);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.42, 1.0, smoothstep(1.35, 0.25, length(vg)));
 	COLOR = vec4(col, 1.0);
 }
 "
-# Volcano static plate: the whole frozen scene (dark-grey plain + the four corner
-# volcanoes with their detailed rock shading and baked crater lava-pool glow). The
-# volcano SDFs + ground mottle fbm are the cost; frozen into the plate they cost
-# nothing per frame. Eruptions animate in the dyn; embers/ash are particles.
-# Grade + vignette are applied in the dyn (over the whole composite).
-const _VOLCANO_STATIC := _HEAD + _VOLCANO_FUNCS + "
+# Night-castle static plate: the whole frozen scene baked once (sky, stars,
+# mountains, castle, moon disc). The star/SDF/fbm cost is paid at bake time only.
+const _NIGHT_STATIC := _HEAD + _NIGHT_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
-	COLOR = vec4(volcanoScene(a, uv), 1.0);
+	COLOR = vec4(nightScene(a, uv), 1.0);
 }
 "
-# Volcano dynamic: sample the plate, flicker the baked hot (lava) pixels for a
-# living glow (cheap — keys off the plate colour, no fbm), then draw the four
-# corner eruptions driven by the per-volcano `erupt` uniform (each box-guarded to
-# its corner inside eruptAt), then grade + vignette the whole composite.
-const _VOLCANO_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\nuniform vec4 erupt = vec4(0.0);\n" + _VOLCANO_FUNCS + "
+# Night-castle dynamic: sample the plate, add the cheap animated overlay (moon
+# halo/wisps, window flicker, the box-guarded dragon + wandering knight), then
+# grade + vignette.
+const _NIGHT_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _NIGHT_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
 	float t = TIME;
 	vec3 col = texture(static_tex, uv).rgb;
-	// living lava — flicker the baked hot (red-dominant) pixels; no fbm, ~free
-	float hot = smoothstep(0.16, 0.5, col.r - col.b) * smoothstep(0.05, 0.35, col.r);
-	float flick = sin(t * 3.1 + a.x * 20.0 + a.y * 15.0) * (0.5 + 0.5 * sin(t * 1.6 + a.x * 4.0));
-	col += col * hot * flick * 0.35;
-	// four corner eruptions (apex = center + (0, -0.80 * s)), from the uniform
-	col = eruptAt(col, a, vec2(0.12 * aspect, 0.26 - 0.70 * 0.12), 0.12, erupt.x, t, 1.0);
-	col = eruptAt(col, a, vec2(0.88 * aspect, 0.24 - 0.70 * 0.12), 0.12, erupt.y, t, 2.0);
-	col = eruptAt(col, a, vec2(0.13 * aspect, 0.80 - 0.70 * 0.17), 0.17, erupt.z, t, 3.0);
-	col = eruptAt(col, a, vec2(0.87 * aspect, 0.78 - 0.70 * 0.17), 0.17, erupt.w, t, 4.0);
-	col = mix(col, col * vec3(1.06, 0.9, 0.84), 0.12);
-	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-	col *= mix(0.5, 1.0, smoothstep(1.3, 0.25, length(p)));
+	col = nightAnim(col, a, uv, t);
+	col = mix(col, col * vec3(0.90, 0.94, 1.08), 0.14);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.42, 1.0, smoothstep(1.35, 0.25, length(vg)));
 	COLOR = vec4(col, 1.0);
 }
 "
@@ -2663,7 +3216,7 @@ void fragment() {
 # Skin id -> bespoke background shader. Painted on the gameplay screen when the
 # matching complete skin is equipped and no paid theme is overriding it.
 const _SKIN_SHADERS := {
-	"inferno": _VOLCANO_SHADER,
+	"inferno": _NIGHT_SHADER,
 }
 
 # Basic static-gradient themes (80 coins each). Each entry drives the shared
@@ -2764,7 +3317,7 @@ const _NODE_PLATE := {
 	"kitty": _KITTY_STATIC,
 	"reef": _REEF_STATIC,
 	"clouds": _CLOUDS_STATIC,
-	"skin:inferno": _VOLCANO_STATIC,
+	"skin:inferno": _NIGHT_STATIC,
 }
 const _NODE_DYN := {
 	"fairies": _FAIRIES_DYN,
@@ -2778,7 +3331,7 @@ const _NODE_DYN := {
 	"kitty": _KITTY_DYN,
 	"reef": _REEF_DYN,
 	"clouds": _CLOUDS_DYN,
-	"skin:inferno": _VOLCANO_DYN,
+	"skin:inferno": _NIGHT_DYN,
 }
 
 # Trivial full-screen blit: paint a baked plate texture across the _bg ColorRect
@@ -2795,6 +3348,13 @@ var _bake_gen := 0
 # the equipped theme (+ whatever is currently displayed) so memory stays ~1-2 plates.
 var _plate_cache: Dictionary = {}   # key -> ImageTexture
 var _baking: Dictionary = {}        # key -> true while a bake is in flight (dedup)
+# Shop theme previews stay LIVE (animated, full quality). To stop the THEMES grid from
+# hitching as new cards scroll into view, their scene shaders are pre-compiled once when
+# the shop opens (see prewarm_previews) — GL compat otherwise compiles each on its first
+# on-screen draw, which is the stutter. _prewarmed_previews tracks what's already warm.
+var _prewarmed_previews: Dictionary = {}
+var _prewarm_queue: Array[String] = []       # theme_ids waiting to be compiled
+var _prewarming := false                     # true while the queue drains (one warm/frame)
 # Active display state.
 var _node_key := ""                 # node theme currently shown ("" = none)
 var _node_plate: ImageTexture
@@ -2900,8 +3460,9 @@ func _equipped_bg_key() -> String:
 		return t
 	return ""
 
-# Build a small ColorRect rendering the theme at the requested size, for use
-# as a preview tile in the shop. For "default", returns a dark fallback rect.
+# Build a small ColorRect rendering the theme LIVE (animated shader) at the requested
+# size, for use as a preview tile in the shop. For "default", returns a dark fallback
+# rect. The grid stays fluid because the shaders are pre-compiled via prewarm_previews.
 func make_preview(theme_id: String, size: Vector2) -> Control:
 	var rect := ColorRect.new()
 	rect.custom_minimum_size = size
@@ -2918,6 +3479,71 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 	mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
 	rect.material = mat
 	return rect
+
+# Pre-compile the scene shaders used by the shop's live theme previews, one per frame.
+# On the Mobile (GL compatibility) renderer a shader is compiled the first time it is
+# drawn on screen; without this warm-up each preview compiles as its card scrolls into
+# view, which is exactly the stutter felt when scrolling the THEMES grid. Each warm-up
+# is a tiny 16x16 one-shot offscreen render (same safe path as _prewarm_dyn) — never a
+# continuous SubViewport, so it can't re-trigger the Mali OOM the wheel hit. The live
+# previews themselves are untouched: full animation, full resolution.
+func prewarm_previews(theme_ids: Array) -> void:
+	for t in theme_ids:
+		var tid := String(t)
+		if tid == CoinsManager.DEFAULT_THEME or not _has_theme(tid):
+			continue
+		if _prewarmed_previews.has(tid) or _prewarm_queue.has(tid):
+			continue
+		_prewarm_queue.append(tid)
+	if not _prewarming:
+		_drain_prewarm_queue()
+
+# Same warm-up, for the SPECIAL SKINS tab's bespoke backgrounds (e.g. the Volcano
+# night-castle scene). These live under "skin:<id>" keys — shared queue/cache with
+# prewarm_previews above, since _get_shader already resolves that prefix.
+func prewarm_skin_previews(skin_ids: Array) -> void:
+	for s in skin_ids:
+		var sid := String(s)
+		if not _SKIN_SHADERS.has(sid):
+			continue
+		var key := "skin:" + sid
+		if _prewarmed_previews.has(key) or _prewarm_queue.has(key):
+			continue
+		_prewarm_queue.append(key)
+	if not _prewarming:
+		_drain_prewarm_queue()
+
+func _drain_prewarm_queue() -> void:
+	_prewarming = true
+	while not _prewarm_queue.is_empty():
+		var tid: String = _prewarm_queue.pop_front()
+		if _prewarmed_previews.has(tid):
+			continue
+		await _compile_preview_shader(tid)
+		_prewarmed_previews[tid] = true
+	_prewarming = false
+
+# Force `theme_id`'s scene shader to compile by drawing it once into a throwaway 16x16
+# viewport (UPDATE_ONCE, freed immediately). Mirrors _prewarm_dyn.
+func _compile_preview_shader(theme_id: String) -> void:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(16, 16)
+	vp.transparent_bg = false
+	vp.msaa_2d = Viewport.MSAA_DISABLED
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	var rect := ColorRect.new()
+	rect.size = Vector2(16, 16)
+	rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = _get_shader(theme_id)
+	mat.set_shader_parameter("aspect", 1.0)
+	rect.material = mat
+	vp.add_child(rect)
+	add_child(vp)
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	vp.queue_free()
 
 # Build a small ColorRect rendering an equipped-skin's bespoke background at the
 # requested size, for use behind the wheel preview in the SPECIAL SKINS shop tab.
@@ -3213,8 +3839,6 @@ func _show_node_dyn(key: String, plate: Texture2D) -> void:
 	_mat.set_shader_parameter("aspect", sz.x / maxf(1.0, sz.y))
 	if key == "kitty":
 		set_kitty_eyes(1.0, 1.0, 0.0)                       # start with eyes open
-	elif key == "skin:inferno":
-		_mat.set_shader_parameter("erupt", Vector4.ZERO)    # start dormant
 
 # Drive the kitty's expression (called every frame by its ThemeProps gesture
 # controller). Harmless if the current shader isn't the kitty (ignored uniforms).
@@ -3223,12 +3847,6 @@ func set_kitty_eyes(l: float, r: float, smile_amt: float) -> void:
 		_mat.set_shader_parameter("eye_l", l)
 		_mat.set_shader_parameter("eye_r", r)
 		_mat.set_shader_parameter("smile", smile_amt)
-
-# Drive the volcano's four per-crater eruption activities (called every frame by
-# its ThemeProps controller). Harmless if the current shader isn't the volcano.
-func set_volcano_erupt(a0: float, a1: float, a2: float, a3: float) -> void:
-	if _mat:
-		_mat.set_shader_parameter("erupt", Vector4(a0, a1, a2, a3))
 
 # Called by game.gd when the player completes a level. Forwarded to the active
 # theme's props node so it can react (only the kitty does, for now).

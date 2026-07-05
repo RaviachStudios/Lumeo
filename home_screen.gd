@@ -15,6 +15,7 @@ extends Control
 
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
 const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
+const HomeTutorial := preload("res://home_tutorial.gd")
 
 var game_manager: Node
 
@@ -35,9 +36,9 @@ const ICON_GREEN := Color(0.18, 0.78, 0.39)
 const ICON_PURPLE := Color(0.55, 0.36, 0.96)
 const ICON_GOLD := Color(1.00, 0.78, 0.22)
 
-# Premium-card chrome (shared by the Shop / Leaderboard / How-to cards).
+# Premium-card chrome (shared by the Shop / Leaderboard / Arena cards).
 const CARD_SIZE := Vector2(248.0, 300.0)
-const HOWTO_SIZE := Vector2(396.0, 78.0)
+const ARENA_SIZE := Vector2(506.0, 124.0)
 const CARD_PURPLE := Color(0.26, 0.19, 0.50, 0.66)        # semi-transparent purple
 const CARD_BORDER := Color(0.62, 0.52, 1.0, 0.45)
 const CARD_GLOW := Color(0.40, 0.30, 0.85, 0.45)
@@ -93,9 +94,8 @@ var _logo_box: Control
 var _start_lm: Dictionary = {}
 var _shop_card: Dictionary = {}
 var _ranks_card: Dictionary = {}
-var _howto_card: Dictionary = {}
+var _arena_card: Dictionary = {}   # bottom-center: opens the Arena (multiplayer contests)
 var _profile_card: Panel
-var _arena_btn: Button           # bottom-left: opens the Arena (multiplayer contests)
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
 # at a fixed corner here. Daily-claim button sits just under it.
@@ -109,6 +109,11 @@ var _daily_badge: Panel
 var _settings_music_btn: Button
 # Tiny, low-key credit line pinned to the very bottom edge.
 var _credits: Label
+# First-run tour state. `_tutorial_active` guards against a second tour being
+# spawned; `_awaiting_coins_for_tutorial` guards the one-shot wait for the wallet
+# doc to load (signed-in users) so we don't connect the `loaded` signal twice.
+var _tutorial_active := false
+var _awaiting_coins_for_tutorial := false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -124,7 +129,6 @@ func _ready() -> void:
 	_build_cards()
 	_build_start()
 	_build_profile_card()
-	_build_arena_button()
 	_build_credits()
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
@@ -147,6 +151,10 @@ func _ready() -> void:
 	if not FirebaseManager.is_signed_in() and not game_manager.welcome_prompt_shown:
 		game_manager.welcome_prompt_shown = true
 		_show_welcome_popup()
+	else:
+		# No welcome gate in the way — offer the first-run tour if it hasn't been
+		# seen yet (guests: local flag; signed-in: their wallet-doc flag).
+		_maybe_start_tutorial()
 
 # ---------------- background ----------------
 
@@ -377,7 +385,7 @@ func _build_cards() -> void:
 	_card_numeral(_ranks_card, "1", 22, Color(0.34, 0.24, 0.05), Vector2(98, 159), 40)
 	_card_numeral(_ranks_card, "2", 18, Color(0.30, 0.31, 0.36), Vector2(29, 175), 36)
 	_card_numeral(_ranks_card, "3", 18, Color(0.36, 0.24, 0.10), Vector2(167, 189), 36)
-	_build_howto_card()
+	_build_arena_card()
 
 # A premium navigation card: rounded translucent-purple panel with a title, a
 # procedural illustration, and a bottom call-to-action pill (icon + label). The
@@ -427,77 +435,138 @@ func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callabl
 
 	return {"wrap": wrap, "art": art, "drawer": drawer, "floater": floater}
 
-# The bottom "HOW TO PLAY" strip: a "?" badge, a title + subtitle, and a round
-# arrow affordance on the right. Whole strip is tappable.
-func _build_howto_card() -> void:
+# The bottom "ARENA" banner card: a fully drawn stadium illustration on the left,
+# a title + subtitle, and a call-to-action pill — same premium purple/blue chrome
+# as the Shop / Leaderboard cards. Whole card is tappable → the multiplayer Arena.
+func _build_arena_card() -> void:
 	var wrap := Control.new()
-	wrap.size = HOWTO_SIZE
-	wrap.custom_minimum_size = HOWTO_SIZE
-	wrap.pivot_offset = HOWTO_SIZE * 0.5
+	wrap.size = ARENA_SIZE
+	wrap.custom_minimum_size = ARENA_SIZE
+	wrap.pivot_offset = ARENA_SIZE * 0.5
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(wrap)
 
-	var panel := _card_panel(HOWTO_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
-	wrap.add_child(panel)
+	var floater := Control.new()
+	floater.size = ARENA_SIZE
+	floater.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(floater)
 
-	# "?" badge
-	var badge := _circle_panel(50.0, ICON_PURPLE, Color(0.72, 0.58, 1.0, 0.9))
-	badge.position = Vector2(16, 14)
-	panel.add_child(badge)
-	var q := Label.new()
-	q.text = "?"
-	q.add_theme_font_size_override("font_size", 30)
-	q.add_theme_color_override("font_color", Color.WHITE)
-	q.set_anchors_preset(Control.PRESET_FULL_RECT)
-	q.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	q.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	badge.add_child(q)
+	var panel := _card_panel(ARENA_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
+	floater.add_child(panel)
+
+	# Stadium illustration filling the left third.
+	var art := Control.new()
+	art.size = Vector2(214, ARENA_SIZE.y)
+	art.position = Vector2(6, 0)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.draw.connect(_draw_arena_simon.bind(art))
+	panel.add_child(art)
 
 	var title := Label.new()
-	title.text = "HOW TO PLAY"
-	title.add_theme_font_size_override("font_size", 22)
+	title.text = "ARENA"
+	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color.WHITE)
-	title.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.5))
+	title.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.55))
 	title.add_theme_constant_override("shadow_offset_x", 0)
 	title.add_theme_constant_override("shadow_offset_y", 0)
-	title.add_theme_constant_override("shadow_outline_size", 5)
-	title.position = Vector2(80, 12)
-	title.size = Vector2(240, 30)
+	title.add_theme_constant_override("shadow_outline_size", 7)
+	title.position = Vector2(228, 15)
+	title.size = Vector2(260, 36)
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(title)
 
-	var sub := Label.new()
-	sub.text = "Learn the rules and start playing"
-	sub.add_theme_font_size_override("font_size", 14)
-	sub.add_theme_color_override("font_color", Color(0.80, 0.78, 1.0, 0.92))
-	sub.position = Vector2(80, 42)
-	sub.size = Vector2(270, 22)
-	sub.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(sub)
+	# CTA pill (icon + label) along the bottom of the text column.
+	var pill := _cta_pill(Vector2(ARENA_SIZE.x - 228 - 18, 40), "Enter the Arena", _draw_sword_icon)
+	pill.position = Vector2(228, ARENA_SIZE.y - 52)
+	panel.add_child(pill)
 
-	# round arrow affordance on the right
-	var arrow := _circle_panel(40.0, CTA_PURPLE, Color(0.45, 0.30, 0.95, 0.55))
-	arrow.position = Vector2(HOWTO_SIZE.x - 16 - 40, 19)
-	panel.add_child(arrow)
-	var ad := Control.new()
-	ad.size = Vector2(24, 24)
-	ad.position = Vector2(8, 8)
-	ad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ad.draw.connect(_draw_arrow.bind(ad))
-	arrow.add_child(ad)
-
-	var btn := _overlay_button(HOWTO_SIZE)
+	var btn := _overlay_button(ARENA_SIZE)
 	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
 	btn.mouse_exited.connect(_on_card_hover.bind(wrap, false))
 	btn.button_down.connect(_on_card_press.bind(wrap, true))
 	btn.button_up.connect(_on_card_press.bind(wrap, false))
-	btn.pressed.connect(_on_how)
-	wrap.add_child(btn)
+	btn.pressed.connect(_on_arena)
+	floater.add_child(btn)
 
-	_howto_card = {"wrap": wrap}
+	_arena_card = {"wrap": wrap, "art": art, "floater": floater}
+
+# The Arena mascot: a little clipart stadium — an oval bowl packed with a
+# colourful crowd, a striped green pitch in the middle, and two floodlight
+# towers glowing over the rim. `c` is a ~214 x 124 art box.
+func _draw_arena_simon(c: Control) -> void:
+	var ctr := Vector2(107, 74)
+	var out_rx := 92.0
+	var out_ry := 44.0
+	# soft cool glow behind the whole bowl
+	_glow(c, ctr + Vector2(0, -4), 90.0, Color(0.52, 0.60, 1.0), 5)
+
+	# Floodlight towers behind the bowl (poles first so the stands overlap them).
+	for fx in [-70.0, 70.0]:
+		var base := ctr + Vector2(fx, -8)
+		var top := base + Vector2(fx * 0.10, -56)
+		c.draw_line(base, top, Color(0.28, 0.31, 0.44), 4.0)
+		var panel_c := top + Vector2(0, -3)
+		_glow(c, panel_c, 22.0, Color(1.0, 0.95, 0.62), 4)
+		# a little grid of bulbs on a rounded head
+		c.draw_colored_polygon(PackedVector2Array([
+			panel_c + Vector2(-11, -6), panel_c + Vector2(11, -6),
+			panel_c + Vector2(11, 6), panel_c + Vector2(-11, 6)]),
+			Color(0.34, 0.37, 0.52))
+		for gx in [-6.5, 0.0, 6.5]:
+			for gy in [-3.0, 3.0]:
+				c.draw_circle(panel_c + Vector2(gx, gy), 2.6, Color(1.0, 0.97, 0.74))
+
+	# Stadium bowl: dark outer rim → lighter seating ring.
+	c.draw_colored_polygon(_ellipse_pts(ctr, out_rx, out_ry), Color(0.15, 0.17, 0.29))
+	c.draw_colored_polygon(_ellipse_pts(ctr, out_rx - 5.0, out_ry - 3.0),
+		Color(0.31, 0.34, 0.49))
+
+	# The crowd: rings of little multi-colour dots filling the stands, each nudged
+	# by a cheap deterministic jitter so the packing reads as a lively crowd.
+	var crowd := [Color(0.93, 0.30, 0.32), Color(0.98, 0.78, 0.24),
+		Color(0.30, 0.72, 0.42), Color(0.32, 0.60, 0.98),
+		Color(0.95, 0.95, 0.97), Color(0.80, 0.42, 0.92)]
+	var field_rx := 52.0
+	var field_ry := 23.0
+	for ring in 3:
+		var t := (float(ring) + 0.5) / 3.0
+		var rx: float = lerp(field_rx + 5.0, out_rx - 7.0, t)
+		var ry: float = lerp(field_ry + 4.0, out_ry - 5.0, t)
+		var n := 22 + ring * 6
+		for i in n:
+			var a := TAU * float(i) / n
+			var jr := 0.86 + 0.14 * sin(float(i) * 2.3 + ring * 1.7)
+			var jt := 0.10 * cos(float(i) * 1.7 + ring)
+			var p := ctr + Vector2(cos(a + jt) * rx * jr, sin(a + jt) * ry * jr)
+			c.draw_circle(p, 2.2, crowd[(i + ring * 2) % crowd.size()])
+
+	# The pitch: green oval with clipart centre line + centre circle.
+	c.draw_colored_polygon(_ellipse_pts(ctr, field_rx, field_ry), Color(0.19, 0.60, 0.28))
+	c.draw_colored_polygon(_ellipse_pts(ctr, field_rx - 3.0, field_ry - 2.0),
+		Color(0.23, 0.66, 0.32))
+	var line_col := Color(1.0, 1.0, 1.0, 0.85)
+	c.draw_line(Vector2(ctr.x, ctr.y - field_ry + 3.0),
+		Vector2(ctr.x, ctr.y + field_ry - 3.0), line_col, 1.6)
+	c.draw_polyline(_ellipse_pts(ctr, 12.0, 6.0, 20) + PackedVector2Array([ctr + Vector2(12.0, 0.0)]),
+		line_col, 1.6, true)
+
+	# A crisp white highlight along the top rim to pop the bowl off the card.
+	var rim := PackedVector2Array()
+	for i in 20:
+		var a: float = PI + PI * float(i) / 19.0
+		rim.append(ctr + Vector2(cos(a) * (out_rx - 2.0), sin(a) * (out_ry - 2.0)))
+	c.draw_polyline(rim, Color(0.85, 0.90, 1.0, 0.45), 2.0, true)
+
+# A small crossed-swords glyph for the Arena CTA pill (24x24 box).
+func _draw_sword_icon(c: Control) -> void:
+	for s in [-1.0, 1.0]:
+		var a := Vector2(12 - s * 7, 20)          # hilt (bottom)
+		var b := Vector2(12 + s * 7, 4)           # tip (top)
+		c.draw_line(a, b, Color(0.85, 0.88, 1.0), 2.6)             # blade
+		var guard_c := a.lerp(b, 0.18)
+		var perp := Vector2(-(b - a).y, (b - a).x).normalized()
+		c.draw_line(guard_c - perp * 4.0, guard_c + perp * 4.0, Color(1.0, 0.82, 0.3), 2.4)  # crossguard
 
 # Rounded translucent panel used as the body of every card.
 func _card_panel(size: Vector2, bg: Color, border: Color, glow: Color) -> Panel:
@@ -675,32 +744,6 @@ func _lm_label(lm: Dictionary, txt: String, fsize: int, col: Color, glow: Color,
 	lm["art"].add_child(l)
 	return l
 
-# ---------------- arena button (bottom-left) ----------------
-
-func _build_arena_button() -> void:
-	_arena_btn = Button.new()
-	_arena_btn.text = "⚔  ARENA"
-	_arena_btn.size = Vector2(176.0, 52.0)
-	_arena_btn.focus_mode = Control.FOCUS_NONE
-	_arena_btn.add_theme_font_size_override("font_size", 20)
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.10, 0.06, 0.20, 0.82)          # translucent violet glass
-	s.set_corner_radius_all(26)
-	s.border_color = Color(0.70, 0.45, 1.0, 0.75)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(0.55, 0.35, 1.0, 0.32)
-	s.shadow_size = 12
-	_arena_btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.16, 0.10, 0.30, 0.92)
-	_arena_btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.07, 0.04, 0.15, 0.95)
-	_arena_btn.add_theme_stylebox_override("pressed", sp)
-	_arena_btn.add_theme_color_override("font_color", Color(0.90, 0.82, 1.0))
-	_arena_btn.pressed.connect(_on_arena)
-	add_child(_arena_btn)
-
 # ---------------- procedural art ----------------
 
 # Soft layered halo: large faint circle first, smaller brighter ones on top.
@@ -711,7 +754,7 @@ func _glow(c: Control, center: Vector2, radius: float, col: Color, layers: int) 
 		var a: float = lerp(0.04, 0.16, t)
 		c.draw_circle(center, r, Color(col.r, col.g, col.b, a))
 
-func _ellipse_pts(center: Vector2, rx: float, ry: float, n: int) -> PackedVector2Array:
+func _ellipse_pts(center: Vector2, rx: float, ry: float, n: int = 48) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	for i in n:
 		var a := TAU * float(i) / float(n)
@@ -994,15 +1037,12 @@ func _layout() -> void:
 	var side_cy := sz.y * 0.57
 	_place_card(_shop_card, Vector2(sz.x * 0.035, side_cy - CARD_SIZE.y * 0.5))
 	_place_card(_ranks_card, Vector2(sz.x - sz.x * 0.035 - CARD_SIZE.x, side_cy - CARD_SIZE.y * 0.5))
-	_place_card(_howto_card, Vector2(cx - HOWTO_SIZE.x * 0.5, sz.y - HOWTO_SIZE.y - sz.y * 0.03))
+	_place_card(_arena_card, Vector2(cx - ARENA_SIZE.x * 0.5, sz.y - ARENA_SIZE.y - sz.y * 0.03))
 
 	_place_lm(_start_lm, Vector2(cx, sz.y * 0.50))
 
 	if _profile_card:
 		_profile_card.position = Vector2(sz.x - _profile_card.size.x - 16.0, 14.0)
-
-	if _arena_btn:
-		_arena_btn.position = Vector2(24.0, sz.y - _arena_btn.size.y - 30.0)
 
 	# credits tuck into the bottom-right corner, right-aligned with a small margin
 	if _credits:
@@ -1049,7 +1089,7 @@ func _start_animations() -> void:
 
 	# the Shop + Leaderboard cards gently bob in place (slightly out of phase) so the
 	# scene feels alive; the bob lives on each card's inner floater.
-	var bob_cards := [_shop_card, _ranks_card]
+	var bob_cards := [_shop_card, _ranks_card, _arena_card]
 	for i in bob_cards.size():
 		var card: Dictionary = bob_cards[i]
 		if card.is_empty():
@@ -1482,8 +1522,13 @@ func _open_daily_popup() -> void:
 
 # ---------------- settings popup ----------------
 
-# Minimal settings modal opened by the profile-card gear: a music on/off toggle
-# and a close button. Dismissed by tapping outside or Close.
+# Minimal settings modal opened by the profile-card gear: a music on/off toggle,
+# a tutorial replay, a support section (contact + privacy policy), a close
+# button and a footer with the app version. Dismissed by tapping outside or
+# Close.
+const CONTACT_EMAIL := "RaviachStudios@gmail.com"
+const PRIVACY_POLICY_URL := "https://raviachstudios.github.io/Raviach-policy/"
+
 func _show_settings_popup() -> void:
 	var sz := get_viewport_rect().size
 	var overlay := Control.new()
@@ -1505,11 +1550,14 @@ func _show_settings_popup() -> void:
 	close_bg.pressed.connect(overlay.queue_free)
 	overlay.add_child(close_bg)
 
-	const PW := 420.0
-	const PH := 260.0
-	var panel := _card_panel(Vector2(PW, PH), Color(0.05, 0.06, 0.16, 0.98),
+	var show_delete := FirebaseManager.is_signed_in()
+	const PW := 440.0
+	const BASE_PH := 466.0
+	const DELETE_SECTION_H := 94.0
+	var ph := BASE_PH + (DELETE_SECTION_H if show_delete else 0.0)
+	var panel := _card_panel(Vector2(PW, ph), Color(0.05, 0.06, 0.16, 0.98),
 		Color(0.40, 0.50, 1.0, 0.55), Color(0.0, 0.0, 0.0, 0.55))
-	panel.position = (sz - Vector2(PW, PH)) * 0.5
+	panel.position = (sz - Vector2(PW, ph)) * 0.5
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.add_child(panel)
 
@@ -1521,17 +1569,47 @@ func _show_settings_popup() -> void:
 	title.add_theme_constant_override("shadow_offset_x", 0)
 	title.add_theme_constant_override("shadow_offset_y", 3)
 	title.add_theme_constant_override("shadow_outline_size", 9)
-	title.position = Vector2(20, 28)
+	title.position = Vector2(20, 22)
 	title.size = Vector2(PW - 40, 44)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(title)
 
+	_popup_section_label(panel, "PREFERENCES", 80, PW)
 	var music_on := AudioManager.is_music_on()
 	_settings_music_btn = _make_popup_button(panel, "Music:  %s" % ("On" if music_on else "Off"),
-		Vector2(40, 92), Vector2(PW - 80, 52), Color(0.16, 0.18, 0.34), _toggle_music)
-	_make_popup_button(panel, "Close", Vector2(40, 160), Vector2(PW - 80, 52),
+		Vector2(40, 100), Vector2(PW - 80, 50), Color(0.16, 0.18, 0.34), _toggle_music)
+	_make_popup_button(panel, "Replay Tutorial", Vector2(40, 158), Vector2(PW - 80, 50),
+		Color(0.16, 0.18, 0.34), _replay_tutorial.bind(overlay))
+
+	_popup_divider(panel, 224, PW)
+	_popup_section_label(panel, "SUPPORT", 234, PW)
+	_make_popup_button(panel, "Contact Us", Vector2(40, 254), Vector2(PW - 80, 50),
+		Color(0.16, 0.18, 0.34), _contact_us)
+	_make_popup_button(panel, "Privacy Policy", Vector2(40, 312), Vector2(PW - 80, 50),
+		Color(0.16, 0.18, 0.34), _open_privacy_policy)
+
+	# Signed-in-only danger zone. Guests have no server-side account to delete.
+	var after_y := 374.0
+	if show_delete:
+		_popup_divider(panel, after_y, PW)
+		_popup_section_label(panel, "ACCOUNT", after_y + 12, PW)
+		_make_popup_button(panel, "Delete Account", Vector2(40, after_y + 32), Vector2(PW - 80, 50),
+			Color(0.62, 0.16, 0.20), _confirm_delete_account.bind(overlay))
+		after_y += DELETE_SECTION_H
+
+	_make_popup_button(panel, "Close", Vector2(40, after_y), Vector2(PW - 80, 50),
 		Color(0.15, 0.6, 0.95), overlay.queue_free)
+
+	var footer := Label.new()
+	footer.text = "Simon v%s   ·   %s" % [ProjectSettings.get_setting("application/config/version", ""), CONTACT_EMAIL]
+	footer.add_theme_font_size_override("font_size", 13)
+	footer.add_theme_color_override("font_color", Color(0.50, 0.53, 0.74, 0.65))
+	footer.position = Vector2(20, after_y + 60)
+	footer.size = Vector2(PW - 40, 20)
+	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(footer)
 
 	# Gentle entrance: fade + scale-pop on the panel.
 	panel.pivot_offset = panel.size * 0.5
@@ -1542,6 +1620,26 @@ func _show_settings_popup() -> void:
 	tw.tween_property(panel, "scale", Vector2.ONE, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
+# Small uppercase caption used to group buttons within a popup (e.g. "SUPPORT").
+func _popup_section_label(panel: Control, text: String, y: float, pw: float) -> void:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", Color(0.52, 0.55, 0.82, 0.75))
+	lbl.position = Vector2(40, y)
+	lbl.size = Vector2(pw - 80, 16)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(lbl)
+
+# Hairline separator between grouped sections of a popup.
+func _popup_divider(panel: Control, y: float, pw: float) -> void:
+	var line := ColorRect.new()
+	line.color = Color(1.0, 1.0, 1.0, 0.08)
+	line.position = Vector2(40, y)
+	line.size = Vector2(pw - 80, 1)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(line)
+
 func _toggle_music() -> void:
 	if AudioManager.is_music_on():
 		AudioManager.stop_bg_music()
@@ -1550,16 +1648,117 @@ func _toggle_music() -> void:
 	if _settings_music_btn and is_instance_valid(_settings_music_btn):
 		_settings_music_btn.text = "Music:  %s" % ("On" if AudioManager.is_music_on() else "Off")
 
+# Closes the settings popup and forces the first-run tour to play again,
+# bypassing the "already seen" flags that normally gate it.
+func _replay_tutorial(overlay: Control) -> void:
+	overlay.queue_free()
+	if _tutorial_active or has_node("HomeTutorial"):
+		return
+	_start_tutorial()
+
+func _contact_us() -> void:
+	OS.shell_open("mailto:%s?subject=Simon%%20Feedback" % CONTACT_EMAIL)
+
+func _open_privacy_policy() -> void:
+	OS.shell_open(PRIVACY_POLICY_URL)
+
+# Second confirmation modal opened from the settings popup's "Delete Account".
+# No backdrop-tap-to-dismiss on this one, deliberately — an irreversible action
+# should only close via an explicit Cancel or Delete Forever tap.
+func _confirm_delete_account(_settings_overlay: Control) -> void:
+	var sz := get_viewport_rect().size
+	var overlay := Control.new()
+	overlay.name = "DeleteAccountPopup"
+	overlay.position = Vector2.ZERO
+	overlay.size = sz
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.01, 0.04, 0.72)
+	dim.position = Vector2.ZERO
+	dim.size = sz
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(dim)
+
+	const PW := 440.0
+	const PH := 336.0
+	var panel := _card_panel(Vector2(PW, PH), Color(0.05, 0.06, 0.16, 0.98),
+		Color(0.75, 0.24, 0.28, 0.6), Color(0.0, 0.0, 0.0, 0.55))
+	panel.position = (sz - Vector2(PW, PH)) * 0.5
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(panel)
+
+	var title := Label.new()
+	title.text = "Delete Account?"
+	title.add_theme_font_size_override("font_size", 27)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.position = Vector2(24, 26)
+	title.size = Vector2(PW - 48, 36)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(title)
+
+	var body := Label.new()
+	body.text = "This permanently erases your coins, scores, cosmetics and Arena history — it can't be undone.\n\nYour one-time Remove Ads purchase isn't affected; it's restored automatically if you sign back in."
+	body.add_theme_font_size_override("font_size", 15)
+	body.add_theme_color_override("font_color", Color(0.80, 0.83, 0.95, 0.92))
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.position = Vector2(24, 72)
+	body.size = Vector2(PW - 48, 160)
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(body)
+
+	var half := (PW - 48.0 - 14.0) * 0.5
+	_make_popup_button(panel, "Cancel", Vector2(24, PH - 66), Vector2(half, 50),
+		Color(0.16, 0.18, 0.34), overlay.queue_free)
+	_make_popup_button(panel, "Delete Forever", Vector2(24 + half + 14, PH - 66), Vector2(half, 50),
+		Color(0.68, 0.16, 0.20), _do_delete_account.bind(overlay, title, body))
+
+	panel.pivot_offset = panel.size * 0.5
+	panel.scale = Vector2(0.92, 0.92)
+	overlay.modulate.a = 0.0
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(overlay, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+# Runs the actual deletion once "Delete Forever" is confirmed. On success,
+# FirebaseManager.delete_account() ends by treating this exactly like a sign
+# -out, which home_screen's own `signed_out` handler already reacts to by
+# rebuilding the whole home screen — that discards this overlay along with
+# everything else, so there's nothing left to close here. On failure, the
+# dialog flips to an error state so the player can retry or back out.
+func _do_delete_account(overlay: Control, title: Label, body: Label) -> void:
+	for c in title.get_parent().get_children():
+		if c is Button:
+			c.disabled = true
+	title.text = "Deleting…"
+	body.text = "Please wait — this only takes a moment."
+	var result: Dictionary = await FirebaseManager.delete_account()
+	if not is_instance_valid(overlay):
+		return
+	if bool(result.get("ok", false)):
+		return
+	title.text = "Something Went Wrong"
+	body.text = "We couldn't delete your account. Check your connection and try again — if it keeps failing, sign out, sign back in, then retry, or use Contact Us."
+	for c in title.get_parent().get_children():
+		if c is Button:
+			c.disabled = false
+
 # ---------------- sign-in popup (welcome + feature gates) ----------------
 
 # First-launch welcome popup: shown once per launch (gated on welcome_prompt_shown
 # in _ready) when signed out. The player must pick sign in or guest before they
 # can interact with the menu.
 func _show_welcome_popup() -> void:
+	# If the player picks "Play as Guest", start the first-run tour once the
+	# popup closes. (Picking "Sign In" routes through name-pick → a fresh home,
+	# whose _ready offers the tour based on the wallet-doc flag instead.)
 	_show_sign_in_popup(
 		"Welcome to Simon",
 		"Sign in to save your coins, climb the leaderboards and claim daily rewards — or jump straight in as a guest.",
-		"Play as Guest")
+		"Play as Guest",
+		_maybe_start_tutorial)
 
 # Feature-gate popup: shown when a guest taps Shop or Leaderboards. Same
 # visual, but the secondary action is "Maybe Later" — the user is already
@@ -1569,7 +1768,8 @@ func _show_sign_in_required_popup(title_text: String, subtitle_text: String) -> 
 
 # Shared builder for both popup variants. Caller passes the title / subtitle
 # copy and the label for the secondary (dismiss) button.
-func _show_sign_in_popup(title_text: String, subtitle_text: String, secondary_label: String) -> void:
+func _show_sign_in_popup(title_text: String, subtitle_text: String, secondary_label: String,
+		on_dismiss: Callable = Callable()) -> void:
 	var sz := get_viewport_rect().size
 	var overlay := Control.new()
 	overlay.name = "SignInPopup"
@@ -1631,8 +1831,14 @@ func _show_sign_in_popup(title_text: String, subtitle_text: String, secondary_la
 		Color(0.15, 0.6, 0.95), _popup_sign_in.bind(overlay))
 	sign_in_btn.add_theme_font_size_override("font_size", 22)
 
+	# The secondary (dismiss) button frees the popup and then runs an optional
+	# follow-up (e.g. the welcome variant kicks off the first-run tour).
+	var dismiss := func() -> void:
+		overlay.queue_free()
+		if on_dismiss.is_valid():
+			on_dismiss.call()
 	_make_popup_button(panel, secondary_label, Vector2(40, 264), Vector2(bw, 56),
-		Color(0.16, 0.18, 0.34), overlay.queue_free)
+		Color(0.16, 0.18, 0.34), dismiss)
 
 	# Gentle entrance: fade + scale-pop on the panel.
 	panel.pivot_offset = panel.size * 0.5
@@ -1737,3 +1943,106 @@ func _on_sign_in_failed(_error: String) -> void:
 
 func _on_signed_out() -> void:
 	game_manager.show_home()
+
+# ---------------- first-run tutorial ----------------
+
+# Local persistence for the guest "has seen the tour" flag. Signed-in users use
+# the Firestore flag (CoinsManager.tutorial_seen) instead; we still set this
+# local flag for them too, so the tour never repeats on this device even before
+# the wallet doc has loaded on a later launch.
+const PREFS_PATH := "user://prefs.cfg"
+
+func _local_tutorial_seen() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_PATH) != OK:
+		return false
+	return bool(cfg.get_value("tutorial", "seen", false))
+
+func _set_local_tutorial_seen() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(PREFS_PATH)                     # keep any other prefs already stored
+	cfg.set_value("tutorial", "seen", true)
+	cfg.save(PREFS_PATH)
+
+# Decide whether to run the tour, then run it. Safe to call more than once: it
+# no-ops if a tour is already up, if the sign-in gate is still showing, or once
+# the flag says it's been seen. The local flag wins outright — a guest who saw
+# the tour and then signs in (a fresh account with no server-side flag yet)
+# must not be shown it again — and it's synced up to the wallet doc once one
+# becomes available. Otherwise, for signed-in users, we wait (once) for the
+# wallet doc so it can read the server-side flag.
+func _maybe_start_tutorial() -> void:
+	if _tutorial_active or has_node("HomeTutorial"):
+		return
+	# The welcome / sign-in gate closes with queue_free (deferred), so the node
+	# can still be present this same frame — ignore it if it's on its way out.
+	var gate := get_node_or_null("SignInPopup")
+	if gate and not gate.is_queued_for_deletion():
+		return
+	if _local_tutorial_seen():
+		if FirebaseManager.is_signed_in() and CoinsManager.is_loaded() and not CoinsManager.tutorial_seen:
+			CoinsManager.mark_tutorial_seen()
+		return
+	if FirebaseManager.is_signed_in():
+		if not CoinsManager.is_loaded():
+			if not _awaiting_coins_for_tutorial:
+				_awaiting_coins_for_tutorial = true
+				CoinsManager.loaded.connect(_maybe_start_tutorial, CONNECT_ONE_SHOT)
+			return
+		_awaiting_coins_for_tutorial = false
+		if CoinsManager.tutorial_seen:
+			_set_local_tutorial_seen()
+			return
+	_start_tutorial()
+
+# Build the step list from whatever widgets this screen is actually showing
+# (a guest has no coin pill / daily claim, so those steps are skipped), then
+# spawn the overlay.
+func _start_tutorial() -> void:
+	_tutorial_active = true
+	var steps: Array = []
+	steps.append({
+		"rect": Rect2(),
+		"title": "Welcome to Simon!",
+		"body": "Quick tour, then you're off. Tap Next — skip anytime."})
+	if _coin_pill or _daily_btn or not _shop_card.is_empty():
+		var body_text := "Spend coins in the Shop to customize Simon."
+		if _coin_pill or _daily_btn:
+			body_text = "Earn coins by playing and from your daily reward, then spend them in the Shop."
+		var rect := Rect2()
+		if not _shop_card.is_empty():
+			rect = (_shop_card["wrap"] as Control).get_global_rect()
+		elif _coin_pill:
+			rect = _coin_pill.get_global_rect()
+		steps.append({"rect": rect, "title": "Coins & Shop", "body": body_text})
+	if not _start_lm.is_empty():
+		# Spotlight the visible orb, not the full 300×300 tap target.
+		var c: Vector2 = (_start_lm["wrap"] as Control).get_global_rect().get_center()
+		steps.append({
+			"rect": Rect2(c - Vector2(120, 120), Vector2(240, 240)),
+			"title": "Play Simon",
+			"body": "Medium and Hard add more buttons and move faster — pick your challenge and tap START."})
+	if not _ranks_card.is_empty():
+		steps.append({
+			"rect": (_ranks_card["wrap"] as Control).get_global_rect(),
+			"title": "Leaderboards",
+			"body": "See how your best scores stack up against players worldwide."})
+	if not _arena_card.is_empty():
+		steps.append({
+			"rect": (_arena_card["wrap"] as Control).get_global_rect(),
+			"title": "The Arena",
+			"body": "Create or join contests and go head-to-head with your friends."})
+
+	var tut := HomeTutorial.new()
+	tut.name = "HomeTutorial"
+	tut.finished.connect(_on_tutorial_finished)
+	add_child(tut)
+	tut.setup(steps)
+
+func _on_tutorial_finished() -> void:
+	_tutorial_active = false
+	# Persist "seen" on both halves the app reads: the local file always, plus the
+	# wallet doc when signed in (so it follows the account across devices).
+	_set_local_tutorial_seen()
+	if FirebaseManager.is_signed_in():
+		CoinsManager.mark_tutorial_seen()

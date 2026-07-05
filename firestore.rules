@@ -12,18 +12,24 @@ service cloud.firestore {
     }
 
     // All-time leaderboards. Public read so anyone can see the boards;
-    // each user may only write their own row, with a sane score.
+    // each user may only write their own row, with a sane score. `allow
+    // delete` is separate from `allow write` because a delete request has no
+    // request.resource — folding scoreOk() (which reads request.resource.data)
+    // into the same rule would error out and deny every delete.
     match /global_easy/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && scoreOk();
+      allow delete: if isUser(uid);
     }
     match /global_moderate/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && scoreOk();
+      allow delete: if isUser(uid);
     }
     match /global_hard/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && scoreOk();
+      allow delete: if isUser(uid);
     }
 
     // Daily leaderboards. Same write surface as the all-time boards, plus a
@@ -45,14 +51,17 @@ service cloud.firestore {
     match /daily_easy/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && dailyRowOk();
+      allow delete: if isUser(uid);
     }
     match /daily_moderate/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && dailyRowOk();
+      allow delete: if isUser(uid);
     }
     match /daily_hard/{uid} {
       allow read: if true;
       allow write: if isUser(uid) && dailyRowOk();
+      allow delete: if isUser(uid);
     }
 
     // Private wallet doc: coin balance, owned/equipped theme, login streak
@@ -60,7 +69,8 @@ service cloud.firestore {
     // Owner-only. Fields are validated only when present so partial (merge)
     // writes don't have to set every field at once.
     match /users/{uid} {
-      allow read:  if isUser(uid);
+      allow read:   if isUser(uid);
+      allow delete: if isUser(uid);
       allow write: if isUser(uid)
         && (!('coins' in request.resource.data)
             || (request.resource.data.coins is int
@@ -105,7 +115,10 @@ service cloud.firestore {
         // Non-consumable remove-ads entitlement. Bool flag, validated only
         // when present so other merge writes don't have to set it.
         && (!('has_remove_ads' in request.resource.data)
-            || request.resource.data.has_remove_ads is bool);
+            || request.resource.data.has_remove_ads is bool)
+        // First-run home-tour "seen" flag. Bool, validated only when present.
+        && (!('tutorial_seen' in request.resource.data)
+            || request.resource.data.tutorial_seen is bool);
     }
 
     // ---- Arena contests ----------------------------------------------------
@@ -128,6 +141,14 @@ service cloud.firestore {
           && request.resource.data.best_score >= 0
           && request.resource.data.best_score <= 9999;
     }
+    // Player-authored contest title: validated only when present so merge writes
+    // (member_count bumps, start, finalize) don't have to resend it.
+    function titleOk() {
+      return !('title' in request.resource.data)
+          || (request.resource.data.title is string
+              && request.resource.data.title.size() >= 1
+              && request.resource.data.title.size() <= 15);
+    }
 
     match /contests/{cid} {
       allow read: if true;
@@ -137,7 +158,8 @@ service cloud.firestore {
         && request.resource.data.status == 'lobby'
         && request.resource.data.type in ['one_game', 'one_hour', 'one_day', 'daily']
         && request.resource.data.difficulty in ['easy', 'moderate', 'hard']
-        && request.resource.data.member_count is int;
+        && request.resource.data.member_count is int
+        && titleOk();
 
       // Any signed-in participant may update the meta (join bumps member_count;
       // the creator starts it; anyone may write the finalized standings). The
@@ -150,7 +172,8 @@ service cloud.firestore {
         && request.resource.data.status in ['lobby', 'active', 'finished']
         && request.resource.data.member_count is int
         && request.resource.data.member_count >= 0
-        && request.resource.data.member_count <= 50;
+        && request.resource.data.member_count <= 45
+        && titleOk();
 
       // The creator can delete anytime (cancel); anyone can delete an empty
       // contest (last member out). member_count is lowered to 0 before that

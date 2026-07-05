@@ -114,14 +114,12 @@ func _apply_simon_skin() -> void:
 		_resolved_simon_number(),
 		skin_id)
 
-# Returns the Color tint for a category, or null to keep the stock look.
+# Returns the look for a category (Color, pattern/motif Dictionary, or null to
+# keep the stock graphite look). See CoinsManager.simon_part_style.
 func _resolved_simon_tint(category: String) -> Variant:
 	if not CoinsManager.is_simon_manual():
 		return null
-	var id := CoinsManager.equipped_simon_color(category)
-	if id == CoinsManager.SIMON_DEFAULT_COLOR:
-		return null
-	return CoinsManager.simon_color_value(id)
+	return CoinsManager.simon_part_style(category, CoinsManager.equipped_simon_color(category))
 
 # The equipped level-number font package, or null for the stock white numeral
 # (mirrors _resolved_simon_tint but resolves the font catalog instead of a colour).

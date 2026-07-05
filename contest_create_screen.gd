@@ -1,7 +1,11 @@
 extends Control
 
-# Create a contest: pick a TYPE + a DIFFICULTY, then create. On success we jump
-# straight to the contest detail (lobby) where the ID can be shared.
+# Create a contest — a small interactive 3-step wizard:
+#   1) Name your contest   (the field lifts above the on-screen keyboard)
+#   2) Choose a format     (1 Game / 1 Hour / 1 Day)
+#   3) Choose a difficulty → Create
+# On success we jump straight to the contest detail (lobby) where the ID is shared.
+# Wears the same "champions' antechamber" theme as the contest lobby.
 
 const ArenaUI := preload("res://arena_ui.gd")
 
@@ -10,23 +14,45 @@ var game_manager: Node
 var _bg: ColorRect
 var _back: Button
 var _title: Label
-var _type_cards: Array[Dictionary] = []   # {btn, def, sb_on, sb_off, name_lbl, rule_lbl}
-var _diff_pills: Array[Dictionary] = []    # {btn, diff, sb_on, sb_off, lbl}
-var _create_btn: Button
+var _dots: Control
+
+# Step containers (only one visible at a time).
+var _step1: Control
+var _step2: Control
+var _step3: Control
+
+# Step 1 (name).
+var _name_edit: LineEdit
+var _name_base_bottom := 0.0     # resting bottom edge of the field (no keyboard)
+var _name_shift := 0.0
+var _suggest_row: Control        # funny-name suggestion chips + a 🎲 reshuffle
+var _sug_chips: Array[Button] = []
+var _sug_dice: Button
+
+# Step 2 / 3 selections.
+var _type_cards: Array[Dictionary] = []
+var _diff_pills: Array[Dictionary] = []
+
+# Bottom navigation.
+var _prev_btn: Button
+var _primary_btn: Button
+var _msg: Label
 var _overlay: Panel
 var _overlay_lbl: Label
-var _msg: Label
 
+var _step := 0
 var _selected_type := "one_game"
 var _selected_diff := "easy"
 var _busy := false
 
-const TYPE_ORDER: Array[String] = ["one_game", "one_hour", "one_day", "daily"]
+const TYPE_ORDER: Array[String] = ["one_game", "one_hour", "one_day"]
+const STEP_COUNT := 3
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_bg = ArenaUI.make_bg()
+	# Match the contest lobby's room (the champions' antechamber).
+	_bg = ArenaUI.make_lobby_bg()
 	add_child(_bg)
 
 	_back = ArenaUI.make_back_button()
@@ -36,12 +62,25 @@ func _ready() -> void:
 	_title = ArenaUI.title("CREATE CONTEST")
 	add_child(_title)
 
-	_build_type_cards()
-	_build_diff_pills()
+	_dots = Control.new()
+	_dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dots.draw.connect(_draw_dots)
+	add_child(_dots)
 
-	_create_btn = ArenaUI.pill_button("Create Contest", ArenaUI.ACCENT, true)
-	_create_btn.pressed.connect(_on_create)
-	add_child(_create_btn)
+	_step1 = _make_step()
+	_step2 = _make_step()
+	_step3 = _make_step()
+	_build_step1()
+	_build_step2()
+	_build_step3()
+
+	# Bottom nav.
+	_prev_btn = ArenaUI.pill_button("◀  Back", ArenaUI.SAND)
+	_prev_btn.pressed.connect(_on_prev)
+	add_child(_prev_btn)
+	_primary_btn = ArenaUI.pill_button("Next  ▶", ArenaUI.ACCENT, true)
+	_primary_btn.pressed.connect(_on_primary)
+	add_child(_primary_btn)
 
 	_msg = Label.new()
 	_msg.add_theme_font_size_override("font_size", 16)
@@ -53,19 +92,166 @@ func _ready() -> void:
 	_build_overlay()
 	_refresh_type_styles()
 	_refresh_diff_styles()
+	_show_step()
 	_layout()
 	get_viewport().size_changed.connect(_layout)
 
-# ---------------- type cards ----------------
+func _make_step() -> Control:
+	var c := Control.new()
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(c)
+	return c
 
-func _build_type_cards() -> void:
+# ---------------- step 1: name ----------------
+
+func _build_step1() -> void:
+	var prompt := Label.new()
+	prompt.name = "prompt"
+	prompt.text = "Name your contest"
+	prompt.add_theme_font_size_override("font_size", 32)
+	prompt.add_theme_color_override("font_color", Color.WHITE)
+	prompt.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.4))
+	prompt.add_theme_constant_override("shadow_offset_y", 3)
+	prompt.add_theme_constant_override("shadow_outline_size", 9)
+	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_step1.add_child(prompt)
+
+	var sub := Label.new()
+	sub.name = "sub"
+	sub.text = "This is how it'll appear to everyone who joins"
+	sub.add_theme_font_size_override("font_size", 16)
+	sub.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_step1.add_child(sub)
+
+	_name_edit = LineEdit.new()
+	_name_edit.placeholder_text = "e.g. Friday Rumble"
+	_name_edit.max_length = ContestManager.TITLE_MAX
+	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_edit.add_theme_font_size_override("font_size", 26)
+	_name_edit.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.15))
+	_name_edit.add_theme_color_override("caret_color", ArenaUI.GOLD)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.09, 0.10, 0.22, 0.92)
+	s.set_corner_radius_all(16)
+	s.border_color = Color(0.55, 0.60, 0.95, 0.7)
+	s.set_border_width_all(2)
+	s.content_margin_left = 16
+	s.content_margin_right = 16
+	_name_edit.add_theme_stylebox_override("normal", s)
+	var sf := s.duplicate() as StyleBoxFlat
+	sf.border_color = ArenaUI.GOLD
+	sf.shadow_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.25)
+	sf.shadow_size = 8
+	_name_edit.add_theme_stylebox_override("focus", sf)
+	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_primary())
+	_step1.add_child(_name_edit)
+
+	# Funny-name suggestions: a hint, a row of tappable name chips, and a 🎲 that
+	# reshuffles them. Sits under the field but lifts with the field on keyboard open.
+	var hint := Label.new()
+	hint.name = "sug_hint"
+	hint.text = "Out of ideas? Tap one — or Shuffle for more:"
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_step1.add_child(hint)
+
+	_suggest_row = Control.new()
+	_suggest_row.name = "sug_row"
+	_suggest_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_step1.add_child(_suggest_row)
+	_reshuffle_suggestions()
+
+# A small tappable suggestion pill. Tapping it fills the name field.
+func _make_suggest_chip(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 15)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.14)
+	s.set_corner_radius_all(15)
+	s.border_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.55)
+	s.set_border_width_all(1)
+	s.content_margin_left = 14
+	s.content_margin_right = 14
+	s.content_margin_top = 6
+	s.content_margin_bottom = 6
+	b.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.26)
+	b.add_theme_stylebox_override("hover", sh)
+	b.add_theme_stylebox_override("pressed", sh)
+	b.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.35))
+	return b
+
+# Repopulate the suggestion row with 3 fresh random funny names + a 🎲 chip.
+func _reshuffle_suggestions() -> void:
+	if _suggest_row == null:
+		return
+	for c in _suggest_row.get_children():
+		c.queue_free()
+	_sug_chips.clear()
+	var pool: Array = ContestManager.FUNNY_NAMES.duplicate()
+	pool.shuffle()
+	for i in mini(3, pool.size()):
+		var name_txt := String(pool[i])
+		var chip := _make_suggest_chip(name_txt)
+		chip.pressed.connect(func() -> void: _apply_suggestion(name_txt))
+		_suggest_row.add_child(chip)
+		_sug_chips.append(chip)
+	_sug_dice = _make_suggest_chip("↻ Shuffle")
+	_sug_dice.pressed.connect(_reshuffle_suggestions)
+	_suggest_row.add_child(_sug_dice)
+	_position_suggestions()
+
+# Fill the field with a chosen suggestion (and keep the keyboard where it is).
+func _apply_suggestion(name_txt: String) -> void:
+	if _name_edit:
+		_name_edit.text = name_txt
+
+# Center the suggestion chips + dice within the row (widths come from their content).
+func _position_suggestions() -> void:
+	if _suggest_row == null or _sug_chips.is_empty():
+		return
+	var gap := 10.0
+	var total := 0.0
+	var widths: Array[float] = []
+	for chip in _sug_chips:
+		var cw: float = chip.get_minimum_size().x
+		widths.append(cw)
+		total += cw
+	var dice_w: float = _sug_dice.get_minimum_size().x if _sug_dice else 0.0
+	total += dice_w + gap * float(_sug_chips.size())
+	var x := (_suggest_row.size.x - total) * 0.5
+	var h := 34.0
+	for i in _sug_chips.size():
+		var chip := _sug_chips[i]
+		chip.position = Vector2(x, 0)
+		chip.size = Vector2(widths[i], h)
+		x += widths[i] + gap
+	if _sug_dice:
+		_sug_dice.position = Vector2(x, 0)
+		_sug_dice.size = Vector2(dice_w, h)
+
+# ---------------- step 2: format ----------------
+
+func _build_step2() -> void:
+	var cap := _section_caption("Choose a format")
+	cap.name = "cap"
+	_step2.add_child(cap)
+
 	for t in TYPE_ORDER:
 		var card := Button.new()
 		card.focus_mode = Control.FOCUS_NONE
 		var sb_off := StyleBoxFlat.new()
-		sb_off.bg_color = Color(0.09, 0.09, 0.19, 0.7)
+		sb_off.bg_color = Color(0.09, 0.10, 0.22, 0.72)
 		sb_off.set_corner_radius_all(18)
-		sb_off.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.3)
+		sb_off.border_color = Color(0.55, 0.60, 0.95, 0.32)
 		sb_off.set_border_width_all(1)
 		var sb_on := StyleBoxFlat.new()
 		sb_on.bg_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.22)
@@ -76,7 +262,7 @@ func _build_type_cards() -> void:
 		sb_on.shadow_size = 14
 		for st in ["normal", "hover", "pressed", "focus"]:
 			card.add_theme_stylebox_override(st, sb_off)
-		add_child(card)
+		_step2.add_child(card)
 
 		var name_lbl := Label.new()
 		name_lbl.text = ContestManager.type_label(t)
@@ -89,7 +275,7 @@ func _build_type_cards() -> void:
 		var rule_lbl := Label.new()
 		rule_lbl.text = ContestManager.type_rule(t)
 		rule_lbl.add_theme_font_size_override("font_size", 13)
-		rule_lbl.add_theme_color_override("font_color", ArenaUI.MUTED)
+		rule_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
 		rule_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		rule_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		rule_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -111,7 +297,7 @@ func _refresh_type_styles() -> void:
 		(d["name_lbl"] as Label).add_theme_color_override("font_color",
 			ArenaUI.ACCENT.lightened(0.45) if on else Color.WHITE)
 
-# ---------------- difficulty pills ----------------
+# ---------------- step 3: difficulty ----------------
 
 const DIFF_ORDER: Array[String] = ["easy", "moderate", "hard"]
 const DIFF_ACCENT := {
@@ -120,13 +306,17 @@ const DIFF_ACCENT := {
 	"hard": Color(0.95, 0.32, 0.40),
 }
 
-func _build_diff_pills() -> void:
+func _build_step3() -> void:
+	var cap := _section_caption("Choose a difficulty")
+	cap.name = "cap"
+	_step3.add_child(cap)
+
 	for diff in DIFF_ORDER:
 		var accent: Color = DIFF_ACCENT[diff]
 		var btn := Button.new()
 		btn.focus_mode = Control.FOCUS_NONE
 		var sb_off := StyleBoxFlat.new()
-		sb_off.bg_color = Color(0.08, 0.09, 0.18, 0.7)
+		sb_off.bg_color = Color(0.08, 0.09, 0.20, 0.72)
 		sb_off.set_corner_radius_all(24)
 		sb_off.border_color = Color(accent.r, accent.g, accent.b, 0.35)
 		sb_off.set_border_width_all(1)
@@ -139,7 +329,7 @@ func _build_diff_pills() -> void:
 		sb_on.shadow_size = 12
 		for st in ["normal", "hover", "pressed", "focus"]:
 			btn.add_theme_stylebox_override(st, sb_off)
-		add_child(btn)
+		_step3.add_child(btn)
 
 		var lbl := Label.new()
 		lbl.text = ContestManager.diff_label(diff)
@@ -167,6 +357,46 @@ func _refresh_diff_styles() -> void:
 		(d["lbl"] as Label).add_theme_color_override("font_color",
 			accent.lightened(0.4) if on else Color(accent.r, accent.g, accent.b, 0.75))
 
+func _section_caption(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 24)
+	l.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.1))
+	l.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.35))
+	l.add_theme_constant_override("shadow_offset_y", 2)
+	l.add_theme_constant_override("shadow_outline_size", 7)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+# ---------------- step flow ----------------
+
+func _show_step() -> void:
+	_step1.visible = _step == 0
+	_step2.visible = _step == 1
+	_step3.visible = _step == 2
+	_prev_btn.visible = _step > 0
+	_primary_btn.text = "Create Contest" if _step == STEP_COUNT - 1 else "Next  ▶"
+	_msg.text = ""
+	_dots.queue_redraw()
+	if _step == 0 and _name_edit:
+		_name_edit.grab_focus()
+	else:
+		if _name_edit:
+			_name_edit.release_focus()
+
+func _on_prev() -> void:
+	if _step > 0:
+		_step -= 1
+		_show_step()
+
+func _on_primary() -> void:
+	if _step < STEP_COUNT - 1:
+		_step += 1
+		_show_step()
+	else:
+		_on_create()
+
 # ---------------- layout ----------------
 
 func _layout() -> void:
@@ -178,30 +408,59 @@ func _layout() -> void:
 	if _title:
 		_title.size = Vector2(sz.x, 52)
 		_title.position = Vector2(0, 22)
+	if _dots:
+		_dots.position = Vector2(cx - 90, 84)
+		_dots.size = Vector2(180, 22)
+		_dots.queue_redraw()
 
-	# TYPE section: a label + a row of 4 cards.
-	var cards_top := 108.0
-	var card_w: float = minf(220.0, (sz.x - 120.0) / 4.0 - 16.0)
-	var card_h := 150.0
+	for c in [_step1, _step2, _step3]:
+		c.position = Vector2.ZERO
+		c.size = sz
+
+	# Step 1 — centered name field.
+	var name_w: float = minf(460.0, sz.x - 100.0)
+	var field_y := sz.y * 0.42
+	var prompt: Label = _step1.get_node("prompt")
+	prompt.size = Vector2(sz.x, 40); prompt.position = Vector2(0, field_y - 120)
+	var sub: Label = _step1.get_node("sub")
+	sub.size = Vector2(sz.x, 24); sub.position = Vector2(0, field_y - 70)
+	_name_edit.size = Vector2(name_w, 56)
+	_name_edit.position = Vector2(cx - name_w * 0.5, field_y)
+	_name_base_bottom = field_y + 56.0
+
+	# Suggestions sit just below the field.
+	var hint: Label = _step1.get_node("sug_hint")
+	hint.size = Vector2(sz.x, 22); hint.position = Vector2(0, field_y + 78)
+	if _suggest_row:
+		_suggest_row.position = Vector2(cx - name_w * 0.5, field_y + 106)
+		_suggest_row.size = Vector2(name_w, 34)
+		_position_suggestions()
+
+	# Step 2 — format cards.
+	var cap2: Label = _step2.get_node("cap")
+	cap2.size = Vector2(sz.x, 30); cap2.position = Vector2(0, 150)
+	var cards_top := 210.0
+	var card_w: float = clampf((sz.x - 100.0) / 3.0 - 16.0, 150.0, 240.0)
+	var card_h := 168.0
 	var gap := 16.0
-	var total := card_w * 4.0 + gap * 3.0
+	var total := card_w * 3.0 + gap * 2.0
 	var x := cx - total * 0.5
 	for d in _type_cards:
 		var card: Button = d["btn"]
 		card.size = Vector2(card_w, card_h)
 		card.position = Vector2(x, cards_top)
 		var name_lbl: Label = d["name_lbl"]
-		name_lbl.position = Vector2(0, 22)
-		name_lbl.size = Vector2(card_w, 30)
+		name_lbl.position = Vector2(0, 26); name_lbl.size = Vector2(card_w, 30)
 		var rule_lbl: Label = d["rule_lbl"]
-		rule_lbl.position = Vector2(12, 62)
-		rule_lbl.size = Vector2(card_w - 24, card_h - 74)
+		rule_lbl.position = Vector2(12, 70); rule_lbl.size = Vector2(card_w - 24, card_h - 84)
 		x += card_w + gap
 
-	# DIFFICULTY section
-	var diff_top := cards_top + card_h + 54.0
-	var dw := 180.0
-	var dh := 56.0
+	# Step 3 — difficulty pills.
+	var cap3: Label = _step3.get_node("cap")
+	cap3.size = Vector2(sz.x, 30); cap3.position = Vector2(0, 150)
+	var diff_top := 230.0
+	var dw: float = clampf((sz.x - 100.0) / 3.0 - 16.0, 150.0, 190.0)
+	var dh := 58.0
 	var dtotal := dw * 3.0 + gap * 2.0
 	var dx := cx - dtotal * 0.5
 	for d in _diff_pills:
@@ -209,18 +468,52 @@ func _layout() -> void:
 		(d["btn"] as Button).position = Vector2(dx, diff_top)
 		dx += dw + gap
 
-	if _create_btn:
-		_create_btn.size = Vector2(280, 58)
-		_create_btn.position = Vector2(cx - 140, diff_top + dh + 54.0)
-	if _msg:
-		_msg.size = Vector2(sz.x, 24)
-		_msg.position = Vector2(0, diff_top + dh + 120.0)
+	# Bottom nav — primary centered, step-back to its left.
+	var nav_y := sz.y - 96.0
+	_primary_btn.size = Vector2(260, 58)
+	_primary_btn.position = Vector2(cx - 130, nav_y)
+	_prev_btn.size = Vector2(150, 58)
+	_prev_btn.position = Vector2(cx - 130 - 150 - 16, nav_y)
+	_msg.size = Vector2(sz.x, 24)
+	_msg.position = Vector2(0, nav_y + 64)
+
 	if _overlay:
 		_overlay.position = Vector2.ZERO
 		_overlay.size = sz
 	if _overlay_lbl:
 		_overlay_lbl.size = Vector2(sz.x, 40)
 		_overlay_lbl.position = Vector2(0, sz.y * 0.5 - 20)
+
+func _draw_dots() -> void:
+	var gap := 30.0
+	var x := _dots.size.x * 0.5 - gap
+	var y := _dots.size.y * 0.5
+	for i in STEP_COUNT:
+		var on: bool = i == _step
+		var done: bool = i < _step
+		var col: Color = ArenaUI.GOLD if (on or done) else Color(0.5, 0.55, 0.8)
+		_dots.draw_circle(Vector2(x + i * gap, y), 7.0 if on else 5.0,
+			Color(col.r, col.g, col.b, 1.0 if on else (0.7 if done else 0.4)))
+
+# ---------------- keyboard lift (step 1) ----------------
+
+const TOP_MARGIN := 96.0     # keep the field below the header while lifted
+
+func _process(delta: float) -> void:
+	if _name_edit == null:
+		return
+	var target := 0.0
+	var kb_h := float(DisplayServer.virtual_keyboard_get_height())
+	if _step == 0 and kb_h > 0.0 and _name_edit.has_focus():
+		var vsz := get_viewport_rect().size
+		var win_h := float(get_window().size.y)
+		var kb_design := kb_h * (vsz.y / maxf(win_h, 1.0))
+		var keyboard_top := vsz.y - kb_design
+		var overlap := _name_base_bottom - (keyboard_top - 16.0)
+		var max_shift := maxf(_name_base_bottom - 56.0 - TOP_MARGIN, 0.0)
+		target = clampf(overlap, 0.0, max_shift)
+	_name_shift = lerpf(_name_shift, target, clampf(delta * 12.0, 0.0, 1.0))
+	_step1.position.y = -_name_shift
 
 # ---------------- create ----------------
 
@@ -229,8 +522,11 @@ func _on_create() -> void:
 		return
 	_busy = true
 	_msg.text = ""
+	# Blank name? Give it a funny one (and show it) rather than a bland default.
+	if _name_edit.text.strip_edges().is_empty():
+		_name_edit.text = ContestManager.random_title()
 	_set_overlay(true, "Creating…")
-	var res: Dictionary = await ContestManager.create_contest(_selected_type, _selected_diff)
+	var res: Dictionary = await ContestManager.create_contest(_selected_type, _selected_diff, _name_edit.text)
 	if not is_inside_tree():
 		return
 	_set_overlay(false)

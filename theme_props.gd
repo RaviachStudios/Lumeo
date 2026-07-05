@@ -17,15 +17,6 @@ var _gesture := ""                  # "" | "blink" (both eyes) | "wink" (one eye
 var _gt := 0.0                      # elapsed time in the current gesture
 var _blink_timer := 0.0             # countdown to the next idle blink
 
-# --- volcano (skin:inferno) eruption state ---
-# One activity value per corner volcano, pushed to the dyn shader's `erupt` vec4
-# each frame. It idles low (breathing crater glow) and jumps on level complete,
-# then decays back to idle so the eruption plays out over a few seconds.
-var _vt := 0.0                                          # volcano idle clock
-var _erupt := [0.0, 0.0, 0.0, 0.0]                      # current activity per volcano
-var _erupt_pending := [0.0, 0.0, 0.0, 0.0]             # staged burst peak
-var _erupt_delay := [0.0, 0.0, 0.0, 0.0]               # per-volcano stagger before firing
-
 func setup(key: String, size: Vector2, bgmgr: Node) -> void:
 	_sz = size
 	_key = key
@@ -52,13 +43,14 @@ func setup(key: String, size: Vector2, bgmgr: Node) -> void:
 			# rising bubble rings
 			_add_particles(_make_ring(), 10, 5.0, Color(0.55, 0.85, 0.92), 0.35, 0.60, 8.0, 18.0, 14.0, 0.55, 0.45, true)
 		"skin:inferno":
-			# rising embers (additive) + slowly falling ash flakes (darkening)
-			_add_particles(dot, 30, 5.0, Color(1.0, 0.50, 0.12), 0.05, 0.14, 6.0, 20.0, 24.0, 0.55, 0.45, true)
-			_add_particles(dot, 14, 7.0, Color(0.09, 0.07, 0.09), 0.06, 0.12, 3.0, 9.0, 40.0, 0.50, 0.50, false, 1.0)
+			# night-castle ambience: faint twinkling stars high in the sky + a few
+			# warm torch embers rising near the castle on the left
+			_add_particles(dot, 26, 4.0, Color(0.85, 0.90, 1.0), 0.015, 0.05, 0.0, 0.0, 0.0, 0.20, 0.18, true)
+			_add_particles(dot, 10, 4.0, Color(1.0, 0.58, 0.20), 0.03, 0.08, 6.0, 16.0, 26.0, 0.60, 0.12, true, -1.0, 0.13, 0.06)
 		_:
 			pass
-	# kitty runs a gesture controller; the volcano drives its eruption uniforms
-	set_process(key == "kitty" or key == "skin:inferno")
+	# only the kitty needs a per-frame gesture controller
+	set_process(key == "kitty")
 
 # ===========================================================================
 # KITTY gestures — driven every frame while the kitty theme is active. Idle:
@@ -67,9 +59,6 @@ func setup(key: String, size: Vector2, bgmgr: Node) -> void:
 # BackgroundManager.set_kitty_eyes(); the cloud is a real node with a Label.
 # ===========================================================================
 func _process(dt: float) -> void:
-	if _key == "skin:inferno":
-		_process_volcano(dt)
-		return
 	if _key != "kitty":
 		return
 	_gt += dt
@@ -99,38 +88,12 @@ func _process(dt: float) -> void:
 			_gt = 0.0
 			_blink_timer = randf_range(3.5, 6.5)
 
-# Called by BackgroundManager.notify_level_complete(): the cat winks one eye, and
-# the volcano erupts — mid on every level, heavier on milestones, big past 20.
-func on_level_complete(level: int) -> void:
+# Called by BackgroundManager.notify_level_complete(): the cat winks one eye.
+func on_level_complete(_level: int) -> void:
 	if _key == "kitty":
 		_gesture = "wink"
 		_gt = 0.0
 		return
-	if _key == "skin:inferno":
-		var peak := 1.4                                     # mid erupt on every level
-		if level >= 20:
-			peak = 3.0                                      # big erupt every level from 20 on
-		elif level == 5 or level == 10 or (level > 10 and (level - 10) % 3 == 0):
-			peak = 2.2                                      # heavy erupt (5, 10, then every 3)
-		for i in 4:
-			_erupt_pending[i] = peak * (0.85 + 0.30 * randf())   # slight per-crater variation
-			_erupt_delay[i] = 0.02 + i * 0.12 + randf() * 0.05   # staggered pops, left -> right
-		return
-
-# Volcano controller: each frame, fire any staged eruption whose stagger has
-# elapsed, then decay every volcano's activity back toward a low breathing idle,
-# and push all four to the dyn shader's `erupt` uniform.
-func _process_volcano(dt: float) -> void:
-	_vt += dt
-	for i in 4:
-		if _erupt_delay[i] > 0.0:
-			_erupt_delay[i] -= dt
-			if _erupt_delay[i] <= 0.0:
-				_erupt[i] = maxf(_erupt[i], _erupt_pending[i])   # fire the staged burst
-		var idle := 0.10 + 0.05 * sin(_vt * 0.8 + i * 1.7)       # breathing ambient glow/smoke
-		_erupt[i] = move_toward(_erupt[i], idle, dt * 0.55)      # eruptions ease back to idle
-	if is_instance_valid(_bg):
-		_bg.call("set_volcano_erupt", _erupt[0], _erupt[1], _erupt[2], _erupt[3])
 
 # A soft round white dot, tinted per-system.
 func _make_dot() -> ImageTexture:
@@ -186,7 +149,8 @@ func _make_ring() -> ImageTexture:
 # with half-height hy, drifting up at vmin..vmax (0 = twinkle in place). `additive`
 # picks add vs. normal blend.
 func _add_particles(tex: Texture2D, amount: int, life: float, col: Color, smin: float, smax: float,
-		vmin: float, vmax: float, spread: float, cy: float, hy: float, additive: bool, dir_y: float = -1.0) -> void:
+		vmin: float, vmax: float, spread: float, cy: float, hy: float, additive: bool, dir_y: float = -1.0,
+		cx: float = 0.5, hx: float = 0.5) -> void:
 	var p := CPUParticles2D.new()
 	p.texture = tex
 	if additive:
@@ -194,9 +158,9 @@ func _add_particles(tex: Texture2D, amount: int, life: float, col: Color, smin: 
 	p.amount = amount
 	p.lifetime = life
 	p.preprocess = life                                     # pre-fill so no ramp-up
-	p.position = Vector2(_sz.x * 0.5, _sz.y * cy)
+	p.position = Vector2(_sz.x * cx, _sz.y * cy)
 	p.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
-	p.emission_rect_extents = Vector2(_sz.x * 0.5, _sz.y * hy)
+	p.emission_rect_extents = Vector2(_sz.x * hx, _sz.y * hy)
 	p.direction = Vector2(0, dir_y)
 	p.spread = spread
 	p.gravity = Vector2.ZERO
