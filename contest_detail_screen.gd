@@ -575,6 +575,12 @@ func _render_finished(meta: Dictionary) -> void:
 	var cx := w * 0.5
 	var standings: Array = _data.get("standings", [])
 
+	# Award contest-placement badges (win / podium) from the player's final rank.
+	for r: Dictionary in standings:
+		if bool(r.get("is_me", false)):
+			BadgeManager.note_contest_result(int(r.get("rank", 0)))
+			break
+
 	# Celebration FX (behind the podium/table): heavy multicoloured confetti, pulsing
 	# flash lights, and several golden Simons drifting across — the same wander path
 	# as the active-contest screen.

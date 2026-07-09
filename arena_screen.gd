@@ -14,6 +14,7 @@ var _bg: ColorRect
 var _fx: ArenaFX
 var _back: Button
 var _title: Label
+var _lobby_btn: Button           # top-right: browse the public contests lobby
 
 # Carousel.
 var _card: Button
@@ -39,6 +40,8 @@ var _toast: Label
 var _join_modal: Panel
 var _join_edit: LineEdit
 var _join_msg: Label
+var _join_modal_base_y := 0.0    # resting Y of the modal (no keyboard)
+var _join_modal_shift := 0.0     # current upward lift so the field clears the keyboard
 
 var _contests: Array = []
 var _idx := 0
@@ -65,6 +68,12 @@ func _ready() -> void:
 
 	_title = ArenaUI.title("ARENA")
 	add_child(_title)
+
+	# Top-right entry into the public contests lobby.
+	_lobby_btn = ArenaUI.pill_button("Public Lobby", ArenaUI.SAND)
+	_lobby_btn.add_theme_font_size_override("font_size", 16)
+	_lobby_btn.pressed.connect(func() -> void: game_manager.show_contest_lobby())
+	add_child(_lobby_btn)
 
 	_build_carousel()
 
@@ -235,6 +244,10 @@ func _layout() -> void:
 	var cx := sz.x * 0.5
 	if _back:
 		_back.position = Vector2(20, 20)
+	if _lobby_btn:
+		var lw := 186.0
+		_lobby_btn.size = Vector2(lw, 46)
+		_lobby_btn.position = Vector2(sz.x - lw - 20, 20)
 	if _title:
 		_title.size = Vector2(sz.x, 52)
 		_title.position = Vector2(0, 22)
@@ -501,6 +514,34 @@ func _layout_join_modal(sz: Vector2) -> void:
 	if _join_modal == null:
 		return
 	var w := 400.0
-	var h := 236.0
+	var h := JOIN_MODAL_H
 	_join_modal.size = Vector2(w, h)
-	_join_modal.position = Vector2(sz.x * 0.5 - w * 0.5, sz.y * 0.5 - h * 0.5)
+	_join_modal_base_y = sz.y * 0.5 - h * 0.5
+	_join_modal.position = Vector2(sz.x * 0.5 - w * 0.5, _join_modal_base_y - _join_modal_shift)
+
+# Lift the join modal so its bottom edge (ID field + buttons) clears the on-screen
+# keyboard, then ease it back down when the keyboard closes. Mirrors the behaviour of
+# the username and contest-name inputs so the modal never sits behind the keyboard.
+const JOIN_MODAL_H := 236.0
+const JOIN_MODAL_TOP_MARGIN := 10.0   # modal top never lifts past this many px from the top
+
+func _process(delta: float) -> void:
+	if _join_modal == null:
+		return
+	var target := 0.0
+	if _join_modal.visible:
+		var kb_h := float(DisplayServer.virtual_keyboard_get_height())
+		if kb_h > 0.0 and _join_edit != null and _join_edit.has_focus():
+			var vsz := get_viewport_rect().size
+			# The keyboard height is reported in real device pixels; the modal lives in
+			# the stretched design space, so convert it before comparing.
+			var win_h := float(get_window().size.y)
+			var kb_design := kb_h * (vsz.y / maxf(win_h, 1.0))
+			var keyboard_top := vsz.y - kb_design
+			var modal_bottom := _join_modal_base_y + JOIN_MODAL_H
+			var overlap := modal_bottom - (keyboard_top - 16.0)
+			# Clamp so the modal top stays at least the margin below the screen top.
+			var max_shift := maxf(_join_modal_base_y - JOIN_MODAL_TOP_MARGIN, 0.0)
+			target = clampf(overlap, 0.0, max_shift)
+	_join_modal_shift = lerpf(_join_modal_shift, target, clampf(delta * 12.0, 0.0, 1.0))
+	_join_modal.position.y = _join_modal_base_y - _join_modal_shift

@@ -36,6 +36,8 @@ signal contest_updated(contest_id: String)
 const JOIN_LIMIT_BASE := 2
 const CREATE_LIMIT_BASE := 1
 const MAX_MEMBERS := 45
+# How many public lobby contests the browse-lobby screen pulls per (single) fetch.
+const LOBBY_FETCH := 10
 # Contest titles are player-authored; displayed big and clamped to this length
 # everywhere (mirrors ArenaUI.TITLE_MAX + titleOk() in firestore.rules).
 const TITLE_MAX := 15
@@ -148,7 +150,10 @@ static func clean_title(raw: String) -> String:
 	return s
 
 # Returns {ok, id} or {ok:false, error}.
-func create_contest(type: String, difficulty: String, title: String = "") -> Dictionary:
+# `is_public` contests are discoverable in the browse-lobby (see load_lobby_contests);
+# private ones can only be joined with the shared ID.
+func create_contest(type: String, difficulty: String, title: String = "",
+		is_public: bool = true) -> Dictionary:
 	if _uid().is_empty() or not FirebaseManager.has_display_name():
 		return {"ok": false, "error": "auth"}
 	if not TYPES.has(type) or not DIFFS.has(difficulty):
@@ -170,6 +175,7 @@ func create_contest(type: String, difficulty: String, title: String = "") -> Dic
 			"type": type,
 			"difficulty": difficulty,
 			"status": "lobby",
+			"is_public": is_public,
 			"member_count": 1,
 			"created_at": now,
 			"started_at": 0,
@@ -177,9 +183,18 @@ func create_contest(type: String, difficulty: String, title: String = "") -> Dic
 			"finished_at": 0,
 			"expires_at": _expires_iso(now),
 		}
+		# A public, still-in-lobby contest carries a uniform random `lobby_key` in
+		# [0,1). The browse-lobby fetches a random slice with a single ranged query on
+		# this one field (see load_lobby_contests) — no composite index, one read.
+		# Private contests omit the field entirely, so they never surface there; on
+		# start we drop it below range (see start_contest) so started contests leave
+		# the lobby.
+		if is_public:
+			meta["lobby_key"] = randf()
 		await _write_contest(cid, meta, false)
 		await _write_member(cid, _new_member_row(cid, true, now))
 		emit_signal("my_contests_changed")
+		BadgeManager.note_contest_hosted()   # "Host With Most" badge
 		return {"ok": true, "id": cid}
 	return {"ok": false, "error": "id_collision"}
 
@@ -233,12 +248,31 @@ func join_contest(raw_id: String) -> Dictionary:
 	var now := _now()
 	await _write_member(cid, _new_member_row(cid, false, now))
 	# member_count is a display/delete hint; recomputed authoritatively on leave.
+	# Derive it from the pre-write roster deduped by uid, counting myself exactly
+	# once — a plain members.size()+1 double-counts me (→ "3 registered" for 2
+	# players) whenever the read already saw my own row: Firestore's REST reads are
+	# eventually consistent, and a re-tapped/retried join can slip my just-written
+	# row into the contest_id query before the uid "already a member" check sees it.
 	await _write_contest(cid, {
-		"member_count": members.size() + 1,
+		"member_count": _distinct_member_count(members, _uid()),
 		"expires_at": _expires_iso(now),
 	}, true)
 	emit_signal("my_contests_changed")
+	BadgeManager.note_contest_joined()   # "Challenger" / "Regular" badges
 	return {"ok": true}
+
+# Number of distinct participants given a roster read + the caller's own uid
+# (always counted, even if the read didn't return my row yet). De-duping by uid
+# makes the count idempotent, so a stale/racey read can never inflate it.
+func _distinct_member_count(members: Array, self_uid: String) -> int:
+	var uids := {}
+	for m in members:
+		var u := String(m.get("uid", ""))
+		if not u.is_empty():
+			uids[u] = true
+	if not self_uid.is_empty():
+		uids[self_uid] = true
+	return uids.size()
 
 # =====================================================================
 #  START  (creator only)
@@ -259,6 +293,9 @@ func start_contest(cid: String) -> Dictionary:
 		"status": "active",
 		"started_at": now,
 		"deadline_at": deadline,
+		# Drop below the [0,1) key range so a started contest disappears from the
+		# browse-lobby query (harmless no-op for contests that were never public).
+		"lobby_key": -1.0,
 		"expires_at": _expires_iso(now),
 	}, true)
 	emit_signal("contest_updated", cid)
@@ -428,6 +465,61 @@ func load_my_contests() -> Array:
 			"my_best": int(m.get("best_score", 0)),
 		})
 	return out
+
+# =====================================================================
+#  BROWSE LOBBY  (public, still-in-lobby contests)
+# =====================================================================
+
+# Up to LOBBY_FETCH public contests that are open (status == lobby) and not yet
+# started, chosen (pseudo-)randomly with a SINGLE cheap read.
+#
+# How the randomness is cheap: every public lobby contest owns a uniform random
+# `lobby_key` in [0,1). We pick a random pivot and fetch the next slice ascending
+# from it (`lobby_key >= pivot`, ordered, limited). That's one ranged query on a
+# single auto-indexed field — no per-contest reads, no composite index. Each
+# "Reshuffle" is just a new pivot => a fresh random slice. If the pivot lands high
+# in the key space the slice can be short; that's fine (the screen re-rolls), and
+# it's the price of honouring the one-read constraint.
+#
+# Each row is returned already-decoded from the query result, so the caller shows
+# title / mode / difficulty / member_count without spending another read.
+func load_lobby_contests() -> Array:
+	var pivot := randf()
+	var rows: Array
+	if _is_editor:
+		rows = _sim_lobby(pivot)
+	else:
+		rows = await _rest_query_lobby(pivot)
+	# Defensive client-side filter: only truly-open public rooms (guards races where a
+	# contest started between indexing and our read).
+	var out: Array = []
+	for meta in rows:
+		if not (meta is Dictionary):
+			continue
+		if String(meta.get("status", "")) != "lobby":
+			continue
+		if not bool(meta.get("is_public", false)):
+			continue
+		out.append({
+			"id": String(meta.get("id", "")),
+			"title": String(meta.get("title", "Contest")),
+			"type": String(meta.get("type", "")),
+			"difficulty": String(meta.get("difficulty", "easy")),
+			"member_count": int(meta.get("member_count", 1)),
+			"is_creator": String(meta.get("creator_uid", "")) == _uid(),
+		})
+	return out
+
+func _sim_lobby(pivot: float) -> Array:
+	var out: Array = []
+	for cid in _sim_contests:
+		var m: Dictionary = _sim_contests[cid]
+		if not m.has("lobby_key"):
+			continue
+		if float(m.get("lobby_key", -1.0)) >= pivot:
+			out.append(m.duplicate(true))
+	out.sort_custom(func(a, b): return float(a.get("lobby_key", 0.0)) < float(b.get("lobby_key", 0.0)))
+	return out.slice(0, LOBBY_FETCH)
 
 # =====================================================================
 #  KICK / FINALIZE-NOW  (creator)
@@ -800,6 +892,40 @@ func _rest_query_members(field: String, value: String) -> Array:
 			"value": {"stringValue": value},
 		}},
 		"limit": MAX_MEMBERS,
+	}}
+	for attempt in 3:
+		var r := await _http_post(_FB_BASE + ":runQuery", body)
+		if r[1] == 200:
+			var j := JSON.new()
+			j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+			var out: Array = []
+			if j.data is Array:
+				for env in j.data:
+					if not (env is Dictionary):
+						continue
+					var doc: Variant = env.get("document", null)
+					if not (doc is Dictionary):
+						continue
+					out.append(_fields(doc.get("fields", {})))
+			return out
+		if attempt < 2:
+			await get_tree().create_timer(1.0).timeout
+	return []
+
+# runQuery on contests: a single ranged query for public lobby rooms. Filters on
+# `lobby_key >= pivot` and orders by it (one auto-indexed field, no composite index
+# needed — private/started contests carry no in-range key, so they're excluded).
+# Returns Array of decoded contest metas (id folded in from the doc name).
+func _rest_query_lobby(pivot: float) -> Array:
+	var body := {"structuredQuery": {
+		"from": [{"collectionId": _COLL}],
+		"where": {"fieldFilter": {
+			"field": {"fieldPath": "lobby_key"},
+			"op": "GREATER_THAN_OR_EQUAL",
+			"value": {"doubleValue": pivot},
+		}},
+		"orderBy": [{"field": {"fieldPath": "lobby_key"}, "direction": "ASCENDING"}],
+		"limit": LOBBY_FETCH,
 	}}
 	for attempt in 3:
 		var r := await _http_post(_FB_BASE + ":runQuery", body)

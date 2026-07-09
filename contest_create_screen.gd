@@ -32,6 +32,9 @@ var _sug_dice: Button
 # Step 2 / 3 selections.
 var _type_cards: Array[Dictionary] = []
 var _diff_pills: Array[Dictionary] = []
+# Step 3 also picks visibility (public = listed in the browse-lobby / private = ID only).
+var _vis_cards: Array[Dictionary] = []
+var _selected_public := true
 
 # Bottom navigation.
 var _prev_btn: Button
@@ -92,6 +95,7 @@ func _ready() -> void:
 	_build_overlay()
 	_refresh_type_styles()
 	_refresh_diff_styles()
+	_refresh_vis_styles()
 	_show_step()
 	_layout()
 	get_viewport().size_changed.connect(_layout)
@@ -347,6 +351,66 @@ func _build_step3() -> void:
 		_diff_pills.append({"btn": btn, "diff": diff, "sb_on": sb_on, "sb_off": sb_off,
 			"lbl": lbl, "accent": accent})
 
+	# Visibility picker (public listed in the browse-lobby / private = ID only).
+	var vcap := _section_caption("Who can join?")
+	vcap.name = "vcap"
+	_step3.add_child(vcap)
+	var vis_opts := [
+		{"public": true, "title": "Public", "desc": "Listed in the lobby —\nanyone can find & join"},
+		{"public": false, "title": "Private", "desc": "Hidden — only people\nwith the ID can join"},
+	]
+	for opt in vis_opts:
+		var is_pub: bool = opt["public"]
+		var accent: Color = ArenaUI.ACCENT if is_pub else ArenaUI.SAND
+		var card := Button.new()
+		card.focus_mode = Control.FOCUS_NONE
+		var sb_off := StyleBoxFlat.new()
+		sb_off.bg_color = Color(0.09, 0.10, 0.22, 0.72)
+		sb_off.set_corner_radius_all(18)
+		sb_off.border_color = Color(accent.r, accent.g, accent.b, 0.32)
+		sb_off.set_border_width_all(1)
+		var sb_on := StyleBoxFlat.new()
+		sb_on.bg_color = Color(accent.r, accent.g, accent.b, 0.20)
+		sb_on.set_corner_radius_all(18)
+		sb_on.border_color = Color(accent.r, accent.g, accent.b, 0.95)
+		sb_on.set_border_width_all(2)
+		sb_on.shadow_color = Color(accent.r, accent.g, accent.b, 0.4)
+		sb_on.shadow_size = 12
+		for st in ["normal", "hover", "pressed", "focus"]:
+			card.add_theme_stylebox_override(st, sb_off)
+		_step3.add_child(card)
+
+		var title_lbl := Label.new()
+		title_lbl.text = String(opt["title"])
+		title_lbl.add_theme_font_size_override("font_size", 22)
+		title_lbl.add_theme_color_override("font_color", Color.WHITE)
+		title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(title_lbl)
+		var desc_lbl := Label.new()
+		desc_lbl.text = String(opt["desc"])
+		desc_lbl.add_theme_font_size_override("font_size", 13)
+		desc_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
+		desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		desc_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card.add_child(desc_lbl)
+
+		card.pressed.connect(func() -> void:
+			_selected_public = is_pub
+			_refresh_vis_styles())
+		_vis_cards.append({"btn": card, "public": is_pub, "sb_on": sb_on, "sb_off": sb_off,
+			"title_lbl": title_lbl, "desc_lbl": desc_lbl, "accent": accent})
+
+func _refresh_vis_styles() -> void:
+	for d in _vis_cards:
+		var on: bool = bool(d["public"]) == _selected_public
+		var sb: StyleBoxFlat = d["sb_on"] if on else d["sb_off"]
+		for st in ["normal", "hover", "pressed", "focus"]:
+			(d["btn"] as Button).add_theme_stylebox_override(st, sb)
+		var accent: Color = d["accent"]
+		(d["title_lbl"] as Label).add_theme_color_override("font_color",
+			accent.lightened(0.45) if on else Color.WHITE)
+
 func _refresh_diff_styles() -> void:
 	for d in _diff_pills:
 		var on: bool = d["diff"] == _selected_diff
@@ -468,6 +532,25 @@ func _layout() -> void:
 		(d["btn"] as Button).position = Vector2(dx, diff_top)
 		dx += dw + gap
 
+	# Step 3 — visibility cards, under the difficulty pills.
+	var vcap: Label = _step3.get_node("vcap")
+	var vis_top := diff_top + dh + 34.0
+	vcap.size = Vector2(sz.x, 30); vcap.position = Vector2(0, vis_top)
+	var vcard_top := vis_top + 44.0
+	var vw: float = clampf((sz.x - 100.0) / 2.0 - 16.0, 170.0, 260.0)
+	var vh := 92.0
+	var vtotal := vw * 2.0 + gap
+	var vx := cx - vtotal * 0.5
+	for d in _vis_cards:
+		var card: Button = d["btn"]
+		card.size = Vector2(vw, vh)
+		card.position = Vector2(vx, vcard_top)
+		var title_lbl: Label = d["title_lbl"]
+		title_lbl.position = Vector2(0, 16); title_lbl.size = Vector2(vw, 28)
+		var desc_lbl: Label = d["desc_lbl"]
+		desc_lbl.position = Vector2(8, 48); desc_lbl.size = Vector2(vw - 16, 40)
+		vx += vw + gap
+
 	# Bottom nav — primary centered, step-back to its left.
 	var nav_y := sz.y - 96.0
 	_primary_btn.size = Vector2(260, 58)
@@ -526,7 +609,8 @@ func _on_create() -> void:
 	if _name_edit.text.strip_edges().is_empty():
 		_name_edit.text = ContestManager.random_title()
 	_set_overlay(true, "Creating…")
-	var res: Dictionary = await ContestManager.create_contest(_selected_type, _selected_diff, _name_edit.text)
+	var res: Dictionary = await ContestManager.create_contest(_selected_type, _selected_diff,
+		_name_edit.text, _selected_public)
 	if not is_inside_tree():
 		return
 	_set_overlay(false)

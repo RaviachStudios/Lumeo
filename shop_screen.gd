@@ -42,7 +42,7 @@ const CATEGORIES := [
 			"midnight", "indigo", "sunset", "crimson", "slate", "skybound",
 			"rainbow", "forest", "desert", "speedway", "reef", "kitty",
 			"cosmos", "neon",
-			"inferno", "clouds", "aurora", "fairies", "deepspace"],
+			"inferno", "clouds", "aurora", "fairies", "deepspace", "castle"],
 	},
 	# Wheel colour customization. No flat `items` list — its content (live wheel
 	# preview + the three per-part colour tiles) is built specially in
@@ -135,14 +135,28 @@ var _grid: GridContainer
 var _cards_by_id: Dictionary = {}        # theme_id -> { root, btn, btn_label, price_label, badge }
 var _current_cat: String = "themes"
 
+# --- loading overlay ---
+# Covers the shop while its previews bake + its panels build, so the store is fully
+# seamless the moment it appears (same orbiting-orb language as the leaderboards /
+# boot loading screens). Lifted by _begin_load once everything is ready.
+var _ov: Panel
+var _ov_orbit: Node2D
+var _ov_orbs: Array[Node2D] = []
+var _ov_caption: Label
+var _ov_dots_idx := 0
+var _loaded := false
+
 # --- SIMON tab ---
 const SIMON_ACCENT := Color(0.58, 0.46, 1.00)
 var _simon_root: Control                 # SIMON colour panel (built lazily)
 var _simon_preview: SimonWheel           # live wheel reflecting the equipped colours
 var _simon_tiles_box: Control            # holds the three colour tiles
 var _simon_tiles: Dictionary = {}        # category -> {swatch}
-var _skins_root: Control                 # SPECIAL SKINS panel (built lazily)
-var _skins_by_id: Dictionary = {}        # skin_id -> {root, btn, btn_label, price_label, accent, preview}
+var _skins_root: Control                 # SPECIAL SKINS panel (built lazily) — the ScrollContainer
+										 # card grid, or a plain Control placeholder when detached
+										 # (SKINS_COMING_SOON). Cast to ScrollContainer for scroll ops.
+var _skins_grid: GridContainer           # the card grid inside _skins_root
+var _skins_by_id: Dictionary = {}        # skin_id -> {root, btn, btn_label, price_label, accent, preview, y}
 # Colour popup (opened from a tile):
 var _color_popup: Control
 var _popup_category: String = ""
@@ -178,43 +192,105 @@ func _ready() -> void:
 	# new global theme (or vanishes to grey when the player re-equips default),
 	# and the change only becomes visible after navigating back to home.
 	CoinsManager.themes_changed.connect(_sync_local_background)
-	_render_category(_current_cat)
-	# Warm the compiler for every THEMES preview shader up front (spread one-per-frame),
-	# so scrolling the grid never hitches on a first-draw shader compile. Live previews
-	# themselves are unchanged — this only pre-compiles their shaders.
+	# Everything the shop shows is already resident in CoinsManager (loaded on the
+	# boot loading screen) — there is nothing to fetch here. The lag came from the
+	# VISUALS: the THEMES grid drew ~20 full-screen animated shaders at once, and the
+	# other panels' live wheels were built on first tab tap. So we hold a loading
+	# overlay and prepare it all up front (bake previews + build panels) before the
+	# store appears. See _begin_load.
+	_build_loading_overlay()
+	_begin_load()
+
+# Shop open sequence, run behind the loading overlay so navigation is seamless the
+# moment the veil lifts. No network work — all data is already in CoinsManager.
+func _begin_load() -> void:
+	_show_loading()
+	# Let the loading overlay actually paint BEFORE we block the main thread building the
+	# store. Everything below (the 21-card grid + the SIMON/SKINS panels) is constructed
+	# synchronously, so without this yield the veil only appears after that freeze — the
+	# shop button would feel unresponsive. Two frames guarantees the overlay has rendered,
+	# so the loading screen shows the instant the shop opens.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	var theme_items: Array = []
 	for c in CATEGORIES:
 		if c["key"] == "themes":
-			BackgroundManager.prewarm_previews(c.get("items", []))
+			theme_items = c.get("items", [])
 			break
-	# Same warm-up for each SPECIAL SKINS card's bespoke background (e.g. the Volcano
-	# night-castle scene) — it's a plain invisible ColorRect until that tab is shown,
-	# so its (large) shader would otherwise compile on the first draw right as the
-	# player taps SPECIAL SKINS. The wheel's own coal/lava materials don't need this:
-	# apply_skin already kicks its SubViewport into UPDATE_ALWAYS for an animated skin,
-	# so those compile in the background the moment _prebuild_panels runs below.
-	var skin_ids: Array[String] = []
-	for d in SKIN_DEFS:
-		skin_ids.append(String(d["id"]))
-	BackgroundManager.prewarm_skin_previews(skin_ids)
-	# Pre-build the SIMON and SKINS panels one frame after the shop paints, while
-	# they're still hidden. Both are built lazily on first toggle otherwise, which
-	# avoids a construction hitch — constructing the live SimonWheel previews + tiles
-	# is real CPU cost, not any Firestore fetch (all that data is already in
-	# CoinsManager). Deferring keeps the shop's first paint snappy.
-	call_deferred("_prebuild_panels")
+	# Pre-compile every THEMES preview shader + each SKINS card's background, one per
+	# frame, so no tile hitches on a first-draw shader compile. Previews stay fully
+	# LIVE/animated — what keeps scrolling smooth is that the shop only lets the tiles
+	# actually IN the visible scroll band keep drawing (see _update_preview_visibility),
+	# so at most a handful of shaders run at once instead of all ~20.
+	BackgroundManager.prewarm_previews(theme_items)
+	# Skip the skin-preview prewarm entirely while the SPECIAL SKINS tab is detached —
+	# the placeholder renders no wheels, so there's nothing to warm.
+	if not SKINS_COMING_SOON:
+		var skin_ids: Array[String] = []
+		for d in SKIN_DEFS:
+			skin_ids.append(String(d["id"]))
+		BackgroundManager.prewarm_skin_previews(skin_ids)
+	# Render the THEMES grid and build the SIMON + SKINS panels while the overlay still
+	# hides the construction. These are the two heaviest bursts in the shop, so both run
+	# in INCREMENTAL mode — yielding frames as they build — so the loading overlay's orbit
+	# tween keeps ticking instead of freezing the moment the shop opens.
+	await _render_category(_current_cat, true)
+	if not is_inside_tree():
+		return
+	await _prebuild_panels()
+	if not is_inside_tree():
+		return
+	# Give the SPECIAL SKINS preview wheels a couple of frames to render once behind the veil
+	# (paying the first-draw shader upload during loading — see _prebuild_panels), then idle
+	# the hidden wheels since we open on THEMES. The first switch to that tab then just kicks
+	# a redraw of the already-built wheels instead of building/first-drawing them.
+	# This MUST happen before the prewarm wait below: an animated skin's wheel renders
+	# UPDATE_ALWAYS while unpaused, so leaving all 7 live 3D viewports drawing every frame
+	# for the whole shader-compile wait is what made the loading orbit animation stutter.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	if _current_cat != "skins":
+		_set_skins_preview_paused(true)
+	# Hold the veil until every preview shader has finished compiling. With the skin
+	# wheels now idled, these frames are cheap, so the orbit animation stays smooth
+	# however long the compile queue takes to drain.
+	while BackgroundManager.is_prewarming() and is_inside_tree():
+		await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	_loaded = true
+	_hide_loading()
+	_update_preview_visibility()
 
 # Builds the non-default category panels ahead of time so switching to them is
-# instant. Each builder add_child()s its root; we hide them again afterwards so
-# only the active category shows. Safe to call once — guarded by the null checks.
+# instant. Each builder add_child()s its root; SIMON is hidden immediately, but the
+# SKINS panel is left VISIBLE (under the veil) so its 3D preview wheels actually render
+# — _begin_load hides + idles it once that render has happened. Yields a frame between
+# the two panels so the loading overlay's animation keeps ticking during the build.
+# Safe to call once — guarded by the null checks.
 func _prebuild_panels() -> void:
 	if not is_inside_tree():
 		return
 	if _simon_root == null:
 		_build_simon_panel()
 		_simon_root.visible = false
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
 	if _skins_root == null:
-		_build_skins_panel()
+		await _build_skins_panel(true)
+		if not is_inside_tree():
+			return
 		_skins_root.visible = false
+	# Keep the panel hidden but leave its preview wheels UNPAUSED for now, so each renders its
+	# 3D scene once behind the veil (a SubViewport renders on its own render target regardless
+	# of whether its container is visible). That pays the first-draw shader upload during
+	# loading instead of on the first tab switch. _begin_load idles them after that window.
+	_set_skins_preview_paused(false)
 	_layout()
 
 # ---------------- background ----------------
@@ -607,13 +683,20 @@ func _build_grid() -> void:
 	_grid_scroll = ScrollContainer.new()
 	_grid_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(_grid_scroll)
+	# As the grid scrolls, keep only the tiles in view drawing their live shader.
+	_grid_scroll.get_v_scroll_bar().value_changed.connect(
+		func(_v: float) -> void: _update_preview_visibility())
 	_grid = GridContainer.new()
 	_grid.columns = GRID_COLS
 	_grid.add_theme_constant_override("h_separation", int(CARD_GAP_X))
 	_grid.add_theme_constant_override("v_separation", int(CARD_GAP_Y))
 	_grid_scroll.add_child(_grid)
 
-func _render_category(key: String) -> void:
+# `incremental` (used only during the initial load, behind the veil) yields a frame every
+# few theme cards so the loading overlay's animation keeps ticking instead of freezing while
+# all ~21 cards + their preview shaders build in one synchronous burst. Tab switches call it
+# without the flag so the grid still swaps in a single frame.
+func _render_category(key: String, incremental := false) -> void:
 	# THEMES uses the card grid; SIMON and SPECIAL SKINS each have a bespoke panel.
 	# Hide them all, then show the one for this category.
 	_grid_scroll.visible = false
@@ -621,6 +704,9 @@ func _render_category(key: String) -> void:
 		_simon_root.visible = false
 	if _skins_root:
 		_skins_root.visible = false
+	# Any SPECIAL SKINS preview wheels idle while their tab is hidden; the skins branch
+	# below resumes them when that tab is the one being shown.
+	_set_skins_preview_paused(true)
 
 	if key == "simon":
 		if _simon_root == null:
@@ -633,9 +719,17 @@ func _render_category(key: String) -> void:
 		if _skins_root == null:
 			_build_skins_panel()
 		_skins_root.visible = true
+		# The detached placeholder is a plain Control (no scroll_vertical); the real
+		# panel is a ScrollContainer that we reset to the top on show.
+		if not SKINS_COMING_SOON:
+			(_skins_root as ScrollContainer).scroll_vertical = 0
 		_refresh_skin_cards()
-		_refresh_skin_previews()
 		_layout()
+		# Resume only the wheels actually in the scroll band — not a blanket wake of all 7.
+		# The skins are static and were already applied at build time, so there's no need to
+		# re-apply them here; that per-switch rebuild of every wheel's materials (plus waking
+		# all 7 viewports at once) was the tab-switch lag.
+		_update_skin_preview_visibility()
 		return
 
 	_grid_scroll.visible = true
@@ -650,11 +744,29 @@ func _render_category(key: String) -> void:
 			break
 	if cat.is_empty():
 		return
+	var idx := 0
 	for theme_id in cat.get("items", []):
 		var card := _make_card(theme_id, cat["accent"])
+		# Grid-local top of this card's row, so _update_preview_visibility can tell
+		# which tiles are within the scroll band without waiting for a layout pass.
+		card["y"] = float(int(idx / GRID_COLS)) * (CARD_H + CARD_GAP_Y)
 		_grid.add_child(card["root"])
 		_cards_by_id[theme_id] = card
+		idx += 1
+		# During the incremental load, keep each preview hidden as it's added so we never
+		# animate all ~21 shaders at once behind the veil, and breathe every few cards so
+		# the overlay animation keeps running. _update_preview_visibility re-enables the
+		# on-screen band at the end.
+		if incremental:
+			var pv: Control = card.get("preview")
+			if pv:
+				pv.visible = false
+			if idx % 4 == 0:
+				await get_tree().process_frame
+				if not is_inside_tree():
+					return
 	_refresh_cards()
+	_update_preview_visibility()
 
 # A centred "coin + price" block to drop inside a buy button, so the button
 # itself shows the cost (no separate price row, no "need X" copy). Returns the
@@ -752,7 +864,7 @@ func _make_card(theme_id: String, accent: Color) -> Dictionary:
 	btn.pressed.connect(func() -> void: _on_action(theme_id))
 	return {
 		"root": root, "btn": btn, "price_box": price["box"],
-		"price_label": price["label"], "accent": accent,
+		"price_label": price["label"], "accent": accent, "preview": preview,
 	}
 
 # Apply BUY / EQUIP / EQUIPPED visual state to all cards in the current grid.
@@ -760,6 +872,26 @@ func _refresh_cards() -> void:
 	for theme_id in _cards_by_id:
 		var c: Dictionary = _cards_by_id[theme_id]
 		_apply_card_state(theme_id, c)
+
+# Keep only the preview tiles within (or just outside) the visible scroll band drawing
+# their live shader; hide the rest. Previews stay fully animated — we simply don't pay
+# to render the ones you can't see, so the grid never draws all ~20 animated shaders at
+# once (that simultaneous cost was the scroll/tab lag). Recomputed on scroll + re-render.
+func _update_preview_visibility() -> void:
+	if _grid_scroll == null or not _grid_scroll.visible:
+		return
+	var sv := float(_grid_scroll.scroll_vertical)
+	var vh := _grid_scroll.size.y
+	var margin := CARD_H * 0.6      # begin animating a bit before a tile scrolls in
+	for theme_id in _cards_by_id:
+		var c: Dictionary = _cards_by_id[theme_id]
+		var preview: Control = c.get("preview")
+		if preview == null:
+			continue
+		var y: float = c.get("y", 0.0)
+		var on := (y + CARD_H > sv - margin) and (y < sv + vh + margin)
+		if preview.visible != on:
+			preview.visible = on
 
 func _apply_card_state(theme_id: String, c: Dictionary) -> void:
 	var btn: Button = c["btn"]
@@ -908,10 +1040,21 @@ const SKIN_CARD_W := 360.0
 const SKIN_CARD_H := 470.0
 const SKIN_PREVIEW := 260.0
 const SKIN_PREVIEW_LOGICAL := 380.0   # render the live wheel at this logical size
-                                       # then scale down (same trick as the SIMON
-                                       # tab's preview — keeps the inner numeral/hub
-                                       # proportions correct at preview scale).
+									   # then scale down (same trick as the SIMON
+									   # tab's preview — keeps the inner numeral/hub
+									   # proportions correct at preview scale).
 const SKIN_CARD_GAP := 32.0
+# The SPECIAL SKINS cards live in a scrolling grid (same as the THEMES tab) so more
+# skins than fit on screen wrap onto extra rows instead of running off the side.
+const SKIN_GRID_COLS := 3
+const SKIN_GRID_SCROLLBAR_W := 14.0
+
+# The current skin set isn't ready to ship, so the SPECIAL SKINS tab is DETACHED
+# for this release: instead of the card grid it shows a "To be continued" placeholder.
+# Nothing below is deleted — the whole skin card / preview pipeline stays intact and
+# the tab comes back the moment this flips to false (also re-enables the skin-preview
+# prewarm in _begin_load). See _build_skins_panel / _build_skins_coming_soon.
+const SKINS_COMING_SOON := true
 
 # Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
 # Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
@@ -919,25 +1062,133 @@ const SKIN_CARD_GAP := 32.0
 # absent the card renders just the title (used for VOLCANO).
 const SKIN_DEFS := [
 	{"id": "inferno", "label": "VOLCANO"},
+	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
+	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
+	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin."},
+	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
+	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets."},
+	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
 ]
 
-func _build_skins_panel() -> void:
-	# Total width = N cards laid out horizontally with SKIN_CARD_GAP between them.
-	var total_w := SKIN_DEFS.size() * SKIN_CARD_W + maxi(0, SKIN_DEFS.size() - 1) * SKIN_CARD_GAP
-	_skins_root = Control.new()
-	_skins_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skins_root.custom_minimum_size = Vector2(maxf(total_w, SIMON_PANEL_W), SKIN_CARD_H)
-	_skins_root.size = Vector2(maxf(total_w, SIMON_PANEL_W), SKIN_CARD_H)
+# `incremental` (initial load, behind the veil) yields a frame between skin cards so the
+# loading overlay keeps animating instead of freezing while all 7 live 3D preview wheels —
+# the single heaviest build in the shop — are constructed in one synchronous burst.
+func _build_skins_panel(incremental := false) -> void:
+	# Detached for this release — show the placeholder instead of the card grid.
+	if SKINS_COMING_SOON:
+		_build_skins_coming_soon()
+		return
+	# A vertically scrolling card grid — same structure as the THEMES tab — so the
+	# skins wrap onto extra rows and scroll instead of overflowing horizontally.
+	# (_skins_root is typed Control so it can also hold the detached placeholder, so
+	# use a locally-typed ScrollContainer for the scroll-specific setup here.)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_skins_root = scroll
 	add_child(_skins_root)
+	# As the list scrolls, idle the live preview wheels that scroll out of view.
+	scroll.get_v_scroll_bar().value_changed.connect(
+		func(_v: float) -> void: _update_skin_preview_visibility())
+	_skins_grid = GridContainer.new()
+	_skins_grid.columns = SKIN_GRID_COLS
+	_skins_grid.add_theme_constant_override("h_separation", int(SKIN_CARD_GAP))
+	_skins_grid.add_theme_constant_override("v_separation", int(SKIN_CARD_GAP))
+	_skins_root.add_child(_skins_grid)
 	_skins_by_id.clear()
-	var origin_x := (_skins_root.size.x - total_w) * 0.5
 	for i in SKIN_DEFS.size():
 		var def: Dictionary = SKIN_DEFS[i]
 		var card := _make_skin_card(def)
-		card["root"].position = Vector2(origin_x + i * (SKIN_CARD_W + SKIN_CARD_GAP), 0)
-		_skins_root.add_child(card["root"])
+		# Grid-local top of this card's row, so _update_skin_preview_visibility can
+		# tell which cards are within the scroll band (mirrors the THEMES grid).
+		card["y"] = float(int(i / SKIN_GRID_COLS)) * (SKIN_CARD_H + SKIN_CARD_GAP)
+		_skins_grid.add_child(card["root"])
+		# Configure the preview wheel now that its card is IN THE TREE — off-tree
+		# configuration mis-sized the SubViewport and mis-aimed the camera.
+		var wheel: SimonWheel = card["preview"]
+		wheel.configure(5, PREVIEW_COLORS)
+		wheel.set_level(1)
+		wheel.set_overlay_compact(0.52, false)
+		wheel.apply_skin(null, null, null, String(def["id"]))
 		_skins_by_id[def["id"]] = card
+		if incremental:
+			await get_tree().process_frame
+			if not is_inside_tree():
+				return
 	_refresh_skin_cards()
+
+# Placeholder shown while the SPECIAL SKINS tab is detached (SKINS_COMING_SOON).
+# A single centred glass card in the shop's visual language: no live wheels, no
+# purchase flow — just a "To be continued" note. _skins_root is a plain Control here
+# (not the usual ScrollContainer), and _skins_by_id stays empty so every skin helper
+# (_refresh_skin_cards / _set_skins_preview_paused / _update_skin_preview_visibility)
+# no-ops naturally. The card is centre-anchored so it re-centres as _layout resizes
+# the panel.
+func _build_skins_coming_soon() -> void:
+	_skins_root = Control.new()
+	_skins_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_skins_root)
+
+	var cw := 480.0
+	var ch := 260.0
+	var card := Panel.new()
+	# Centre-anchor within _skins_root so it stays put through resizes / rotation.
+	card.anchor_left = 0.5
+	card.anchor_top = 0.5
+	card.anchor_right = 0.5
+	card.anchor_bottom = 0.5
+	card.offset_left = -cw * 0.5
+	card.offset_top = -ch * 0.5
+	card.offset_right = cw * 0.5
+	card.offset_bottom = ch * 0.5
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.06, 0.08, 0.20, 0.92)
+	cs.set_corner_radius_all(24)
+	cs.border_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.7)
+	cs.set_border_width_all(2)
+	cs.shadow_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.35)
+	cs.shadow_size = 18
+	card.add_theme_stylebox_override("panel", cs)
+	_skins_root.add_child(card)
+
+	# Diamond accent, matching the tab / header convention.
+	var diamond := _make_diamond(16.0, SKIN_ACCENT.lightened(0.35))
+	diamond.position = Vector2(cw * 0.5, 44)
+	card.add_child(diamond)
+
+	var eyebrow := Label.new()
+	eyebrow.text = "SPECIAL SKINS"
+	eyebrow.add_theme_font_size_override("font_size", 18)
+	eyebrow.add_theme_color_override("font_color", SKIN_ACCENT.lightened(0.2))
+	eyebrow.position = Vector2(24, 74)
+	eyebrow.size = Vector2(cw - 48, 26)
+	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	eyebrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(eyebrow)
+
+	var title := Label.new()
+	title.text = "To be continued…"
+	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.5))
+	title.add_theme_constant_override("shadow_offset_x", 0)
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	title.add_theme_constant_override("shadow_outline_size", 9)
+	title.position = Vector2(24, 108)
+	title.size = Vector2(cw - 48, 54)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(title)
+
+	var sub := Label.new()
+	sub.text = "New wheel skins are on the way."
+	sub.add_theme_font_size_override("font_size", 17)
+	sub.add_theme_color_override("font_color", Color(0.80, 0.82, 0.95, 0.80))
+	sub.position = Vector2(24, 178)
+	sub.size = Vector2(cw - 48, 26)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(sub)
 
 func _make_skin_card(def: Dictionary) -> Dictionary:
 	var skin_id: String = def["id"]
@@ -945,7 +1196,9 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	var root := Panel.new()
 	root.custom_minimum_size = Vector2(SKIN_CARD_W, SKIN_CARD_H)
 	root.size = Vector2(SKIN_CARD_W, SKIN_CARD_H)
-	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	# PASS (not STOP) so a drag starting on the card body still reaches the
+	# ScrollContainer as a scroll; the buy/equip button keeps its default STOP.
+	root.mouse_filter = Control.MOUSE_FILTER_PASS
 	var cs := StyleBoxFlat.new()
 	cs.bg_color = Color(0.06, 0.08, 0.20, 0.94)
 	cs.set_corner_radius_all(24)
@@ -987,11 +1240,11 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	wheel.scale = Vector2(pscale, pscale)
 	wheel.position = Vector2((clip.size.x - SKIN_PREVIEW) * 0.5, (clip.size.y - SKIN_PREVIEW) * 0.5)
 	clip.add_child(wheel)
-	wheel.configure(5, PREVIEW_COLORS)
-	wheel.set_level(1)
-	wheel.set_overlay_compact(0.52, false)
-	# Apply the skin (rings + hub + numeral get re-tinted, flame overlay spawns).
-	wheel.apply_skin(null, null, null, skin_id)
+	# NOTE: the wheel is configured LATER (see _build_skins_panel) — only AFTER this
+	# card is added to the tree. Building/configuring it off-tree left the SubViewport
+	# mis-sized (2× → only the top-left quarter showed) and mis-aimed (blank), because
+	# SubViewportContainer sizing + Camera3D.look_at both need an in-tree node. The
+	# SIMON tab preview works precisely because it configures its wheel in-tree.
 
 	# Name + blurb, below the preview.
 	var name_lbl := Label.new()
@@ -1097,12 +1350,38 @@ func _apply_skin_card_state(skin_id: String, c: Dictionary) -> void:
 
 # Re-applies each card's skin to its preview wheel. Cheap; safe to call any time
 # the skin's appearance might have changed (e.g. catalog re-tuned during dev).
-func _refresh_skin_previews() -> void:
+# Idle (or resume) the SPECIAL SKINS cards' live preview wheels. Called with true when
+# their tab is hidden so an animated skin (e.g. Volcano's flames) stops rendering
+# off-screen and taxing the other tabs, and false when the tab is shown. No-op before
+# the panel is built.
+func _set_skins_preview_paused(paused: bool) -> void:
 	for skin_id in _skins_by_id:
 		var c: Dictionary = _skins_by_id[skin_id]
-		var w: SimonWheel = c["preview"]
-		if w != null:
-			w.apply_skin(null, null, null, skin_id)
+		var w: SimonWheel = c.get("preview")
+		if w != null and w.has_method("set_preview_paused"):
+			w.set_preview_paused(paused)
+
+# Keep only the skin cards within (or just outside) the visible scroll band running
+# their live preview wheel; idle the rest. Mirrors _update_preview_visibility for the
+# THEMES grid so scrolling the SKINS grid never drives every wheel at once. No-op when
+# the tab is hidden (the panel-level pause already idled them all).
+func _update_skin_preview_visibility() -> void:
+	if _skins_root == null or not _skins_root.visible:
+		return
+	# Detached placeholder: a plain Control with no live wheels to gate.
+	if SKINS_COMING_SOON:
+		return
+	var sv := float((_skins_root as ScrollContainer).scroll_vertical)
+	var vh := _skins_root.size.y
+	var margin := SKIN_CARD_H * 0.5
+	for skin_id in _skins_by_id:
+		var c: Dictionary = _skins_by_id[skin_id]
+		var w: SimonWheel = c.get("preview")
+		if w == null or not w.has_method("set_preview_paused"):
+			continue
+		var y: float = c.get("y", 0.0)
+		var on := (y + SKIN_CARD_H > sv - margin) and (y < sv + vh + margin)
+		w.set_preview_paused(not on)
 
 func _on_skin_action(skin_id: String) -> void:
 	if CoinsManager.owns_skin(skin_id):
@@ -1464,6 +1743,93 @@ func _close_color_popup() -> void:
 	_popup_category = ""
 	_popup_cards.clear()
 
+# ---------------- loading overlay ----------------
+
+func _build_loading_overlay() -> void:
+	_ov = Panel.new()
+	_ov.mouse_filter = Control.MOUSE_FILTER_STOP   # swallow taps while loading
+	_ov.z_index = 100                              # above cards, tabs, and the orbit orbs
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.008, 0.020, 0.075, 0.985)
+	_ov.add_theme_stylebox_override("panel", s)
+	add_child(_ov)
+
+	_ov_orbit = Node2D.new()
+	_ov.add_child(_ov_orbit)
+	var ring := _make_ring(2.0, Color(0.45, 0.55, 1.0, 0.18))
+	var pts := PackedVector2Array()
+	var n := 64
+	var r := 52.0
+	for i in n + 1:
+		var a: float = TAU * float(i) / n
+		pts.append(Vector2(cos(a), sin(a)) * r)
+	ring.points = pts
+	_ov_orbit.add_child(ring)
+	_ov_orbs.clear()
+	for i in ORB_COLORS.size():
+		var orb := _make_orb(ORB_COLORS[i])
+		orb.scale = Vector2.ONE * 0.55
+		var a: float = -PI * 0.5 + i * TAU / ORB_COLORS.size()
+		orb.position = Vector2(cos(a), sin(a)) * r
+		_ov_orbit.add_child(orb)
+		_ov_orbs.append(orb)
+
+	_ov_caption = Label.new()
+	_ov_caption.text = "Loading shop"
+	_ov_caption.add_theme_font_size_override("font_size", 24)
+	_ov_caption.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.92))
+	_ov_caption.add_theme_color_override("font_shadow_color", Color(0.30, 0.45, 1.0, 0.35))
+	_ov_caption.add_theme_constant_override("shadow_offset_x", 0)
+	_ov_caption.add_theme_constant_override("shadow_offset_y", 0)
+	_ov_caption.add_theme_constant_override("shadow_outline_size", 6)
+	_ov_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ov_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ov.add_child(_ov_caption)
+
+	var rot := create_tween().set_loops()
+	rot.tween_property(_ov_orbit, "rotation", TAU, 2.6).from(0.0).set_trans(Tween.TRANS_LINEAR)
+	for i in _ov_orbs.size():
+		var dur := 0.7 + i * 0.05
+		var base: Vector2 = _ov_orbs[i].scale
+		var pulse := create_tween().set_loops()
+		pulse.tween_property(_ov_orbs[i], "scale", base * 1.14, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		pulse.tween_property(_ov_orbs[i], "scale", base, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var dots := create_tween().set_loops()
+	dots.tween_interval(0.35)
+	dots.tween_callback(_ov_tick_dots)
+
+	_ov.visible = false
+	_layout_loading()
+
+func _ov_tick_dots() -> void:
+	if _ov_caption == null or _ov == null or not _ov.visible:
+		return
+	_ov_dots_idx = (_ov_dots_idx + 1) % 4
+	_ov_caption.text = "Loading shop" + ".".repeat(_ov_dots_idx)
+
+func _layout_loading() -> void:
+	if _ov == null:
+		return
+	var sz := get_viewport_rect().size
+	_ov.position = Vector2.ZERO
+	_ov.size = sz
+	if _ov_orbit:
+		_ov_orbit.position = Vector2(sz.x * 0.5, sz.y * 0.46)
+	if _ov_caption:
+		_ov_caption.size = Vector2(320, 32)
+		_ov_caption.position = Vector2(sz.x * 0.5 - 160, sz.y * 0.46 + 92)
+
+func _show_loading() -> void:
+	_layout_loading()
+	if _ov:
+		_ov.visible = true
+
+func _hide_loading() -> void:
+	if _ov:
+		_ov.visible = false
+
 # ---------------- layout ----------------
 
 func _layout() -> void:
@@ -1508,10 +1874,19 @@ func _layout() -> void:
 		_grid_scroll.position = Vector2(cx - scroll_w * 0.5, content_y)
 		_grid_scroll.size = Vector2(scroll_w,
 			maxf(0.0, sz.y - content_y - GRID_BOTTOM_MARGIN))
+		_update_preview_visibility()
 	if _simon_root:
 		_simon_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
 	if _skins_root:
-		_skins_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
+		var sgrid_w := SKIN_GRID_COLS * SKIN_CARD_W + (SKIN_GRID_COLS - 1) * SKIN_CARD_GAP
+		# Reserve scrollbar width so the cards themselves stay visually centred.
+		var sscroll_w := sgrid_w + SKIN_GRID_SCROLLBAR_W
+		_skins_root.position = Vector2(cx - sscroll_w * 0.5, content_y)
+		_skins_root.size = Vector2(sscroll_w,
+			maxf(0.0, sz.y - content_y - GRID_BOTTOM_MARGIN))
+		_update_skin_preview_visibility()
+
+	_layout_loading()
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()

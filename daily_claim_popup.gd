@@ -435,6 +435,7 @@ func _on_action() -> void:
 	var reward := CoinsManager.claim_daily()
 	if reward <= 0:
 		return
+	BadgeManager.note_daily_claimed(CoinsManager.streak_days)   # daily + streak badges
 	# Briefly flash the just-claimed cell (or the endless medallion when the
 	# grid isn't shown), then auto-close so the player sees the coin register.
 	_refresh_states()

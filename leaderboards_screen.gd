@@ -1483,6 +1483,13 @@ func _build_footer() -> void:
 # ---------------- render data ----------------
 
 func _render(d: Dictionary) -> void:
+	# Award leaderboard-placement badges from the player's shown rank (global vs daily).
+	var my_rank := int(d.get("my_rank", 0))
+	if my_rank > 0:
+		if _current_range == RANGE_ALL:
+			BadgeManager.note_rank(my_rank, false)
+		elif _current_range == RANGE_DAILY:
+			BadgeManager.note_rank(my_rank, true)
 	var rows: Array = d.get("rows", [])
 	_render_podium(rows)
 	_render_table(rows)

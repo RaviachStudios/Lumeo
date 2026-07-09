@@ -42,11 +42,15 @@ func setup(key: String, size: Vector2, bgmgr: Node) -> void:
 		"reef":
 			# rising bubble rings
 			_add_particles(_make_ring(), 10, 5.0, Color(0.55, 0.85, 0.92), 0.35, 0.60, 8.0, 18.0, 14.0, 0.55, 0.45, true)
-		"skin:inferno":
-			# night-castle ambience: faint twinkling stars high in the sky + a few
-			# warm torch embers rising near the castle on the left
+		"castle":
+			# Dragon's Keep night ambience: faint twinkling stars high in the sky + a
+			# few warm torch embers rising near the castle on the left.
 			_add_particles(dot, 26, 4.0, Color(0.85, 0.90, 1.0), 0.015, 0.05, 0.0, 0.0, 0.0, 0.20, 0.18, true)
 			_add_particles(dot, 10, 4.0, Color(1.0, 0.58, 0.20), 0.03, 0.08, 6.0, 16.0, 26.0, 0.60, 0.12, true, -1.0, 0.13, 0.06)
+		"skin:inferno":
+			# Volcano (lava-river) ambience: warm embers rising off the molten rivers
+			# across the whole scene (the flowing lava itself is drawn in the shader).
+			_add_particles(dot, 16, 4.0, Color(1.0, 0.55, 0.18), 0.02, 0.06, 8.0, 22.0, 30.0, 0.60, 0.44, true)
 		_:
 			pass
 	# only the kitty needs a per-frame gesture controller

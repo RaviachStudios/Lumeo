@@ -14,6 +14,7 @@ extends Control
 # Everything is laid out symmetrically and re-flowed in _layout() on resize.
 
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
+const ProfilePopup := preload("res://profile_screen.gd")
 const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
 const HomeTutorial := preload("res://home_tutorial.gd")
 
@@ -1124,6 +1125,18 @@ func _build_profile_card() -> void:
 		Color(0.45, 0.50, 1.0, 0.40), Color(0.30, 0.34, 0.85, 0.45))
 	add_child(_profile_card)
 
+	# Whole-card tap opens the player Profile. Added FIRST so it sits BEHIND the
+	# sign-in/out action and the settings gear — those stay tappable on top; the
+	# rest of the card (avatar/name) opens the profile.
+	var open_btn := Button.new()
+	open_btn.flat = true
+	open_btn.focus_mode = Control.FOCUS_NONE
+	open_btn.size = Vector2(W, H)
+	for s in ["normal", "hover", "pressed", "focus"]:
+		open_btn.add_theme_stylebox_override(s, StyleBoxEmpty.new())
+	open_btn.pressed.connect(_open_profile_popup)
+	_profile_card.add_child(open_btn)
+
 	var signed := FirebaseManager.is_signed_in() and FirebaseManager.has_display_name()
 	var uname := FirebaseManager.display_name if signed else "Guest"
 
@@ -1518,6 +1531,13 @@ func _refresh_daily_badge() -> void:
 
 func _open_daily_popup() -> void:
 	var popup := DailyClaimPopup.new()
+	add_child(popup)
+
+# Player profile opens as a modal popup over the home screen (not a screen swap),
+# so home stays painted behind the dim backdrop.
+func _open_profile_popup() -> void:
+	var popup := ProfilePopup.new()
+	popup.game_manager = game_manager
 	add_child(popup)
 
 # ---------------- settings popup ----------------

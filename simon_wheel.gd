@@ -1,6 +1,8 @@
 extends Control
 class_name SimonWheel
 
+const VolcanoCone = preload("res://volcano_cone.gd")
+
 # A 3D Simon wheel rendered through a SubViewport and shown as a 2D widget.
 # Geometry is generated procedurally from the segment count, so it adapts to
 # 4 / 5 / 6 buttons (easy / moderate / hard) with no per-count art.
@@ -88,6 +90,10 @@ var _start_angle := -PI * 0.5   # segment 0 centered toward top of screen
 
 var _vpc: SubViewportContainer
 var _vp: SubViewport
+# True while this wheel is an off-screen shop preview on a hidden tab: its viewport
+# is forced idle (UPDATE_DISABLED) so an animated skin can't keep burning GPU while
+# invisible. set_preview_paused(false) resumes it. See _update_render_activity.
+var _preview_paused := false
 var _cam: Camera3D
 var _wheel_root: Node3D
 var _segments: Array[MeshInstance3D] = []
@@ -127,7 +133,12 @@ var _skin_overlay_mat: ShaderMaterial
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_build_shell()
+	# configure() may run before the node is in the tree (shop preview wheels are built in
+	# isolation, then added to their card). It builds the shell itself in that case, so
+	# entering the tree must NOT build a SECOND shell — doing so orphaned the geometry-bearing
+	# viewport and left an empty one in its place (the shop's skin previews rendered blank).
+	if _vpc == null:
+		_build_shell()
 	resized.connect(_sync_viewport_size)
 
 func _build_shell() -> void:
@@ -199,7 +210,12 @@ func _build_shell() -> void:
 	_cam.fov = CAM_FOV
 	_cam.position = CAM_POS
 	_vp.add_child(_cam)
-	_cam.look_at(Vector3.ZERO, Vector3.UP)  # must be in-tree before look_at
+	# look_at() requires the node to be inside the SceneTree; the shop builds its skin
+	# preview wheels OFF-TREE (configure() runs before the card is added to the grid),
+	# so look_at() errored and no-op'd there — the camera kept its default orientation
+	# and the SubViewport rendered empty (the "wheel missing in skins shop" bug).
+	# look_at_from_position() computes the basis directly and works off-tree.
+	_cam.look_at_from_position(CAM_POS, Vector3.ZERO, Vector3.UP)
 
 	# --- lights ---
 	# One large, soft light source from nearly overhead. A directional light reads
@@ -648,6 +664,48 @@ func _skin_num_pack(skin: String) -> Variant:
 			"glow": Color(1.0, 0.32, 0.06, 0.95), "glow_size": 22,
 			"outline": Color(0.08, 0.0, 0.0, 1.0), "outline_size": 5,
 		}
+	if skin == "racing":
+		# Tachometer LED: hot amber-red digits, like a shift-light readout.
+		return {
+			"font": "", "color": Color(1.0, 0.30, 0.10),
+			"glow": Color(1.0, 0.20, 0.02, 0.85), "glow_size": 16,
+			"outline": Color(0.10, 0.02, 0.0, 1.0), "outline_size": 4,
+		}
+	if skin == "submarine":
+		# Sonar-scope phosphor green, like a periscope readout.
+		return {
+			"font": "", "color": Color(0.55, 1.0, 0.70),
+			"glow": Color(0.15, 0.95, 0.55, 0.8), "glow_size": 16,
+			"outline": Color(0.02, 0.10, 0.06, 1.0), "outline_size": 4,
+		}
+	if skin == "arcade":
+		# Retro marquee neon: cyan digit, hot-pink glow.
+		return {
+			"font": "", "color": Color(0.45, 0.98, 1.0),
+			"glow": Color(1.0, 0.15, 0.80, 0.85), "glow_size": 18,
+			"outline": Color(0.10, 0.0, 0.10, 1.0), "outline_size": 4,
+		}
+	if skin == "pirate":
+		# Brass ship's-compass glow: warm amber-gold digit.
+		return {
+			"font": "", "color": Color(1.0, 0.80, 0.35),
+			"glow": Color(0.90, 0.55, 0.15, 0.8), "glow_size": 15,
+			"outline": Color(0.14, 0.08, 0.02, 1.0), "outline_size": 4,
+		}
+	if skin == "casino":
+		# Gold coin glow on a deep casino-felt outline.
+		return {
+			"font": "", "color": Color(1.0, 0.86, 0.35),
+			"glow": Color(1.0, 0.70, 0.15, 0.85), "glow_size": 17,
+			"outline": Color(0.25, 0.02, 0.04, 1.0), "outline_size": 5,
+		}
+	if skin == "phantom":
+		# Sickly spectral green, like candlelight through old glass.
+		return {
+			"font": "", "color": Color(0.65, 1.0, 0.75),
+			"glow": Color(0.15, 0.75, 0.35, 0.85), "glow_size": 18,
+			"outline": Color(0.05, 0.02, 0.08, 1.0), "outline_size": 4,
+		}
 	return null
 
 # Burnt version of a button colour: same hue, dropped value + saturation so it
@@ -662,10 +720,25 @@ func _burn_color(col: Color) -> Color:
 # Inferno → a shared coal+lava ShaderMaterial parameterised by `heat` (lets the
 # hub glow brighter than the base plate while running the same shader across
 # every ring, so the cracks / hot stones look continuous).
+# Racing/Submarine/Arcade → a bespoke but plain StandardMaterial3D recolor (no
+# shader, no TIME) so these skins stay exactly as cheap to render as the stock
+# wheel; only their hub disc (see _hub_material) paints a drawn motif.
 # No skin → the regular satin-metal StandardMaterial3D used since launch.
 func _ring_material(stock: Color, metal: float, rough: float, heat: float) -> Material:
 	if _skin_id == "inferno":
 		return _coal_material(heat)
+	if _skin_id == "racing":
+		return _racing_metal(stock, metal, rough)
+	if _skin_id == "submarine":
+		return _sub_metal(stock, metal, rough)
+	if _skin_id == "arcade":
+		return _arcade_metal(stock, metal, rough)
+	if _skin_id == "pirate":
+		return _pirate_metal(stock, metal, rough)
+	if _skin_id == "casino":
+		return _casino_metal(stock, metal, rough)
+	if _skin_id == "phantom":
+		return _phantom_metal(stock, metal, rough)
 	# A patterned outer-ring style (Dictionary) paints the rim via the shared style
 	# shader; `shade` carries this ring's graphite value so grooves stay darker than
 	# the raised rim and the machined depth survives under the pattern.
@@ -677,11 +750,80 @@ func _ring_material(stock: Color, metal: float, rough: float, heat: float) -> Ma
 
 # Hub material: a motif style (Dictionary) draws across the disc via the style
 # shader (normalised to the hub radius); otherwise the stock/flat-tinted metal.
+# Racing/Submarine/Arcade hubs draw their signature icon (alloy wheel spokes,
+# ship valve wheel, joystick) through the SAME shared style shader used by the
+# shop's hub motifs (pattern codes 40/41/42) — no extra shader compiled.
 func _hub_material(stock: Color) -> Material:
+	if _skin_id == "racing":
+		return _style_material(40, Color(0.05, 0.05, 0.06), Color(0.82, 0.84, 0.90), 1.0, HUB_R)
+	if _skin_id == "submarine":
+		return _style_material(41, Color(0.09, 0.06, 0.02), Color(0.85, 0.62, 0.22), 1.0, HUB_R)
+	if _skin_id == "arcade":
+		return _style_material(42, Color(0.05, 0.02, 0.10), Color(0.95, 0.20, 0.55), 1.0, HUB_R)
+	if _skin_id == "pirate":
+		return _style_material(43, Color(0.10, 0.06, 0.03), Color(0.80, 0.62, 0.30), 1.0, HUB_R)
+	if _skin_id == "casino":
+		return _style_material(44, Color(0.05, 0.02, 0.02), Color(0.90, 0.70, 0.25), 1.0, HUB_R)
+	if _skin_id == "phantom":
+		return _style_material(45, Color(0.08, 0.09, 0.12), Color(0.55, 0.90, 0.65), 1.0, HUB_R)
 	if _inner_tint is Dictionary:
 		var d: Dictionary = _inner_tint
 		return _style_material(int(d["pattern"]), d["a"], d["b"], 1.0, HUB_R)
 	return _metal_mat(_inner(stock), 0.5, 0.3)
+
+# Cool brushed-chrome alloy for the Racing skin. Reuses each call site's own
+# stock brightness (base/groove/rings/frame already vary in value) so the wheel
+# keeps its machined depth, just recoloured toward a neutral steel-blue and
+# pushed shinier/smoother for a polished-alloy look.
+func _racing_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 2.0 + 0.22, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.58, 0.10, v)
+	return _metal_mat(tinted, maxf(metal, 0.75), minf(rough, 0.22))
+
+# Aged brass/bronze for the Submarine skin. Warmer hue, a touch less mirror-shiny
+# than chrome (satin brass, not polished chrome) so it reads as ship hardware.
+func _sub_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 1.8 + 0.28, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.11, 0.55, v)
+	return _metal_mat(tinted, minf(metal + 0.25, 0.85), maxf(rough, 0.45))
+
+# Matte dark cabinet plastic for the Arcade skin, with a faint neon-purple self
+# glow (well under the bloom threshold) to hint at marquee lighting.
+func _arcade_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 1.6 + 0.06, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.75, 0.35, v)
+	var m := _metal_mat(tinted, 0.1, 0.55)
+	m.emission_enabled = true
+	m.emission = Color(0.55, 0.15, 0.85)
+	m.emission_energy_multiplier = 0.05
+	return m
+
+# Aged wood + dull brass fittings for the Buccaneer skin. Mostly non-metal
+# (carved wood) and matte, so it reads as timber, not polished hardware.
+func _pirate_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 1.9 + 0.16, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.08, 0.55, v)
+	return _metal_mat(tinted, minf(metal * 0.6, 0.35), maxf(rough, 0.55))
+
+# Black-and-gold lacquer for the Jackpot skin. Reuses each ring's own stock
+# brightness (already varying per call site) to decide black-lacquer vs a
+# warmer gold trim, so the two-tone look falls out of the existing depth cues.
+func _casino_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 2.0 + 0.10, 0.0, 1.0)
+	var warm := smoothstep(0.35, 0.75, v)
+	var tinted := Color.from_hsv(lerp(0.0, 0.12, warm), warm * 0.75, v)
+	return _metal_mat(tinted, maxf(metal, 0.55), minf(rough, 0.18))
+
+# Tarnished silver/pewter with a faint sickly-green spectral glow for the
+# Phantom skin. Cold, low-saturation and dull (tarnished, not polished).
+func _phantom_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 1.7 + 0.18, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.36, 0.12, v)
+	var m := _metal_mat(tinted, maxf(metal, 0.55), maxf(rough, 0.5))
+	m.emission_enabled = true
+	m.emission = Color(0.35, 0.85, 0.55)
+	m.emission_energy_multiplier = 0.04
+	return m
 
 # Shared style shader (rim patterns + hub motifs), compiled once like _coal_shader.
 var _style_shader: Shader
@@ -720,49 +862,13 @@ func _coal_material(heat: float) -> ShaderMaterial:
 # crater is left deliberately shallow/wide so the molten floor glows out from
 # UNDER the centered level numeral rather than being hidden behind a tall peak.
 func _volcano_mesh() -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var steps := 64
-	var rim_y := VOLC_H
-	var floor_y := VOLC_H - VOLC_CRATER_DROP
-	for j in steps:
-		var a0: float = TAU * float(j) / steps
-		var a1: float = TAU * float(j + 1) / steps
-		# outer slope: foot (base radius, y=0) up to the crater rim
-		var s00 := Vector3(cos(a0) * VOLC_BASE_R, 0.0, sin(a0) * VOLC_BASE_R)
-		var s10 := Vector3(cos(a1) * VOLC_BASE_R, 0.0, sin(a1) * VOLC_BASE_R)
-		var s11 := Vector3(cos(a1) * VOLC_RIM_R, rim_y, sin(a1) * VOLC_RIM_R)
-		var s01 := Vector3(cos(a0) * VOLC_RIM_R, rim_y, sin(a0) * VOLC_RIM_R)
-		var ns := (s10 - s00).cross(s01 - s00).normalized()
-		if ns.y < 0.0:
-			ns = -ns
-		_quad(st, s00, s10, s11, s01, ns)
-		# inner crater wall: rim down to the crater floor (faces inward/up)
-		var w00 := s01
-		var w10 := s11
-		var w11 := Vector3(cos(a1) * VOLC_CRATER_R, floor_y, sin(a1) * VOLC_CRATER_R)
-		var w01 := Vector3(cos(a0) * VOLC_CRATER_R, floor_y, sin(a0) * VOLC_CRATER_R)
-		var nw := (w10 - w00).cross(w01 - w00).normalized()
-		if nw.y < 0.0:
-			nw = -nw
-		_quad(st, w00, w10, w11, w01, nw)
-		# crater floor (lava pool), facing straight up
-		var c := Vector3(0.0, floor_y, 0.0)
-		_quad(st, w01, w11, c, c, Vector3.UP)
-	return st.commit()
-
-# Shared lava-cone shader, compiled once like the coal shader.
-var _volcano_shader: Shader
+	# Built by the shared VolcanoCone module so the hub cone and the Volcano skin's
+	# four background cones (background_manager.gd) are byte-for-byte the same shape.
+	return VolcanoCone.build_mesh(VOLC_BASE_R, VOLC_RIM_R, VOLC_H, VOLC_CRATER_R, VOLC_CRATER_DROP)
 
 func _volcano_material() -> ShaderMaterial:
-	if _volcano_shader == null:
-		_volcano_shader = Shader.new()
-		_volcano_shader.code = _VOLCANO_SHADER
-	var m := ShaderMaterial.new()
-	m.shader = _volcano_shader
-	m.set_shader_parameter("rim_y", VOLC_H)
-	m.set_shader_parameter("rim_r", VOLC_RIM_R)
-	return m
+	# Same shared lava-cone shader the background cones wear (one compile for both).
+	return VolcanoCone.material(VOLC_H, VOLC_RIM_R)
 
 # Sulfur-rock material for the raised button stones. A plain StandardMaterial3D —
 # the SAME opaque path as the colored buttons — so the stones are guaranteed to
@@ -795,96 +901,6 @@ func _sulfur_material() -> StandardMaterial3D:
 	m.emission = Color(0.7, 0.30, 0.06)
 	m.emission_energy_multiplier = 0.08
 	return m
-
-# Volcano cone shader: dark basalt rock with bright lava rivulets that flow
-# DOWNHILL from the crater, and a molten, pooling crater floor. Uses the same
-# fbm/gnoise noise style as the coal shader. The lava channels are vertical
-# ridged-noise veins whose sampling Y scrolls with TIME so the hot rock appears
-# to creep down the slope; emission is strongest at the top and fades downward.
-const _VOLCANO_SHADER := "
-shader_type spatial;
-render_mode cull_disabled;
-
-uniform float rim_y = 0.30;
-uniform float rim_r = 0.186;
-varying vec3 v_pos;
-
-vec3 hash3(vec3 p) {
-	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-		 dot(p, vec3(269.5, 183.3, 246.1)),
-		 dot(p, vec3(113.5, 271.9, 124.6)));
-	return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
-}
-float gnoise(vec3 p) {
-	vec3 i = floor(p);
-	vec3 f = fract(p);
-	vec3 u = f * f * (3.0 - 2.0 * f);
-	float n000 = dot(hash3(i + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0));
-	float n100 = dot(hash3(i + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0));
-	float n010 = dot(hash3(i + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0));
-	float n110 = dot(hash3(i + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0));
-	float n001 = dot(hash3(i + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0));
-	float n101 = dot(hash3(i + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0));
-	float n011 = dot(hash3(i + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0));
-	float n111 = dot(hash3(i + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0));
-	return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-		   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 0.5 + 0.5;
-}
-float fbm(vec3 p) {
-	float v = 0.0; float a = 0.5;
-	for (int i = 0; i < 5; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
-	return v;
-}
-
-void vertex() {
-	v_pos = VERTEX;
-}
-
-void fragment() {
-	// Cylindrical coords on the cone: angle around the axis, radius from it, and
-	// normalized height up the slope. Streams are placed by ANGLE and run along
-	// HEIGHT, so they read as channels flowing straight down the slope.
-	float ang = atan(v_pos.z, v_pos.x);
-	float rad = length(vec2(v_pos.x, v_pos.z));
-	float h = clamp(v_pos.y / max(rim_y, 1e-4), 0.0, 1.2);  // 0 at foot, 1 at rim
-	vec2 ac = vec2(cos(ang), sin(ang)) * 1.7;               // seamless angular coord
-
-	// Black-brown basalt ground — kept clearly visible; lava only threads over it.
-	float rock = fbm(v_pos * 9.0);
-	vec3 rock_dark = vec3(0.030, 0.020, 0.015);
-	vec3 rock_light = vec3(0.105, 0.060, 0.040);
-	vec3 albedo = mix(rock_dark, rock_light, rock);
-
-	// Keep streams on the OUTER slope only (not inside the crater bowl).
-	float outer = smoothstep(rim_r * 0.9, rim_r * 1.1, rad);
-
-	// A few NARROW lava channels at fixed angular positions ('chan'), each running
-	// the full height of the slope. 'flow' makes the glow creep DOWN over time
-	// (height coord scrolls with +TIME), so the lava streams downhill.
-	float place = fbm(vec3(ac, 3.0));
-	float pridge = 1.0 - abs(2.0 * place - 1.0);
-	float chan = smoothstep(0.80, 0.97, pridge);
-	float flow = fbm(vec3(ac, h * 5.0 + TIME * 0.6));
-	flow = 0.55 + 0.45 * smoothstep(0.30, 0.80, flow);
-	float streams = chan * flow * outer * smoothstep(0.03, 0.25, h);
-	float breath = 0.7 + 0.3 * sin(TIME * 1.6 + place * 12.0);
-
-	// Molten pool filling the crater bowl (everything inside the rim radius).
-	float crater = smoothstep(rim_r * 1.0, rim_r * 0.55, rad);
-	float bubble = 0.7 + 0.3 * sin(TIME * 2.2 + rock * 20.0);
-
-	vec3 lava_col = vec3(1.00, 0.30, 0.04);
-	vec3 hot_col = vec3(1.00, 0.78, 0.30);
-	vec3 emission = lava_col * streams * breath * 2.6;
-	emission += mix(lava_col, hot_col, 0.6) * crater * bubble * 4.5;
-
-	ALBEDO = albedo;
-	EMISSION = emission;
-	METALLIC = 0.0;
-	ROUGHNESS = 0.9;
-	SPECULAR = 0.05;
-}
-"
 
 # 3D coal+lava shader for the inferno skin. The wheel reads as a chunk of black
 # coal with bright orange cracks running across it, plus rarer "hot stones" that
@@ -998,6 +1014,31 @@ vec3 hsv2rgb(vec3 c) {
 
 float rnd(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
+// Signed distance to a sharp n-pointed star (iq), point along +y, outer radius r.
+// `m` (in [2, n]) sets how spiky the points are — smaller = thinner/sharper. Used
+// so the Gold Star / Crescent-glint hub motifs read as real pointed stars (matching
+// the 2D shop preview), not the rounded radial lobes the old code produced.
+float sdStar(vec2 p, float r, float n, float m) {
+	float an = 3.141593 / n;
+	float en = 3.141593 / m;
+	vec2 acs = vec2(cos(an), sin(an));
+	vec2 ecs = vec2(cos(en), sin(en));
+	float bn = mod(atan(p.x, p.y), 2.0 * an) - an;
+	p = length(p) * vec2(cos(bn), abs(sin(bn)));
+	p -= r * acs;
+	p += ecs * clamp(-dot(p, ecs), 0.0, r * acs.y / ecs.y);
+	return length(p) * sign(p.x);
+}
+
+// Distance from point p to the line segment a-b (rounded-cap stroke). Used by the
+// Lightning and Melody hub motifs so their strokes read as clean drawn lines.
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+
 void vertex() { v_pos = VERTEX; }
 
 void fragment() {
@@ -1050,33 +1091,40 @@ void fragment() {
 		// ---- inner hub motifs ----
 		vec2 p = q / unit;
 		float r = length(p);
-		if (pat == 20) {
-			float x = p.x * 1.1;
-			float y = -p.y * 1.1;
-			float h = x * x + y * y - 1.0;
-			float d = h * h * h - x * x * y * y * y;
-			col = mix(a, b, 1.0 - smoothstep(-0.06, 0.06, d));
-		} else if (pat == 21) {
-			float rs = mix(0.30, 0.64, pow(max(0.0, cos(5.0 * ang)), 0.5));
-			col = mix(a, b, 1.0 - smoothstep(rs - 0.05, rs + 0.05, r));
+		if (pat == 21) {
+			// Sharp 5-point star (point up), matching the shop preview's Gold Star —
+			// not the old rounded 5-lobe radial threshold.
+			float sd = sdStar(vec2(p.x, -p.y), 0.86, 5.0, 2.6);
+			col = mix(a, b, 1.0 - smoothstep(-0.01, 0.03, sd));
 		} else if (pat == 22) {
-			float rp = 0.34 + 0.24 * abs(cos(3.0 * ang));
-			col = mix(a, b, 1.0 - smoothstep(rp - 0.05, rp + 0.05, r));
-			col = mix(col, vec3(1.0, 0.84, 0.28), 1.0 - smoothstep(0.14, 0.18, r));
+			// Daisy: six round petals on a ring + a sunny gold centre (matches the
+			// preview's 6-petal flower rather than the old 3-fold blob).
+			float pet = 0.0;
+			for (int i = 0; i < 6; i++) {
+				float pa = float(i) / 6.0 * TAU;
+				pet = max(pet, 1.0 - smoothstep(0.30, 0.34, length(p - vec2(cos(pa), sin(pa)) * 0.5)));
+			}
+			col = mix(a, b, pet);
+			col = mix(col, vec3(1.0, 0.84, 0.28), 1.0 - smoothstep(0.28, 0.32, r));
 		} else if (pat == 23) {
-			float eyes = 1.0 - smoothstep(0.10, 0.14, min(length(p - vec2(-0.34, 0.28)), length(p - vec2(0.34, 0.28))));
-			float smile = (1.0 - smoothstep(0.05, 0.09, abs(length(p - vec2(0.0, -0.02)) - 0.48))) * step(p.y, 0.02);
+			// Smiley: eyes up top, grin across the bottom. Screen-down is +p.y here
+			// (like the heart), so the eyes sit at NEGATIVE y — the old code had them
+			// at +y, which rendered the face upside-down vs the preview.
+			float eyes = 1.0 - smoothstep(0.11, 0.15, min(length(p - vec2(-0.34, -0.22)), length(p - vec2(0.34, -0.22))));
+			float smile = (1.0 - smoothstep(0.05, 0.09, abs(length(p - vec2(0.0, -0.05)) - 0.48))) * step(-0.05, p.y);
 			col = mix(a, b, max(eyes, smile));
 		} else if (pat == 24) {
 			vec2 f = fract(p * 2.4) - 0.5;
 			col = mix(a, b, 1.0 - smoothstep(0.22, 0.30, length(f)));
 		} else if (pat == 25) {
-			float pad = 1.0 - smoothstep(0.34, 0.40, length((p - vec2(0.0, -0.18)) / vec2(1.05, 0.9)));
+			// Paw: big pad low-centre, four toe beans arced ABOVE it. Same y-flip fix
+			// as the smiley — pad at +y (down), toes at -y (up).
+			float pad = 1.0 - smoothstep(0.40, 0.44, length(p - vec2(0.0, 0.22)));
 			float toes = 0.0;
-			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(-0.42, 0.30))));
-			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(-0.15, 0.50))));
-			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(0.15, 0.50))));
-			toes = max(toes, 1.0 - smoothstep(0.14, 0.18, length(p - vec2(0.42, 0.30))));
+			toes = max(toes, 1.0 - smoothstep(0.15, 0.19, length(p - vec2(-0.42, -0.34))));
+			toes = max(toes, 1.0 - smoothstep(0.15, 0.19, length(p - vec2(-0.15, -0.52))));
+			toes = max(toes, 1.0 - smoothstep(0.15, 0.19, length(p - vec2(0.15, -0.52))));
+			toes = max(toes, 1.0 - smoothstep(0.15, 0.19, length(p - vec2(0.42, -0.34))));
 			col = mix(a, b, max(pad, toes));
 		} else if (pat == 26) {
 			col = mix(a, b, step(0.5, fract(r * 3.2)));
@@ -1084,18 +1132,158 @@ void fragment() {
 			col = mix(a, b, step(0.5, 0.5 + 0.5 * sin(ang + r * 11.0)));
 		} else if (pat == 28) {
 			col = hsv2rgb(vec3(clamp(r, 0.0, 1.0), 0.8, 1.0));
-		} else if (pat == 29) {
-			float rs = 0.10 + 0.58 * pow(max(0.0, cos(2.0 * ang)), 3.0);
-			col = mix(a, b, 1.0 - smoothstep(rs - 0.04, rs + 0.04, r));
-			emis = 0.28;
+		} else if (pat == 30) {
+			// Crescent moon: a big pale disc with an offset disc bitten out of it, plus
+			// a tiny 4-point star glint in the notch. Screen-down is +y here.
+			float big = 1.0 - smoothstep(0.70, 0.74, length(p - vec2(-0.12, 0.0)));
+			float bite = 1.0 - smoothstep(0.64, 0.68, length(p - vec2(0.30, -0.05)));
+			float moon = big * (1.0 - bite);
+			float star = 1.0 - smoothstep(-0.01, 0.03, sdStar(vec2(p.x - 0.44, -(p.y + 0.46)), 0.16, 4.0, 2.1));
+			col = mix(a, b, max(moon, star));
+		} else if (pat == 31) {
+			// Diamond: a faceted gem — rhombus body with a table line across the top
+			// and two facet lines running down to the point, inked in the base colour.
+			float gem = 1.0 - smoothstep(0.0, 0.03, abs(p.x) / 0.60 + abs(p.y) / 0.80 - 1.0);
+			col = mix(a, b, gem);
+			float facet = 1.0 - smoothstep(0.03, 0.05, abs(p.y + 0.34));   // table girdle
+			facet = max(facet, 1.0 - smoothstep(0.03, 0.05, sdSeg(p, vec2(-0.30, -0.34), vec2(0.0, 0.80))));
+			facet = max(facet, 1.0 - smoothstep(0.03, 0.05, sdSeg(p, vec2(0.30, -0.34), vec2(0.0, 0.80))));
+			col = mix(col, a, facet * gem);
+		} else if (pat == 32) {
+			// Lucky clover: four round leaves around the centre plus a little stem.
+			float leaf = 0.0;
+			for (int i = 0; i < 4; i++) {
+				float la = (float(i) + 0.5) / 4.0 * TAU;
+				leaf = max(leaf, 1.0 - smoothstep(0.38, 0.42, length(p - vec2(cos(la), sin(la)) * 0.34)));
+			}
+			leaf = max(leaf, 1.0 - smoothstep(0.06, 0.09, sdSeg(p, vec2(0.0, 0.30), vec2(0.14, 0.82))));
+			col = mix(a, b, leaf);
+		} else if (pat == 33) {
+			// Lightning: a three-segment zigzag bolt drawn as a rounded stroke.
+			float bolt = sdSeg(p, vec2(0.22, -0.78), vec2(-0.18, -0.05));
+			bolt = min(bolt, sdSeg(p, vec2(-0.18, -0.05), vec2(0.16, -0.05)));
+			bolt = min(bolt, sdSeg(p, vec2(0.16, -0.05), vec2(-0.22, 0.78)));
+			col = mix(a, b, 1.0 - smoothstep(0.09, 0.12, bolt));
+		} else if (pat == 34) {
+			// Yin-yang: two teardrops swapped along an S-curve, each holding a dot of
+			// the opposite ink. col_a is the dark half, col_b the light half.
+			float val = step(0.0, p.x);
+			val = mix(val, 1.0, step(length(p - vec2(0.0, 0.5)), 0.5));   // lower bulge -> b
+			val = mix(val, 0.0, step(length(p - vec2(0.0, -0.5)), 0.5));  // upper bulge -> a
+			val = mix(val, 1.0, step(length(p - vec2(0.0, -0.5)), 0.14)); // b eye in a lobe
+			val = mix(val, 0.0, step(length(p - vec2(0.0, 0.5)), 0.14));  // a eye in b lobe
+			col = mix(a, b, val);
+		} else if (pat == 35) {
+			// Melody: an eighth note — round head, upright stem, flag off the top.
+			float head = 1.0 - smoothstep(0.24, 0.28, length((p - vec2(-0.18, 0.42)) * vec2(1.0, 1.15)));
+			float note = head;
+			note = max(note, 1.0 - smoothstep(0.05, 0.08, sdSeg(p, vec2(0.06, 0.42), vec2(0.06, -0.62))));
+			note = max(note, 1.0 - smoothstep(0.05, 0.08, sdSeg(p, vec2(0.06, -0.62), vec2(0.34, -0.34))));
+			col = mix(a, b, note);
+		} else if (pat == 40) {
+			// Racing alloy wheel: five spokes fanning from a bright cap out to a lug
+			// nut on the rim, plus a thin rim ring — read top-down like a real wheel.
+			float rim = (1.0 - smoothstep(0.90, 0.94, r)) * smoothstep(0.78, 0.82, r);
+			float spokes = 0.0;
+			float lugs = 0.0;
+			for (int i = 0; i < 5; i++) {
+				float sa = float(i) / 5.0 * TAU;
+				vec2 dir = vec2(cos(sa), sin(sa));
+				float along = dot(p, dir);
+				float perp = abs(p.x * dir.y - p.y * dir.x);
+				spokes = max(spokes, step(perp, 0.085) * step(0.18, along) * step(along, 0.80));
+				lugs = max(lugs, 1.0 - smoothstep(0.05, 0.07, length(p - dir * 0.80)));
+			}
+			float cap = 1.0 - smoothstep(0.16, 0.20, r);
+			col = mix(a, b, max(max(rim, spokes), max(lugs, cap)));
+		} else if (pat == 41) {
+			// Submarine valve wheel: a six-spoke ship's-wheel spider with a rim ring
+			// and a bolted centre hub, like a pressure-hatch valve.
+			float rim = (1.0 - smoothstep(0.90, 0.94, r)) * smoothstep(0.74, 0.78, r);
+			float spokes = 0.0;
+			for (int i = 0; i < 6; i++) {
+				float sa = float(i) / 6.0 * TAU;
+				vec2 dir = vec2(cos(sa), sin(sa));
+				float along = dot(p, dir);
+				float perp = abs(p.x * dir.y - p.y * dir.x);
+				spokes = max(spokes, step(perp, 0.075) * step(0.10, along) * step(along, 0.76));
+			}
+			float hub_bolt = 1.0 - smoothstep(0.10, 0.14, r);
+			col = mix(a, b, max(max(rim, spokes), hub_bolt));
+		} else if (pat == 42) {
+			// Arcade joystick: a round ball top with a highlight glint, seated over a
+			// cross-shaped gate (the slot the stick moves through).
+			float ball = 1.0 - smoothstep(0.46, 0.50, r);
+			float gate_h = step(abs(p.y), 0.05) * step(0.50, abs(p.x)) * step(abs(p.x), 0.86);
+			float gate_v = step(abs(p.x), 0.05) * step(0.50, abs(p.y)) * step(abs(p.y), 0.86);
+			col = mix(a, b, max(ball, max(gate_h, gate_v)));
+			float highlight = 1.0 - smoothstep(0.10, 0.16, length(p - vec2(-0.16, -0.16)));
+			col = mix(col, vec3(1.0), highlight * ball * 0.55);
+		} else if (pat == 43) {
+			// Buccaneer ship's helm: eight stout handle-spokes around a rope-wound
+			// rim and a brass hub cap, like a wooden ship's wheel viewed head-on.
+			float rim = (1.0 - smoothstep(0.90, 0.95, r)) * smoothstep(0.80, 0.85, r);
+			float twist = step(0.5, fract(atan(p.y, p.x) / TAU * 40.0 + r * 4.0));
+			rim *= mix(0.7, 1.0, twist);
+			float spokes = 0.0;
+			for (int i = 0; i < 8; i++) {
+				float sa = float(i) / 8.0 * TAU;
+				vec2 dir = vec2(cos(sa), sin(sa));
+				float along = dot(p, dir);
+				float perp = abs(p.x * dir.y - p.y * dir.x);
+				spokes = max(spokes, step(perp, 0.10) * step(0.16, along) * step(along, 0.92));
+			}
+			float cap = 1.0 - smoothstep(0.15, 0.19, r);
+			col = mix(a, b, max(rim, max(spokes, cap)));
+		} else if (pat == 44) {
+			// Jackpot roulette: alternating pockets around a ring band, a gold
+			// centre medallion, a thin rim, and the ball sitting in one pocket.
+			col = a;
+			float ring = smoothstep(0.55, 0.60, r) * (1.0 - smoothstep(0.92, 0.96, r));
+			float seg = mod(floor((atan(p.y, p.x) / TAU + 0.5) * 16.0), 2.0);
+			col = mix(col, mix(a, b, seg), ring);
+			float medallion = 1.0 - smoothstep(0.42, 0.48, r);
+			col = mix(col, b, medallion);
+			float outer_rim = smoothstep(0.90, 0.94, r) * (1.0 - smoothstep(0.98, 1.0, r));
+			col = mix(col, a, outer_rim);
+			vec2 ball_dir = vec2(cos(0.7), sin(0.7));
+			float ball_dot = 1.0 - smoothstep(0.03, 0.05, length(p - ball_dir * 0.77));
+			col = mix(col, vec3(1.0), ball_dot);
+		} else if (pat == 45) {
+			// Phantom ouija eye: a wide almond eye with a pupil at the hub's
+			// centre, ringed by evenly spaced ticks like an old spirit-board dial.
+			float eye = 1.0 - smoothstep(0.0, 0.03, abs(p.y) / 0.34 + abs(p.x) / 0.74 - 1.0);
+			col = mix(a, b, eye);
+			float pupil = 1.0 - smoothstep(0.12, 0.16, length(p));
+			col = mix(col, a, pupil * eye);
+			float ta = fract(atan(p.y, p.x) / TAU * 24.0);
+			float band = smoothstep(0.76, 0.80, r) * (1.0 - smoothstep(0.88, 0.92, r));
+			float ticks = step(0.85, ta) * band;
+			col = mix(col, b, ticks);
 		}
 	}
 
-	ALBEDO = col;
-	EMISSION = col * emis;
-	METALLIC = 0.2;
-	ROUGHNESS = 0.5;
-	SPECULAR = 0.4;
+	if (pat >= 20) {
+		// The hub disc sits under the wheel's hot studio rig (exposure 2, a 1.25 key
+		// light with strong specular, sky-IBL reflections). Lit + glossy it catches a
+		// broad sheen that washes the motif out — and lowering EMISSION did nothing
+		// because the SHINE IS THE LIGHTING, not emission. So render the hub as a
+		// flat, self-lit drawing: black albedo + zero specular means the lights can't
+		// touch it, and the two inks read exactly like the 2D shop preview. The 0.5
+		// keeps even a white ink under the env's bloom threshold so it doesn't glow.
+		ALBEDO = vec3(0.0);
+		EMISSION = col * 0.5;
+		METALLIC = 0.0;
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+	} else {
+		// Rim patterns keep the satin-metal look they always had.
+		ALBEDO = col;
+		EMISSION = col * emis;
+		METALLIC = 0.2;
+		ROUGHNESS = 0.5;
+		SPECULAR = 0.4;
+	}
 }
 "
 
@@ -1392,6 +1580,10 @@ func _animated_skin() -> bool:
 func _update_render_activity(animating: bool) -> void:
 	if _vp == null:
 		return
+	# A paused off-screen preview never redraws, no matter what's "animating".
+	if _preview_paused:
+		_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		return
 	if _animated_skin() or animating:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	elif _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
@@ -1401,12 +1593,25 @@ func _update_render_activity(animating: bool) -> void:
 # Force at least one redraw of the otherwise-idle viewport after something changed
 # it outside the per-frame animation loop (rebuild, skin swap, resize).
 func _kick_render() -> void:
-	if _vp == null:
+	if _vp == null or _preview_paused:
 		return
 	if _animated_skin():
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	elif _vp.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+# Pause/resume this wheel's off-screen rendering. Shop preview wheels on a hidden
+# tab pause so an animated skin's viewport stops eating GPU while it isn't visible;
+# showing the tab resumes it (a resume kicks one redraw so the still content refreshes).
+func set_preview_paused(paused: bool) -> void:
+	if _preview_paused == paused:
+		return
+	_preview_paused = paused
+	if paused:
+		if _vp:
+			_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	else:
+		_kick_render()
 
 # ---------------- hit testing ----------------
 

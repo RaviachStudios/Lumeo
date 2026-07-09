@@ -293,6 +293,7 @@ func _finish() -> void:
 		return
 	_done = true
 	set_process(false)
+	BadgeManager.note_tutorial_done()   # "Quick Study" badge
 	finished.emit()
 	var tw := create_tween()
 	tw.tween_property(self, "modulate:a", 0.0, 0.20).set_trans(Tween.TRANS_SINE)

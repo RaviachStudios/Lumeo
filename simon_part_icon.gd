@@ -23,7 +23,7 @@ var font_pack: Variant = null    # Dictionary or null (level_number)
 
 # tint can now be a pattern/motif style: {"pattern": int, "a": Color, "b": Color}
 # (see CoinsManager.simon_part_style). Rim pattern codes 1-10, hub motif codes
-# 20-29 — the same ints SimonWheel's _STYLE_SHADER branches on, drawn here in 2D.
+# 21-35 — the same ints SimonWheel's _STYLE_SHADER branches on, drawn here in 2D.
 
 var _num_glow: Label             # soft outer-glow layer (level_number)
 var _num_main: Label             # main numeral layer (level_number)
@@ -227,7 +227,6 @@ func _draw_hub_motif(c: Vector2, r: float, pat: Dictionary) -> void:
 	else:
 		draw_circle(c, r, a)                                # base disc
 	match pid:
-		20: draw_colored_polygon(_heart_pts(c, r * 0.82), b)                    # heart
 		21: draw_colored_polygon(_star_pts(c, r * 0.86, r * 0.40, 5, -PI * 0.5), b)  # star
 		22: _draw_flower(c, r, b)
 		23: _draw_smiley(c, r, b)
@@ -237,22 +236,14 @@ func _draw_hub_motif(c: Vector2, r: float, pat: Dictionary) -> void:
 			draw_arc(c, r * 0.66, 0.0, TAU, 40, b, r * 0.20, true)
 			draw_circle(c, r * 0.24, b)
 		27: _draw_swirl(c, r, b)
-		29: _draw_sparkle(c, r, b)
+		30: _draw_crescent(c, r, a, b)
+		31: _draw_diamond(c, r, a, b)
+		32: _draw_clover(c, r, b)
+		33: _draw_bolt(c, r, b)
+		34: _draw_yinyang(c, r, a, b)
+		35: _draw_note(c, r, b)
 		_: pass
 	draw_arc(c, r, 0.0, TAU, 44, Color(1, 1, 1, 0.5), 1.5, true)
-
-# Parametric heart outline (classic 16 sin³t curve), centred and y-flipped so the
-# point sits at the bottom, scaled to fit a disc of radius `r`.
-func _heart_pts(c: Vector2, r: float) -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	var k := r / 17.0
-	var steps := 28
-	for i in steps:
-		var t := float(i) / steps * TAU
-		var x := 16.0 * pow(sin(t), 3.0)
-		var y := 13.0 * cos(t) - 5.0 * cos(2.0 * t) - 2.0 * cos(3.0 * t) - cos(4.0 * t)
-		pts.append(c + Vector2(x * k, -y * k))
-	return pts
 
 # N-point star: alternating outer / inner radius vertices.
 func _star_pts(c: Vector2, r_out: float, r_in: float, n: int, rot: float) -> PackedVector2Array:
@@ -298,7 +289,60 @@ func _draw_swirl(c: Vector2, r: float, b: Color) -> void:
 		pts.append(c + Vector2(cos(ang), sin(ang)) * rad)
 	draw_polyline(pts, b, maxf(2.0, r * 0.14), true)
 
-func _draw_sparkle(c: Vector2, r: float, b: Color) -> void:
-	draw_colored_polygon(_star_pts(c, r * 0.88, r * 0.16, 4, -PI * 0.5), b)
-	draw_circle(c + Vector2(r * 0.5, -r * 0.5), r * 0.10, b)
-	draw_circle(c + Vector2(-r * 0.52, r * 0.42), r * 0.07, b)
+# Crescent moon: a pale disc with an offset disc bitten out (drawn in the base `a`),
+# plus a small 4-point star glint tucked into the notch.
+func _draw_crescent(c: Vector2, r: float, a: Color, b: Color) -> void:
+	draw_circle(c + Vector2(-r * 0.12, 0.0), r * 0.72, b)
+	draw_circle(c + Vector2(r * 0.30, -r * 0.05), r * 0.66, a)
+	draw_colored_polygon(_star_pts(c + Vector2(r * 0.44, -r * 0.46), r * 0.16, r * 0.06, 4, -PI * 0.5), b)
+
+# Faceted gem: a rhombus body with a table girdle line and two facet lines drawn in
+# the base colour, so it reads as a cut diamond.
+func _draw_diamond(c: Vector2, r: float, a: Color, b: Color) -> void:
+	var top := c + Vector2(0, -r * 0.80)
+	var bot := c + Vector2(0, r * 0.80)
+	var lft := c + Vector2(-r * 0.60, 0)
+	var rgt := c + Vector2(r * 0.60, 0)
+	draw_colored_polygon(PackedVector2Array([top, rgt, bot, lft]), b)
+	var lw := maxf(1.5, r * 0.05)
+	var tl := c + Vector2(-r * 0.30, -r * 0.34)
+	var tr := c + Vector2(r * 0.30, -r * 0.34)
+	draw_line(tl, tr, a, lw)          # table girdle
+	draw_line(tl, bot, a, lw)         # facet down to the point
+	draw_line(tr, bot, a, lw)
+
+# Lucky clover: four round leaves around the centre plus a little stem.
+func _draw_clover(c: Vector2, r: float, b: Color) -> void:
+	for i in 4:
+		var ang := (float(i) + 0.5) / 4.0 * TAU
+		draw_circle(c + Vector2(cos(ang), sin(ang)) * r * 0.34, r * 0.40, b)
+	draw_line(c + Vector2(0, r * 0.30), c + Vector2(r * 0.14, r * 0.82), b, maxf(2.0, r * 0.12))
+
+# Lightning: a three-segment zigzag bolt drawn as a thick stroke.
+func _draw_bolt(c: Vector2, r: float, b: Color) -> void:
+	var pts := PackedVector2Array([
+		c + Vector2(r * 0.22, -r * 0.78), c + Vector2(-r * 0.18, -r * 0.05),
+		c + Vector2(r * 0.16, -r * 0.05), c + Vector2(-r * 0.22, r * 0.78)])
+	draw_polyline(pts, b, maxf(2.5, r * 0.20), true)
+
+# Yin-yang: two teardrops swapped along an S-curve, each holding a dot of the
+# opposite ink. `a` is the dark half, `b` the light half.
+func _draw_yinyang(c: Vector2, r: float, a: Color, b: Color) -> void:
+	# Light half on the right, built from a semicircle polygon.
+	var half := PackedVector2Array()
+	var steps := 24
+	for i in steps + 1:
+		var t := -PI * 0.5 + float(i) / steps * PI
+		half.append(c + Vector2(cos(t), sin(t)) * r)
+	draw_colored_polygon(half, b)
+	draw_circle(c + Vector2(0, -r * 0.5), r * 0.5, a)     # upper bulge -> a
+	draw_circle(c + Vector2(0, r * 0.5), r * 0.5, b)      # lower bulge -> b
+	draw_circle(c + Vector2(0, -r * 0.5), r * 0.14, b)    # b eye in a lobe
+	draw_circle(c + Vector2(0, r * 0.5), r * 0.14, a)     # a eye in b lobe
+
+# Melody: an eighth note — round head, upright stem, flag off the top.
+func _draw_note(c: Vector2, r: float, b: Color) -> void:
+	draw_circle(c + Vector2(-r * 0.18, r * 0.42), r * 0.26, b)
+	var lw := maxf(2.0, r * 0.11)
+	draw_line(c + Vector2(r * 0.06, r * 0.42), c + Vector2(r * 0.06, -r * 0.62), b, lw)
+	draw_line(c + Vector2(r * 0.06, -r * 0.62), c + Vector2(r * 0.34, -r * 0.34), b, lw)

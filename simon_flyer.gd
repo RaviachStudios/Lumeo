@@ -132,6 +132,8 @@ func _launch_cross() -> void:
 	_p0 = Vector2(-70.0 if dir > 0.0 else _sz.x + 70.0, y0)
 	_p1 = Vector2(_sz.x + 70.0 if dir > 0.0 else -70.0, y1)
 	_sprite.flip_h = dir < 0.0
+	# Seat it at the off-screen start (alpha 0) before revealing — no stale-position flash.
+	_place(_p0, 0.0, _edge_alpha(0.0, 0.12))
 	_show()
 
 # ---- wander (active) ----
@@ -175,6 +177,8 @@ func _launch_wander() -> void:
 	_p0 = _random_edge_point()
 	_p1 = Vector2(randf_range(_sz.x * 0.25, _sz.x * 0.75), randf_range(_sz.y * 0.25, _sz.y * 0.62))
 	_sprite.flip_h = _p1.x < _p0.x
+	# Seat it at the off-screen entry point before revealing — no stale-position flash.
+	_place(_p0, 0.0, 1.0)
 	_show()
 
 func _launch_wander_exit() -> void:
@@ -237,6 +241,11 @@ func _start_rise() -> void:
 	_rise_vel = 0.0                             # eases up from a standstill → glides in
 	_osc = randf() * TAU                        # random sway phase so the pair differ
 	_rise_next_pause = randf_range(0.25, 0.7)   # first stall somewhere in the climb
+	# Place at the prog=0 start (just below the bottom edge) BEFORE revealing, so the
+	# first visible frame is already off-screen at the bottom — otherwise the sprite
+	# shows for one frame at its stale position (a corner flash / jump on the first rise).
+	_rise_y = _sz.y + 70.0
+	_place(Vector2(_anchor_x + sin(_osc) * _rise_amp, _rise_y), cos(_osc) * 0.09, 1.0)
 	_show()
 
 # ---- helpers ----

@@ -99,6 +99,9 @@ func _ready() -> void:
 	_contest_ctx = GameState.contest_context.duplicate(true)
 	GameState.contest_context = {}
 	_is_new_high = GameState.submit_score(rounds)
+	# Badges: a finished game (+ its score milestones) is always worth evaluating.
+	BadgeManager.note_game_played(GameState.difficulty)
+	BadgeManager.note_score(GameState.difficulty, rounds)
 	_build_background()
 	_spawn_confetti()
 	_build_ui()
@@ -327,6 +330,7 @@ func _submit_and_show_rank() -> void:
 	var rank := int(data.get("my_rank", 0))
 	if rank <= 0:
 		return
+	BadgeManager.note_rank(rank, false)   # leaderboard-placement badges
 	_show_rank_pill(rank)
 
 # Pill animating in from below with a brief bloom, showing the player's current

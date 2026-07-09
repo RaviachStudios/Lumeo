@@ -12,6 +12,7 @@ const ShopScreen := preload("res://shop_screen.gd")
 const ArenaScreen := preload("res://arena_screen.gd")
 const ContestCreateScreen := preload("res://contest_create_screen.gd")
 const ContestDetailScreen := preload("res://contest_detail_screen.gd")
+const ContestLobbyScreen := preload("res://contest_lobby_screen.gd")
 
 var _current: Control = null
 var _canvas: CanvasLayer
@@ -61,6 +62,9 @@ func show_arena() -> void:
 
 func show_contest_create() -> void:
 	_swap(ContestCreateScreen.new())
+
+func show_contest_lobby() -> void:
+	_swap(ContestLobbyScreen.new())
 
 func show_contest_detail(contest_id: String) -> void:
 	var s := ContestDetailScreen.new()

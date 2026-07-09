@@ -118,7 +118,12 @@ service cloud.firestore {
             || request.resource.data.has_remove_ads is bool)
         // First-run home-tour "seen" flag. Bool, validated only when present.
         && (!('tutorial_seen' in request.resource.data)
-            || request.resource.data.tutorial_seen is bool);
+            || request.resource.data.tutorial_seen is bool)
+        // Earned-badges bitfield: 256 bits packed into 32 bytes, base64-encoded
+        // (~44 chars). One compact string regardless of how many are earned.
+        && (!('badges' in request.resource.data)
+            || (request.resource.data.badges is string
+                && request.resource.data.badges.size() <= 64));
     }
 
     // ---- Arena contests ----------------------------------------------------
@@ -149,6 +154,16 @@ service cloud.firestore {
               && request.resource.data.title.size() >= 1
               && request.resource.data.title.size() <= 15);
     }
+    // Lobby discoverability fields (validated only when present, so merge writes
+    // that don't touch them still pass). `is_public` marks a contest listed in the
+    // browse-lobby; `lobby_key` is the uniform random sort key the lobby query ranges
+    // over (public+lobby only; started contests drop it below the [0,1) range).
+    function lobbyFieldsOk() {
+      return (!('is_public' in request.resource.data)
+              || request.resource.data.is_public is bool)
+          && (!('lobby_key' in request.resource.data)
+              || request.resource.data.lobby_key is number);
+    }
 
     match /contests/{cid} {
       allow read: if true;
@@ -159,7 +174,8 @@ service cloud.firestore {
         && request.resource.data.type in ['one_game', 'one_hour', 'one_day', 'daily']
         && request.resource.data.difficulty in ['easy', 'moderate', 'hard']
         && request.resource.data.member_count is int
-        && titleOk();
+        && titleOk()
+        && lobbyFieldsOk();
 
       // Any signed-in participant may update the meta (join bumps member_count;
       // the creator starts it; anyone may write the finalized standings). The
@@ -173,7 +189,8 @@ service cloud.firestore {
         && request.resource.data.member_count is int
         && request.resource.data.member_count >= 0
         && request.resource.data.member_count <= 45
-        && titleOk();
+        && titleOk()
+        && lobbyFieldsOk();
 
       // The creator can delete anytime (cancel); anyone can delete an empty
       // contest (last member out). member_count is lowered to 0 before that

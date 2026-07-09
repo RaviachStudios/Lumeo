@@ -1,5 +1,7 @@
 extends Node
 
+const VolcanoCone = preload("res://volcano_cone.gd")
+
 # Renders the user's equipped theme background as a single global full-screen
 # layer beneath every other UI. Sits at CanvasLayer layer = -1, so the default
 # ScreenCanvas (layer 1) draws over it. When the selected theme is "default"
@@ -2480,9 +2482,11 @@ void fragment() {
 "
 
 # ---------------------------------------------------------------------------
-# SKIN BACKGROUND — "inferno" (the Volcano skin: the lava wheel is unchanged and
-# lives in simon_wheel.gd). Its old volcanic-plain BACKGROUND is replaced here by
-# a NIGHT-CASTLE world. A wide open night sky (NO mountains): a cratered moon high
+# THEME BACKGROUND — "castle" (the "Dragon's Keep" theme). This moonlit NIGHT-
+# CASTLE world used to be the Volcano skin's background; it was promoted to a
+# standalone purchasable theme (the Volcano skin now wears the top-down lava-river
+# world in the _LAVA_* shaders below). The scene is unchanged:
+# a wide open night sky (NO mountains): a cratered moon high
 # on the right (breathing halo + thin clouds drifting across its face), a scatter
 # of stars, and — receding into the distance — two rolling home-hill bands (a far
 # hamlet and an even-further, hazier one) plus a tall stone castle on the LEFT with
@@ -3213,10 +3217,1295 @@ void fragment() {
 }
 "
 
+# ---------------------------------------------------------------------------
+# VOLCANO SKIN BACKGROUND — "lava". A molten SEA of lava — a churning lava lake of
+# dark cooled-crust plates rafting apart on glowing incandescent fissures — with FOUR
+# SIDE-VIEW volcano cones (drawn side-on like the wheel-hub cone, NOT top-down) rising
+# from the four corners: two large in front along the bottom, two small + distant up
+# top, framing the wheel like a valley. Their feet blend into the lava (molten shoreline
+# + heat halo) so they sit IN the sea instead of floating on it.
+# The volcano rock bodies + a resting (frozen) snapshot of the sea bake into the
+# static plate; the dyn overlay recomputes the molten sea and CONVECTS it — the
+# crust plates drift, the fissures pulse white-hot, heat blooms, crater lakes
+# churn and embers rise — then composites the baked cones back over the top so
+# they stay crisp. (The old NIGHT-CASTLE world that used to live here is now the
+# standalone "Dragon's Keep" theme; see the _NIGHT_* shaders above, registered
+# under the "castle" theme id below.)
+# ---------------------------------------------------------------------------
+const _LAVA_FUNCS := "
+// Foreshortening of the crater rim/pool in the tilted side-TOP view (matches the wheel
+// hub, which is a real 3D cone seen from above-and-side): the crater rim reads as an
+// ellipse whose vertical radius is VOLC_TILT * its horizontal radius.
+const float VOLC_TILT = 0.46;
+// FOUR side-view volcano cones framing the wheel like a valley: two LARGE ones rising
+// from the bottom corners (foreground) and two SMALLER, more distant ones near the top
+// corners. Each is described side-on (like the wheel-hub cone) — NOT top-down — by:
+//   x = centre-x in a-space, y = summit/top y, z = base y (larger = lower on screen),
+//   w = base half-width. Shared by the baked rock, the rock mask and the animated lava.
+vec4 volcanoParams(int i) {
+	// FOUR IDENTICAL low, wide cones — the exact proportions of the wheel-hub volcano
+	// (foot half-width 0.24, rise 0.13 -> H/W ~= 0.54, a low broad cone, NOT a spike) —
+	// framing the wheel like a valley: two along the bottom, two mirrored up top.
+	if (i == 0) return vec4(0.29 * aspect, 0.77, 0.90, 0.240);         // bottom-left
+	if (i == 1) return vec4(0.71 * aspect, 0.77, 0.90, 0.240);         // bottom-right
+	if (i == 2) return vec4(0.14 * aspect, 0.24, 0.37, 0.240);         // top-left
+	return vec4(0.86 * aspect, 0.24, 0.37, 0.240);                     // top-right
+}
+float volcanoSeed(int i) {
+	if (i == 0) return 1.0;
+	if (i == 1) return 7.0;
+	if (i == 2) return 3.0;
+	return 5.0;
+}
+// Side-view cone silhouette (a rugged trapezoid: wide foot -> narrow crater rim). Returns
+// the signed distance to the rock body (<0 inside) and, via out params, the height
+// fraction hf (0 at the foot, 1 at the rim), the horizontal offset dx from the axis and
+// the local flank half-width `edge`. Deterministic (no TIME) so the baked rock, the mask
+// and the animated overlay all agree on the exact footprint.
+float coneShape(vec2 a, vec4 vp, float sd, out float hf, out float dx, out float edge) {
+	float cx = vp.x; float topY = vp.y; float baseY = vp.z; float Wb = vp.w;
+	float Ht = max(baseY - topY, 1e-4);
+	hf = (baseY - a.y) / Ht;
+	float hff = clamp(hf, 0.0, 1.0);
+	float base_w = mix(Wb, Wb * 0.53, hff);                           // foot -> crater-rim taper (hub cone ratio)
+	float rough = (0.028 * fbm(vec2(hf * 4.5, sd * 1.7)) - 0.012 + 0.018 * fbm(vec2(a.x * 5.5, sd))) * mix(1.0, 0.4, hff);
+	edge = base_w + rough;                                            // gently craggy flank (kept subtle like the hub)
+	dx = a.x - cx;
+	// Side-TOP view like the wheel hub: the summit is NOT a flat cut. The crater rim reads
+	// as an ellipse, so the rock silhouette bulges UP above topY by `ry` at the axis (the
+	// BACK rim we look over) — that's what lets us see down into the molten bowl instead of
+	// edge-on. The flanks below still taper out to the foot as before.
+	float rx = Wb * 0.53;                                             // crater-rim half-width (== the flank taper at the rim)
+	float ry = rx * VOLC_TILT;                                        // foreshortened vertical radius of the tilted rim
+	float cap = clamp(1.0 - (dx * dx) / max(rx * rx, 1e-6), 0.0, 1.0);
+	float topEdge = topY - ry * sqrt(cap);                            // back rim arc (higher on screen than topY)
+	return max(max(abs(dx) - edge, topEdge - a.y), a.y - baseY);
+}
+// Broad incandescence/temperature of the sea (~0.2 cool crust .. ~1.3 white-hot),
+// driven by a large slow-drifting field and BOOSTED near each volcano (the heat
+// sources) — hottest at the summits and where the flanks plunge into the lava, so
+// the sea runs hot around the cones and cooler out at the open edges.
+float lavaHeat(vec2 a, float t) {
+	float h = 0.30 + 0.55 * gnoise(a * 1.05 + vec2(t * 0.04, 3.0));
+	for (int i = 0; i < 4; i++) {
+		vec4 vp = volcanoParams(i);
+		vec2 summit = vec2(vp.x, vp.y + 0.02);
+		vec2 foot = vec2(vp.x, min(vp.z, 1.0));
+		h += 0.40 * smoothstep(vp.w * 2.4, vp.w * 0.5, distance(a, summit));   // hot halo at the crater
+		h += 0.42 * smoothstep(vp.w * 2.2, vp.w * 0.4, distance(a, foot));     // hot pool at the foot
+	}
+	return h;
+}
+// Cooled-crust CONVECTION field of the molten sea. The domain is warped by a slow
+// low-freq flow so the crust plates DRIFT and crack apart over time. Returns:
+//   x = fissure intensity (1 on a glowing crack between plates .. 0 mid-plate),
+//   y = plate-interior tone (0 darkest basalt .. 1 lighter), z = fine molten shimmer.
+vec3 lavaCrust(vec2 a, float t) {
+	vec2 warp = vec2(gnoise(a * 1.7 + vec2(0.0, t * 0.06)),
+					 gnoise(a * 1.7 + vec2(4.3, -t * 0.05)));
+	vec2 q = a * 3.3 + (warp - 0.5) * 0.75 + vec2(0.0, t * 0.02);       // convecting crust cells
+	float cell = fbm(q);
+	float ridge = 1.0 - abs(2.0 * cell - 1.0);                         // cell boundaries -> the fissure network
+	float crack = smoothstep(0.78, 0.99, ridge);
+	float fine = gnoise(q * 3.0 + vec2(0.0, -t * 0.25));
+	return vec3(crack, smoothstep(0.2, 0.7, cell), fine);
+}
+// The molten lava SEA at a: dark rafting crust plates split by incandescent fissures
+// whose colour climbs deep-red -> orange -> yellow -> white with the heat field. A finer
+// secondary fissure network is layered in for extra molten detail. Shared by the baked
+// plate (t = 0, frozen) and the dyn overlay (t = TIME, convecting).
+vec3 lavaSea(vec2 a, float t) {
+	vec3 cr = lavaCrust(a, t);
+	float crack = cr.x; float tone = cr.y; float fine = cr.z;
+	vec3 cr2 = lavaCrust(a * 2.05 + vec2(11.3, 4.1), t * 1.3);         // finer secondary cracks
+	crack = max(crack, cr2.x * 0.6);
+	float heat = lavaHeat(a, t);
+	// cooled near-black basalt plates, lightly textured
+	vec3 crust = mix(vec3(0.052, 0.026, 0.024), vec3(0.150, 0.078, 0.060), tone);
+	crust *= 0.70 + 0.44 * fine;
+	// incandescent fissures — hotter regions burn toward white-hot
+	float hot = crack * (0.50 + heat);
+	vec3 glow = mix(vec3(0.80, 0.10, 0.015), vec3(1.0, 0.52, 0.10), smoothstep(0.15, 0.75, hot));
+	glow = mix(glow, vec3(1.0, 0.94, 0.66), smoothstep(0.82, 1.35, hot));
+	vec3 col = mix(crust, glow, clamp(crack * (0.42 + 0.72 * heat), 0.0, 1.0));
+	col += glow * crack * (0.36 + 0.34 * fine);                        // incandescent bleed off the cracks
+	col += vec3(0.60, 0.19, 0.03) * smoothstep(0.35, 1.25, heat) * 0.24;   // broad heat wash over the hot pools
+	col += vec3(0.9, 0.34, 0.06) * smoothstep(0.2, 1.05, a.y) * 0.05;      // subtly hotter floor toward the bottom
+	return col;
+}
+// Static (baked) volcano bodies: side-on cones of dark basalt with a craggy rugged
+// silhouette, hill-shaded (lit from the upper-left), a warm-scorched summit crust, dim
+// RESTING lava scars down the flanks and a resting crater glow. No TIME.
+vec3 volcanoRock(vec3 col, vec2 a) {
+	for (int i = 0; i < 4; i++) {
+		vec4 vp = volcanoParams(i);
+		float sd = volcanoSeed(i);
+		if (a.y < vp.y - 0.14 || abs(a.x - vp.x) > vp.w + 0.14) continue;
+		float hf; float dx; float edge;
+		float sdb = coneShape(a, vp, sd, hf, dx, edge);
+		float body = aafill(sdb);
+		if (body < 0.004) continue;
+		float hff = clamp(hf, 0.0, 1.0);
+		float flank = clamp(dx / max(edge, 1e-3), -1.0, 1.0);         // -1 left .. +1 right across the slope
+		// hill shading: lit from the upper-left, so the left flank is bright and the
+		// ridge crest catches light; the far right flank falls into shadow.
+		float key = clamp(0.58 - 0.55 * flank, 0.12, 1.0);
+		float crest = 1.0 - abs(flank);
+		vec3 rlow = vec3(0.030, 0.021, 0.017);                        // DARK near-black basalt, like the wheel hub
+		vec3 rhi  = vec3(0.115, 0.068, 0.048);
+		float tex = fbm(vec2(dx * 7.0, a.y * 8.5) + sd);
+		vec3 rock = mix(rlow, rhi, tex);
+		rock *= 0.42 + 0.78 * key;
+		rock *= 0.86 + 0.28 * crest;                                  // catch light along the ridge line
+		rock += vec3(0.30, 0.11, 0.03) * smoothstep(0.55, 0.0, hff) * 0.5;   // warm bounce from the lava at the foot
+		// NARROW resting lava channels scarring the flanks (dim baked glow the animated
+		// pass lights up), chosen by column (dx) and running DOWN the slope.
+		float vplace = fbm(vec2(dx * 6.5 + sd, sd));
+		float vridge = 1.0 - abs(2.0 * vplace - 1.0);
+		float vein = smoothstep(0.82, 0.98, vridge) * smoothstep(0.05, 0.22, hff) * smoothstep(0.99, 0.80, hff);
+		rock += vec3(0.80, 0.24, 0.05) * vein * 0.35;
+		// warm scorched cooling crust near the crater rim
+		rock = mix(rock, rock * vec3(1.65, 1.03, 0.6) + vec3(0.05, 0.018, 0.0), smoothstep(0.80, 1.0, hff) * 0.5);
+		// RESTING crater lava lake — an ELLIPSE at the summit (the tilted top-view pool, seen
+		// like the wheel hub), framed by a thin dark rim. Dim here; the animated pass lights it.
+		float rx = vp.w * 0.53; float ry = rx * VOLC_TILT;
+		vec2 ce = (a - vec2(vp.x, vp.y)) / vec2(rx, ry);
+		float er = length(ce);
+		float lake = smoothstep(1.0, 0.82, er);
+		vec3 pool = mix(vec3(0.55, 0.16, 0.03), vec3(0.86, 0.34, 0.07), smoothstep(0.9, 0.0, er));
+		pool *= mix(1.0, 0.5, smoothstep(0.1, 0.95, ce.y));              // near lip shades the pool's front
+		rock = mix(rock, pool, lake * 0.75);
+		rock += vec3(0.9, 0.34, 0.08) * aaline((er - 0.9) * min(rx, ry), 0.008) * 0.6;   // bright crater lip
+		col = mix(col, rock, body);
+	}
+	return col;
+}
+// Coverage mask of the baked cone bodies (1 inside a cone .. 0 out), used by the dyn
+// overlay to keep the animated sea from painting over the crisp baked cones. Uses the
+// SAME coneShape footprint as volcanoRock so the mask lines up exactly.
+float lavaRockMask(vec2 a) {
+	float m = 0.0;
+	for (int i = 0; i < 4; i++) {
+		vec4 vp = volcanoParams(i);
+		float sd = volcanoSeed(i);
+		if (a.y < vp.y - 0.14 || abs(a.x - vp.x) > vp.w + 0.14) continue;
+		float hf; float dx; float edge;
+		m = max(m, aafill(coneShape(a, vp, sd, hf, dx, edge)));
+	}
+	return m;
+}
+// Animated volcano lava: a pulsing molten crater lake at the summit, lava rivulets
+// streaming DOWN the flanks (scrolling with TIME), a bright molten SHORELINE + heat-bloom
+// halo where the flanks plunge into the sea (so the cone reads as grounded, not floating)
+// and embers rising off the crater. Cheap: masked to each cone's footprint.
+vec3 volcanoLava(vec3 col, vec2 a, float t) {
+	for (int i = 0; i < 4; i++) {
+		vec4 vp = volcanoParams(i);
+		float sd = volcanoSeed(i);
+		float cx = vp.x; float topY = vp.y; float baseY = vp.z; float Wb = vp.w;
+		if (a.y < topY - 0.16 || abs(a.x - cx) > Wb + 0.20) continue;
+		float hf; float dx; float edge;
+		float sdb = coneShape(a, vp, sd, hf, dx, edge);
+		float hff = clamp(hf, 0.0, 1.0);
+		float body = aafill(sdb);
+		// heat-bloom halo hugging the cone + molten shoreline at the foot — grounds it in the lava
+		col += vec3(1.0, 0.42, 0.12) * smoothstep(0.15, 0.0, sdb) * (1.0 - body) * 0.5;
+		col += vec3(1.0, 0.5, 0.14) * aaline(sdb, 0.012) * smoothstep(0.55, 0.0, hff)
+			* (0.85 + 0.25 * sin(t * 2.0 + sd)) * 0.7;               // molten shoreline lapping the foot
+		if (body < 0.003) continue;
+		// crater lava lake at the summit — an ELLIPSE (the tilted top-view molten pool, like
+		// the wheel hub) rather than a thin edge-on band, so we look down into the bowl.
+		float rx = Wb * 0.53; float ry = rx * VOLC_TILT;
+		vec2 ce = (a - vec2(cx, topY)) / vec2(rx, ry);
+		float er = length(ce);
+		float lake = smoothstep(1.0, 0.82, er) * body;
+		if (lake > 0.001) {
+			float bub = fbm(vec2(ce.x * 3.4, ce.y * 3.4 - t * 0.7));
+			vec3 lc = mix(vec3(0.85, 0.16, 0.03), vec3(1.0, 0.80, 0.34), smoothstep(0.0, 0.8, bub));
+			lc = mix(lc, vec3(1.0, 0.95, 0.72), smoothstep(0.55, 0.9, bub));
+			lc *= 0.85 + 0.15 * sin(t * 2.6 + sd);
+			lc *= mix(1.0, 0.55, smoothstep(0.1, 0.95, ce.y));          // near lip dips over the pool's front
+			col = mix(col, lc, lake);
+			col += vec3(1.0, 0.4, 0.1) * lake * 0.32;
+			col += vec3(1.0, 0.55, 0.14) * aaline((er - 0.9) * min(rx, ry), 0.006) * body * 0.8;   // molten lip
+		}
+		// narrow lava veins streaming DOWN the flanks — SAME channels as the baked scars
+		float vplace = fbm(vec2(dx * 6.5 + sd, sd));
+		float vridge = 1.0 - abs(2.0 * vplace - 1.0);
+		float chan = smoothstep(0.82, 0.98, vridge);
+		float flow = fbm(vec2(dx * 5.0, hff * 6.0 - t * 1.3));        // scrolls DOWN the slope
+		flow = 0.5 + 0.5 * smoothstep(0.30, 0.82, flow);
+		float streams = chan * flow * smoothstep(0.05, 0.22, hff) * smoothstep(0.99, 0.80, hff);
+		vec3 sc = mix(vec3(1.0, 0.30, 0.04), vec3(1.0, 0.72, 0.28), smoothstep(0.2, 0.85, flow));   // wheel-hub lava palette
+		sc = mix(sc, vec3(1.0, 0.95, 0.72), smoothstep(0.75, 0.96, flow));
+		col = mix(col, sc, streams * body * 0.9);
+		col += vec3(1.0, 0.42, 0.1) * streams * body * 0.26;
+		// embers rising off the crater
+		for (int e = 0; e < 5; e++) {
+			float fe = float(e);
+			float rise = fract(t * (0.12 + 0.06 * hash11(fe + sd)) + hash11(fe * 2.1 + sd));
+			vec2 ep = vec2(cx + (hash11(fe * 3.3 + sd) - 0.5) * Wb * 0.7, topY - rise * (baseY - topY) * 0.5);
+			col += vec3(1.0, 0.5, 0.16) * smoothstep(0.014, 0.0, distance(a, ep)) * (1.0 - rise) * 0.7;
+		}
+	}
+	return col;
+}
+// The FROZEN scene (a resting snapshot of the molten sea + the baked volcano islands),
+// shared by the plate and the shop preview. No TIME.
+vec3 lavaTerrain(vec2 a, vec2 uv) {
+	vec3 col = lavaSea(a, 0.0);
+	col = volcanoRock(col, a);
+	return col;
+}
+// The animated overlay, layered over the baked plate (dyn) or the live terrain
+// (preview): recompute the CONVECTING molten sea, composite the baked islands back on
+// top, then add the crater lakes, flank lava, shorelines and rising embers. The heavy
+// hill-shade of the cones is never re-paid — only the (~2 fbm) sea is animated per frame.
+vec3 lavaMolten(vec3 col, vec2 a, vec2 uv, float t) {
+	vec3 sea = lavaSea(a, t);
+	float rock = lavaRockMask(a);
+	col = mix(sea, col, rock);                                          // convecting sea, baked cones kept crisp
+	// embers rising off the molten sea (cheap: a fixed spatter of drifting sparks)
+	for (int i = 0; i < 12; i++) {
+		float fi = float(i);
+		float rise = fract(t * (0.16 + 0.10 * hash11(fi * 1.7)) + hash11(fi * 2.3));
+		float ex = hash11(fi * 3.1) * aspect;
+		vec2 ep = vec2(ex + 0.02 * sin(t * 2.4 + fi), 0.06 + 0.9 * hash11(fi * 5.7) - 0.12 * rise);
+		col += vec3(1.0, 0.55, 0.16) * smoothstep(0.010, 0.0, distance(a, ep)) * (1.0 - rise) * 0.85;
+	}
+	col = volcanoLava(col, a, t);                                      // crater lakes, flank lava, shorelines
+	return col;
+}
+// --- 3D-cone gameplay variants ---------------------------------------------------
+// In gameplay the Volcano skin composites FOUR real 3D volcano cones (VolcanoCone, in
+// a SubViewport — see background_manager) OVER this sea, so the baked 2D cone bodies +
+// crater/flank lava are dropped here. lavaHeat still boosts the sea at each cone's
+// footprint (volcanoParams), so a hot molten pool grounds every 3D cone where it lands.
+// The full 2D-cone lavaTerrain/lavaMolten above are kept for the shop skin preview.
+vec3 lavaTerrainSea(vec2 a, vec2 uv) {
+	return lavaSea(a, 0.0);
+}
+vec3 lavaMoltenSea(vec3 col, vec2 a, vec2 uv, float t) {
+	col = lavaSea(a, t);                                                // live convecting sea (no baked cones to keep)
+	// embers rising off the molten sea (same cheap spatter as lavaMolten)
+	for (int i = 0; i < 12; i++) {
+		float fi = float(i);
+		float rise = fract(t * (0.16 + 0.10 * hash11(fi * 1.7)) + hash11(fi * 2.3));
+		float ex = hash11(fi * 3.1) * aspect;
+		vec2 ep = vec2(ex + 0.02 * sin(t * 2.4 + fi), 0.06 + 0.9 * hash11(fi * 5.7) - 0.12 * rise);
+		col += vec3(1.0, 0.55, 0.16) * smoothstep(0.010, 0.0, distance(a, ep)) * (1.0 - rise) * 0.85;
+	}
+	return col;
+}
+"
+# Volcano preview / live-fallback shader: terrain + animated molten, free-running
+# (the shop skin preview has no baked plate to sample).
+const _LAVA_SHADER := _HEAD + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = lavaTerrain(a, uv);
+	col = lavaMolten(col, a, uv, t);
+	col = mix(col, col * vec3(1.14, 1.0, 0.86), 0.20);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.72, 1.0, smoothstep(1.5, 0.35, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Volcano gameplay — SEA ONLY (3D-cone variant). The convecting molten sea + embers with
+# NO baked 2D cones (the four framing cones were removed). This is what
+# _SKIN_SHADERS[\"inferno\"] uses.
+const _LAVA_SHADER_3D := _HEAD + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = lavaMoltenSea(vec3(0.0), a, uv, t);
+	col = mix(col, col * vec3(1.14, 1.0, 0.86), 0.20);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.72, 1.0, smoothstep(1.5, 0.35, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Volcano static plate: the whole frozen terrain baked once (relief, crust, resting
+# lava glow). The fbm/hill-shade cost is paid at bake time only.
+# NOTE: _LAVA_STATIC / _LAVA_DYN (baked 2D cones) are the retained fallback for the
+# Volcano gameplay background — gameplay now uses the sea-only _LAVA_STATIC_3D /
+# _LAVA_DYN_3D + real 3D cones instead. To revert to the 2D cones, point the
+# "skin:inferno" entries in _NODE_PLATE / _NODE_DYN back at these two.
+const _LAVA_STATIC := _HEAD + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(lavaTerrain(a, uv), 1.0);
+}
+"
+# Volcano dynamic: sample the plate, add the cheap animated molten overlay (flowing
+# lava, drifting crust, embers, live bloom), then grade + heat vignette.
+const _LAVA_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	col = lavaMolten(col, a, uv, t);
+	col = mix(col, col * vec3(1.14, 1.0, 0.86), 0.20);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.72, 1.0, smoothstep(1.5, 0.35, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+# Volcano static plate — 3D-cone gameplay variant: the frozen molten SEA only (no baked
+# cone bodies; the four real 3D cones are composited on top at runtime).
+const _LAVA_STATIC_3D := _HEAD + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(lavaTerrainSea(a, uv), 1.0);
+}
+"
+# Volcano dynamic — 3D-cone gameplay variant: convecting sea + embers only. The crater
+# lakes / flank lava now come from the real 3D cones, so volcanoLava is not called here.
+const _LAVA_DYN_3D := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _LAVA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	float t = TIME;
+	vec3 col = texture(static_tex, uv).rgb;
+	col = lavaMoltenSea(col, a, uv, t);
+	col = mix(col, col * vec3(1.14, 1.0, 0.86), 0.20);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.72, 1.0, smoothstep(1.5, 0.35, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Racing skin (id "racing") — inside a car cockpit at dusk, driving. Split the
+# same way as the Volcano lava scene: racingScene() draws everything static
+# (sky, skyline, road bed, pillars, mirror, dash, gauge faces) and is baked
+# once to a plate; racingMotion() adds the only things that actually need TIME
+# (receding lane dashes, sweeping gauge needles) as a cheap live overlay.
+# ---------------------------------------------------------------------------
+const _RACING_FUNCS := "
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+// One analog gauge, baked: chrome bezel, dished dark face, coloured underglow,
+// major/minor tick ring and a red danger arc. The live needle is drawn in Motion.
+vec3 gaugeFace(vec3 col, vec2 a, vec2 c, float rr, vec3 accent) {
+	float rd = distance(a, c);
+	if (rd > rr * 1.25) return col;
+	vec2 d = a - c;
+	float ang = atan(d.y, d.x);
+	col = mix(col, vec3(0.28, 0.30, 0.35), aafill(rd - rr));               // chrome bezel
+	col += vec3(0.55, 0.58, 0.66) * aaline(rd - rr, 0.009);                // bezel highlight
+	col = mix(col, vec3(0.035, 0.040, 0.055), aafill(rd - rr * 0.9));      // dished face
+	col += accent * smoothstep(rr * 0.9, 0.0, rd) * 0.12;                  // face underglow
+	float aa = fract((ang + 3.14159) / 6.2832);
+	float majors = step(0.86, fract(aa * 10.0)) * radWin(rd, rr * 0.66, rr * 0.86);
+	float minors = step(0.72, fract(aa * 50.0)) * radWin(rd, rr * 0.76, rr * 0.86);
+	col = mix(col, vec3(0.90, 0.93, 0.98), clamp(majors + minors * 0.4, 0.0, 1.0));
+	float danger = radWin(rd, rr * 0.66, rr * 0.86) * win1(ang, 1.35, 2.65, 0.14);
+	col = mix(col, vec3(0.95, 0.12, 0.10), danger);                        // redline arc
+	col = mix(col, vec3(0.12, 0.12, 0.16), aafill(rd - rr * 0.11));        // centre boss
+	col += accent * aaline(rd - rr * 0.11, 0.005);
+	return col;
+}
+vec3 racingScene(vec2 a, vec2 uv) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.44;
+	// ---- dusk sky through the windshield ----
+	vec3 sky_hi = vec3(0.08, 0.12, 0.30);
+	vec3 sky_mid = vec3(0.46, 0.30, 0.44);
+	vec3 sky_lo = vec3(0.99, 0.58, 0.28);
+	vec3 col = mix(sky_mid, sky_hi, smoothstep(0.04, 0.42, uv.y));
+	col = mix(sky_lo, col, smoothstep(0.0, 0.36, uv.y));
+	vec2 sunp = vec2(0.63 * aspect, 0.40);
+	float sund = distance(a, sunp);
+	col += vec3(1.0, 0.60, 0.26) * smoothstep(0.44, 0.0, sund) * 0.55;
+	col = mix(col, vec3(1.0, 0.88, 0.55), smoothstep(0.085, 0.05, sund));  // sun disc
+	// soft baked clouds streaked along the horizon
+	vec2 q = vec2(a.x, uv.y) * vec2(2.1, 3.6);
+	float cl = fbm(q + vec2(1.3, 0.0));
+	float clouds = smoothstep(0.55, 0.92, cl) * smoothstep(0.44, 0.26, uv.y);
+	col = mix(col, mix(vec3(0.55, 0.36, 0.44), vec3(1.0, 0.76, 0.5), clouds), clouds * 0.55);
+	// ---- distant skyline with lit windows ----
+	for (int i = 0; i < 9; i++) {
+		float fi = float(i);
+		float bx = (fi + 0.5) * (aspect / 9.0);
+		float bw = 0.05 + 0.05 * hash11(fi * 5.7);
+		float bh = 0.05 + 0.11 * hash11(fi * 3.1);
+		float d = sdBox(a - vec2(bx, horizon - bh * 0.5), vec2(bw * 0.5, bh * 0.5));
+		float b = aafill(d);
+		col = mix(col, vec3(0.09, 0.08, 0.15), b);
+		vec2 wl = floor((a - vec2(bx, horizon)) * 70.0);
+		float lit = step(0.6, hash21(wl + fi * 4.0));
+		col = mix(col, vec3(1.0, 0.80, 0.42), b * lit * 0.55);
+	}
+	// ---- road receding to the horizon ----
+	if (uv.y > horizon) {
+		float ty = clamp((uv.y - horizon) / (1.0 - horizon), 0.0, 1.0);
+		float persp = ty * ty;
+		float halfw = mix(0.012, 0.66, persp);
+		float cx = uv.x - 0.5;
+		vec3 ground = mix(vec3(0.05, 0.09, 0.07), vec3(0.11, 0.16, 0.11), persp);
+		col = mix(col, ground, smoothstep(horizon, horizon + 0.015, uv.y));
+		if (abs(cx) < halfw) {
+			float rn = fbm(vec2(cx * 26.0, ty * 34.0));
+			vec3 road = mix(vec3(0.09, 0.09, 0.11), vec3(0.19, 0.19, 0.22), persp);
+			col = road * (0.85 + 0.30 * rn);
+			float side = smoothstep(0.014, 0.0, abs(abs(cx) - halfw * 0.9));
+			col = mix(col, vec3(0.95, 0.86, 0.5), side * 0.85);           // solid edge lines
+		}
+	}
+	// ---- windshield frame: A-pillars + rear-view mirror ----
+	float pillarL = aafill(sdBox((a - vec2(0.015, 0.28)) * rot(0.15), vec2(0.045, 0.6)));
+	float pillarR = aafill(sdBox((a - vec2(aspect - 0.015, 0.28)) * rot(-0.15), vec2(0.045, 0.6)));
+	col = mix(col, vec3(0.025, 0.025, 0.035), max(pillarL, pillarR));
+	float mirror = aafill(sdBox(a - vec2(cx0, 0.05), vec2(0.11, 0.026)));
+	col = mix(col, vec3(0.02, 0.02, 0.03), mirror);
+	col += vec3(0.5, 0.4, 0.3) * aafill(sdBox(a - vec2(cx0, 0.05), vec2(0.10, 0.020))) * 0.25;  // dim reflection
+	// ---- dashboard ----
+	float dashTop = 0.60 + 0.06 * smoothstep(0.0, aspect, abs(a.x - cx0));   // gentle cowl curve
+	if (uv.y > dashTop - 0.02) {
+		float dt = clamp((uv.y - dashTop) / (1.0 - dashTop), 0.0, 1.0);
+		vec3 dash = mix(vec3(0.10, 0.10, 0.12), vec3(0.015, 0.015, 0.022), dt);
+		dash *= 0.9 + 0.1 * fbm(a * vec2(6.0, 14.0));                    // soft-touch grain
+		col = mix(col, dash, smoothstep(dashTop - 0.02, dashTop + 0.01, uv.y));
+		col += vec3(1.0, 0.5, 0.2) * smoothstep(0.02, 0.0, abs(uv.y - dashTop)) * 0.25;  // ambient strip glow
+		col += vec3(0.9, 0.45, 0.2) * smoothstep(0.006, 0.0, abs(uv.y - (dashTop + 0.006))) * 0.4; // red stitch line
+	}
+	// twin gauges: tach (left) + speedo (right)
+	col = gaugeFace(col, a, vec2(cx0 - 0.42, 0.82), 0.17, vec3(1.0, 0.35, 0.12));
+	col = gaugeFace(col, a, vec2(cx0 + 0.42, 0.82), 0.17, vec3(0.2, 0.7, 1.0));
+	// centre infotainment screen
+	vec2 sc = vec2(cx0, 0.80);
+	float scr = sdBox(a - sc, vec2(0.16, 0.072));
+	col = mix(col, vec3(0.02, 0.03, 0.05), aafill(scr));
+	col += vec3(0.15, 0.45, 0.65) * aaline(scr, 0.006);
+	col += vec3(0.10, 0.35, 0.5) * smoothstep(0.05, 0.0, distance(a, sc)) * 0.3;
+	// air vents flanking the cluster
+	for (int v = 0; v < 2; v++) {
+		float fv = float(v);
+		vec2 vc = vec2(cx0 + (fv - 0.5) * 1.30, 0.74);
+		float vb = sdBox(a - vc, vec2(0.08, 0.038));
+		col = mix(col, vec3(0.03, 0.03, 0.04), aafill(vb));
+		col = mix(col, vec3(0.10, 0.10, 0.12), aaline(vb, 0.004));
+		float slat = smoothstep(0.6, 1.0, sin((a.y - vc.y) * 90.0)) * aafill(vb + 0.006);
+		col = mix(col, vec3(0.06, 0.06, 0.07), slat * 0.6);
+	}
+	// steering wheel rim rising into view from the bottom
+	vec2 wc = vec2(cx0, 1.32);
+	float wr = 0.42;
+	float wrd = distance(a, wc);
+	col = mix(col, vec3(0.06, 0.05, 0.06), aaline(wrd - wr, 0.028));
+	col += vec3(0.35, 0.36, 0.4) * aaline(wrd - wr - 0.022, 0.004);       // rim top highlight
+	col = mix(col, vec3(0.9, 0.15, 0.12), aafill(distance(a, wc + vec2(0.0, -wr)) - 0.020)); // 12-o'clock racing mark
+	return col;
+}
+vec3 racingMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.44;
+	// receding centre lane-dashes rushing toward the camera
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float p = fract(t * 0.55 + fi * 0.2);
+		float yy = mix(horizon + 0.008, 0.62, p * p);
+		float persp = pow((yy - horizon) / (1.0 - horizon), 2.0);
+		float d = sdBox(vec2(uv.x - 0.5, uv.y - yy), vec2(mix(0.002, 0.02, persp), mix(0.004, 0.05, persp)));
+		float fade = smoothstep(horizon, horizon + 0.04, yy) * smoothstep(0.63, 0.55, yy);
+		col = mix(col, vec3(0.98, 0.92, 0.6), aafill(d) * fade);
+	}
+	// gauge needles sweeping over the two dials
+	for (int g = 0; g < 2; g++) {
+		float fg = float(g);
+		vec2 c = vec2(cx0 + (fg - 0.5) * 0.84, 0.82);
+		float rr = 0.17;
+		float sweep = 2.0 + fg * 0.25 + 0.85 * (0.5 + 0.5 * sin(t * (0.8 + fg * 0.3) + fg * 2.0));
+		vec2 dir = vec2(cos(sweep), sin(sweep));
+		float d = sdSeg(a - c, dir * rr * 0.16, dir * rr * 0.82);
+		col += vec3(1.0, 0.3, 0.12) * aaline(d, 0.012) * 0.4;
+		col = mix(col, vec3(1.0, 0.36, 0.14), aaline(d, 0.005));
+		col = mix(col, vec3(0.14, 0.14, 0.18), aafill(distance(a, c) - rr * 0.11));  // hub cap over base
+	}
+	// live EQ bars on the centre screen
+	vec2 sc = vec2(cx0, 0.80);
+	vec2 sd2 = a - sc;
+	if (abs(sd2.x) < 0.145 && abs(sd2.y) < 0.062) {
+		float col_i = floor((sd2.x + 0.145) / 0.29 * 8.0);
+		float bh = 0.018 + 0.05 * (0.5 + 0.5 * sin(t * 3.2 + col_i * 1.7));
+		float bar = step(fract((sd2.x + 0.145) / 0.29 * 8.0), 0.68)
+			* step(sd2.y, 0.055) * step(0.055 - bh, sd2.y);
+		col = mix(col, mix(vec3(0.15, 0.9, 0.6), vec3(1.0, 0.7, 0.2), (sd2.y + 0.055) / 0.11), bar);
+	}
+	// blinking turn-signal tell-tale
+	float blink = step(0.5, fract(t * 1.1));
+	col += vec3(0.1, 0.95, 0.25) * smoothstep(0.016, 0.0, distance(a, vec2(cx0 - 0.63, 0.66))) * blink;
+	return col;
+}
+"
+const _RACING_STATIC := _HEAD + _RACING_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(racingScene(a, uv), 1.0);
+}
+"
+const _RACING_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _RACING_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = racingMotion(col, a, uv, TIME);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.78, 1.0, smoothstep(1.3, 0.3, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+const _RACING_SHADER := _HEAD + _RACING_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = racingScene(a, uv);
+	col = racingMotion(col, a, uv, TIME);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.78, 1.0, smoothstep(1.3, 0.3, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Submarine skin (id "submarine") — a bulkhead interior with a brass porthole
+# looking into the deep sea. subScene() bakes the riveted walls, the porthole
+# ring, and the still ocean/rocks behind the glass; subMotion() adds rising
+# bubbles, drifting caustic shimmer, a passing fish silhouette and a sonar
+# ping — all cheap, all confined to the small porthole disc.
+# ---------------------------------------------------------------------------
+const _SUB_FUNCS := "
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a; vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+vec2 pcPort() { return vec2(aspect * 0.5, 0.46); }
+vec3 subScene(vec2 a, vec2 uv) {
+	vec2 pc = pcPort();
+	float pr = 0.35;
+	float rd = distance(a, pc);
+	// ---- riveted steel bulkhead ----
+	vec3 col = mix(vec3(0.07, 0.10, 0.12), vec3(0.02, 0.03, 0.045), uv.y);
+	col *= 0.88 + 0.14 * fbm(a * 5.5);                                 // brushed metal grain
+	vec2 pg = a * 4.2;
+	vec2 pf = fract(pg) - 0.5;
+	float seam = min(abs(pf.x), abs(pf.y));
+	col = mix(col, col * 0.45, smoothstep(0.028, 0.0, seam) * 0.7);    // recessed panel seams
+	col += vec3(0.12, 0.15, 0.16) * smoothstep(0.06, 0.03, seam) * 0.2;
+	vec2 rf = fract(pg + 0.5) - 0.5;
+	float rivet = aafill(length(rf) - 0.055);
+	col = mix(col, vec3(0.20, 0.22, 0.25), rivet * 0.7);
+	col += vec3(0.35) * aafill(length(rf - vec2(0.018, 0.018)) - 0.018) * 0.4;
+	// horizontal service pipe low on the wall
+	float pipe = aafill(abs(a.y - 0.9) - 0.028);
+	col = mix(col, vec3(0.13, 0.14, 0.15), pipe);
+	col += vec3(0.4, 0.42, 0.45) * smoothstep(0.028, 0.0, abs(a.y - 0.882)) * 0.35 * step(rd, 5.0);
+	col = mix(col, vec3(0.02, 0.02, 0.03), aafill(abs(a.y - 0.9) - 0.03) * step(0.024, abs(a.y - 0.9)));
+	// ---- deep-sea view through the glass ----
+	if (rd < pr) {
+		vec2 oc = a - pc;
+		float yy = oc.y / pr;                                          // -1 top .. +1 bottom
+		vec3 sea = mix(vec3(0.03, 0.16, 0.24), vec3(0.004, 0.03, 0.06), smoothstep(-1.0, 1.0, yy));
+		sea += vec3(0.20, 0.42, 0.46) * smoothstep(0.2, -1.0, yy) * 0.45;   // sunlit surface up top
+		// static god-ray shafts slanting down
+		float ray = 0.0;
+		for (int i = 0; i < 4; i++) {
+			float fi = float(i);
+			float rx = (fi - 1.5) * 0.17;
+			ray += smoothstep(0.055, 0.0, abs(oc.x - rx - oc.y * 0.35));
+		}
+		sea += vec3(0.16, 0.38, 0.42) * ray * smoothstep(0.5, -0.7, yy) * 0.16;
+		// seabed with rock/coral lumps
+		float bedY = pr * 0.58;
+		float bed = smoothstep(0.03, -0.03, oc.y - (bedY + 0.045 * fbm(vec2(oc.x * 9.0, 1.0))));
+		sea = mix(sea, vec3(0.04, 0.06, 0.06), bed);
+		for (int i = 0; i < 5; i++) {
+			float fi = float(i);
+			float rx = (hash11(fi * 2.3) - 0.5) * pr * 1.5;
+			float rw = 0.045 + 0.05 * hash11(fi * 3.7);
+			float rh = 0.04 + 0.06 * hash11(fi * 5.1);
+			float d = length((oc - vec2(rx, bedY - rh * 0.4)) / vec2(rw, rh)) - 1.0;
+			vec3 coral = mix(vec3(0.05, 0.06, 0.08), vec3(0.18, 0.09, 0.12), hash11(fi * 9.1));
+			sea = mix(sea, coral, smoothstep(0.08, -0.05, d));
+		}
+		col = sea;
+		col *= mix(1.0, 0.45, smoothstep(pr * 0.55, pr, rd));          // glass edge vignette
+		col += vec3(0.3, 0.4, 0.45) * smoothstep(0.11, 0.0, distance(a, pc - vec2(0.12, 0.13))) * 0.18; // reflection
+	}
+	// brass porthole ring: bevel + radial bolts
+	col = mix(col, vec3(0.44, 0.32, 0.14), aaline(rd - pr, 0.032));
+	col += vec3(0.85, 0.66, 0.32) * aaline(rd - pr + 0.020, 0.006);    // inner bright bevel
+	col = mix(col, vec3(0.22, 0.15, 0.07), aaline(rd - pr - 0.030, 0.006)); // outer shadow
+	float ang = atan(a.y - pc.y, a.x - pc.x);
+	float bolts = step(0.84, fract(ang / 6.2832 * 16.0)) * radWin(rd, pr + 0.004, pr + 0.030);
+	col = mix(col, vec3(0.88, 0.70, 0.34), bolts);
+	col += vec3(0.5) * step(0.9, fract(ang / 6.2832 * 16.0)) * radWin(rd, pr + 0.006, pr + 0.020) * 0.5;
+	// wall gauges + a valve wheel flanking the porthole
+	for (int g = 0; g < 2; g++) {
+		float fg = float(g);
+		vec2 gc = pc + vec2((fg - 0.5) * 2.0 * (pr + 0.24), 0.12);
+		float grd = distance(a, gc);
+		col = mix(col, vec3(0.04, 0.05, 0.06), aafill(grd - 0.08));
+		col = mix(col, vec3(0.5, 0.4, 0.2), aaline(grd - 0.083, 0.006));   // brass rim
+		col += vec3(0.2, 0.7, 0.45) * smoothstep(0.06, 0.0, grd) * 0.35;   // glowing face
+		float ga = atan(a.y - gc.y, a.x - gc.x);
+		col = mix(col, vec3(0.7, 0.85, 0.7), step(0.85, fract(ga / 6.2832 * 12.0)) * radWin(grd, 0.055, 0.072));
+	}
+	// valve wheel handle upper-left
+	vec2 valc = vec2(pc.x - pr - 0.28, 0.24);
+	float vrd = distance(a, valc);
+	col = mix(col, vec3(0.3, 0.14, 0.10), aaline(vrd - 0.075, 0.014));
+	for (int s = 0; s < 5; s++) {
+		float sa = float(s) / 5.0 * 6.2832;
+		float sp = sdSeg(a - valc, vec2(0.0), vec2(cos(sa), sin(sa)) * 0.075);
+		col = mix(col, vec3(0.32, 0.16, 0.11), aaline(sp, 0.008));
+	}
+	col = mix(col, vec3(0.5, 0.42, 0.2), aafill(vrd - 0.02));
+	return col;
+}
+vec3 subMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	vec2 pc = pcPort();
+	float pr = 0.35;
+	float rd = distance(a, pc);
+	if (rd < pr) {
+		vec2 oc = a - pc;
+		// drifting caustic shimmer
+		float caustic = (0.5 + 0.5 * sin((oc.x * 9.0 + oc.y * 4.0) + t * 1.2));
+		caustic *= (0.5 + 0.5 * sin((oc.x * 5.0 - oc.y * 7.0) - t * 0.8));
+		col += vec3(0.06, 0.15, 0.15) * caustic * 0.28 * smoothstep(pr, pr * 0.3, rd);
+		// rising bubbles
+		for (int i = 0; i < 10; i++) {
+			float fi = float(i);
+			float speed = 0.10 + 0.06 * hash11(fi * 1.9);
+			float rise = fract(t * speed + hash11(fi * 3.3));
+			float bx = (hash11(fi * 5.1) - 0.5) * pr * 1.7;
+			vec2 bp = vec2(bx + 0.03 * sin(t * 2.0 + fi), pr - rise * pr * 2.0);
+			float bsize = 0.006 + 0.010 * hash11(fi * 7.7);
+			float d = length(oc - bp) - bsize;
+			col = mix(col, vec3(0.7, 0.88, 0.96), aafill(d) * (1.0 - rise * 0.3));
+			col += vec3(0.4, 0.6, 0.7) * aaline(d, 0.002) * 0.5;      // bubble rim glint
+		}
+		// two fish swimming across at different depths
+		for (int f = 0; f < 2; f++) {
+			float ff = float(f);
+			float dir = (ff < 0.5) ? 1.0 : -1.0;
+			float fp = fract(t * (0.07 + 0.03 * ff) + ff * 0.5);
+			float fx = mix(-pr, pr, (ff < 0.5) ? fp : 1.0 - fp);
+			float fy = (ff < 0.5 ? -0.22 : 0.05) * pr + 0.08 * sin(fp * 6.2832 * 1.5 + ff);
+			vec2 fq = (oc - vec2(fx, fy)) * vec2(dir, 1.7);
+			float body = length(fq) - 0.032;
+			float tail = sdBox((fq - vec2(-0.042, 0.0)) * rot(0.5), vec2(0.018, 0.011));
+			col = mix(col, vec3(0.02, 0.04, 0.05), aafill(min(body, tail)));
+		}
+		// sonar ping expanding from centre
+		float ping = fract(t * 0.22);
+		float pingD = abs(length(oc) - ping * pr) - 0.004;
+		col = mix(col, vec3(0.4, 1.0, 0.65), aafill(pingD) * (1.0 - ping) * 0.6);
+	}
+	// gauge needles twitching on the wall gauges
+	for (int g = 0; g < 2; g++) {
+		float fg = float(g);
+		vec2 gc = pc + vec2((fg - 0.5) * 2.0 * (pr + 0.24), 0.12);
+		float sweep = 1.5 + fg + 0.6 * sin(t * (1.0 + fg * 0.4) + fg);
+		float d = sdSeg(a - gc, vec2(0.0), vec2(cos(sweep), sin(sweep)) * 0.05);
+		col = mix(col, vec3(0.8, 1.0, 0.8), aaline(d, 0.004));
+	}
+	return col;
+}
+"
+const _SUB_STATIC := _HEAD + _SUB_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(subScene(a, uv), 1.0);
+}
+"
+const _SUB_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _SUB_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = subMotion(col, a, uv, TIME);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.75, 1.0, smoothstep(1.3, 0.3, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+const _SUB_SHADER := _HEAD + _SUB_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = subScene(a, uv);
+	col = subMotion(col, a, uv, TIME);
+	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
+	col *= mix(0.75, 1.0, smoothstep(1.3, 0.3, length(vg)));
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Arcade skin (id "arcade") — a dim retro arcade hall: perspective checker
+# floor, cabinet silhouettes with glowing marquees down both walls, an
+# overhead marquee arch. arcadeScene() bakes all of that; arcadeMotion() adds
+# scanline shimmer, per-cabinet marquee flicker and a slow floor light sweep.
+# ---------------------------------------------------------------------------
+const _ARCADE_FUNCS := "
+vec3 marqueeColor(float fi) {
+	float m = mod(fi, 3.0);
+	if (m < 1.0) { return vec3(1.0, 0.15, 0.55); }
+	if (m < 2.0) { return vec3(0.15, 0.85, 1.0); }
+	return vec3(0.65, 0.25, 1.0);
+}
+// Per-cabinet placement, shared by scene + motion so the glow lines up exactly.
+// out cc = cabinet centre, out cw/ch = half-extents, returns marquee colour.
+vec3 cabinet(float fi, out vec2 cc, out float cw, out float ch, out float dscale) {
+	float side = (mod(fi, 2.0) < 0.5) ? -1.0 : 1.0;
+	float depth = floor(fi / 2.0);
+	float depthN = depth / 2.0;
+	dscale = 1.0 - depth * 0.26;
+	float horizon = 0.56;
+	float cy_base = mix(0.94, horizon + 0.03, depthN);
+	ch = 0.52 * dscale;
+	cw = 0.15 * dscale;
+	float cx = aspect * 0.5 + side * mix(0.80, 0.42, depthN);
+	cc = vec2(cx, cy_base - ch * 0.5);
+	return marqueeColor(fi);
+}
+vec3 arcadeScene(vec2 a, vec2 uv) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.56;
+	vec3 col = mix(vec3(0.07, 0.03, 0.13), vec3(0.02, 0.01, 0.05), smoothstep(0.0, 0.6, uv.y));
+	col += vec3(0.28, 0.05, 0.4) * smoothstep(0.45, 0.0, distance(vec2(uv.x, uv.y), vec2(0.5, 0.30))) * 0.18;  // back-wall haze
+	// ---- perspective checker floor with neon sheen ----
+	if (uv.y > horizon) {
+		float ty = max((uv.y - horizon) / (1.0 - horizon), 0.04);
+		vec2 fp = vec2((uv.x - 0.5) / ty, 1.0 / ty);
+		vec2 g = floor(fp * 3.0);
+		float chk = mod(g.x + g.y, 2.0);
+		col = mix(vec3(0.05, 0.02, 0.09), vec3(0.12, 0.05, 0.19), chk);
+		col *= 0.35 + 0.75 * ty;
+		col += vec3(0.4, 0.1, 0.5) * smoothstep(0.32, 0.0, abs(uv.x - 0.5)) * ty * 0.18;   // centre sheen
+	}
+	col += vec3(0.6, 0.2, 0.75) * smoothstep(0.018, 0.0, abs(uv.y - horizon)) * 0.45;      // horizon glow
+	// ---- overhead neon arch ----
+	vec2 arcc = vec2(cx0, 0.66);
+	float archR = distance(a, arcc);
+	float archTop = step(a.y, 0.30);
+	col += vec3(1.0, 0.2, 0.7) * aaline(archR - 0.52, 0.008) * archTop;
+	col += vec3(0.2, 0.9, 1.0) * aaline(archR - 0.495, 0.005) * archTop;
+	col += vec3(0.8, 0.2, 0.9) * smoothstep(0.06, 0.0, abs(archR - 0.51)) * archTop * 0.2;
+	// ---- cabinets receding down both walls ----
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		vec2 cc; float cw; float ch; float dscale;
+		vec3 mc = cabinet(fi, cc, cw, ch, dscale);
+		float body = aafill(sdBox(a - cc, vec2(cw * 0.5, ch * 0.5)));
+		col = mix(col, vec3(0.03, 0.02, 0.05), body);
+		col += mc * smoothstep(0.02, 0.0, abs(abs(a.x - cc.x) - cw * 0.5))
+			* aafill(sdBox(a - cc, vec2(cw * 0.5 + 0.02, ch * 0.5))) * 0.35;               // side light strips
+		vec2 mq = vec2(cc.x, cc.y - ch * 0.5 + 0.03 * dscale);                             // marquee bar
+		float md = sdBox(a - mq, vec2(cw * 0.44, 0.03 * dscale));
+		col += mc * aafill(md);
+		col += mc * smoothstep(0.08, 0.0, abs(md)) * 0.3;
+		vec2 scc = cc - vec2(0.0, ch * 0.12);                                              // glowing screen
+		float sdd = sdBox(a - scc, vec2(cw * 0.36, ch * 0.22));
+		col = mix(col, vec3(0.01, 0.01, 0.02), aafill(sdd + 0.008));
+		col += mix(vec3(0.1, 0.45, 0.75), mc, 0.4) * aafill(sdd) * 0.6;
+		col = mix(col, vec3(0.06, 0.05, 0.08), aafill(sdBox(a - (cc + vec2(0.0, ch * 0.24)), vec2(cw * 0.42, ch * 0.05))));  // control panel
+		float refl = smoothstep(0.13 * dscale, 0.0, abs(a.x - cc.x)) * smoothstep(cc.y + ch * 0.5, cc.y + ch * 0.5 + 0.12, a.y);
+		col += mc * refl * 0.12 * step(a.y, cc.y + ch * 0.5 + 0.14);                       // floor reflection
+	}
+	return col;
+}
+vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx0 = aspect * 0.5;
+	// CRT scanline shimmer
+	col *= mix(0.93, 1.0, 0.5 + 0.5 * sin((uv.y * 260.0) - t * 6.0));
+	// per-cabinet marquee flicker + screen content pulse
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		vec2 cc; float cw; float ch; float dscale;
+		vec3 mc = cabinet(fi, cc, cw, ch, dscale);
+		float flick = step(0.14, hash11(fi * 3.0 + floor(t * 3.0 + fi * 7.0)));
+		vec2 mq = vec2(cc.x, cc.y - ch * 0.5 + 0.03 * dscale);
+		col += mc * aafill(sdBox(a - mq, vec2(cw * 0.44, 0.03 * dscale))) * 0.5 * flick;
+		vec2 scc = cc - vec2(0.0, ch * 0.12);
+		float sdd = sdBox(a - scc, vec2(cw * 0.36, ch * 0.22));
+		float px = floor((a.x - scc.x) * 40.0) + fi * 5.0;
+		float shimmer = 0.5 + 0.5 * sin(t * 4.0 + px * 1.3);
+		col += mc * aafill(sdd) * shimmer * 0.25;
+	}
+	// chasing bulbs racing around the neon arch
+	vec2 arcc = vec2(cx0, 0.66);
+	float archR = distance(a, arcc);
+	float ang = atan(a.y - arcc.y, a.x - arcc.x);
+	float chase = 0.5 + 0.5 * sin(ang * 14.0 - t * 5.0);
+	col += vec3(1.0, 0.9, 0.5) * smoothstep(0.02, 0.0, abs(archR - 0.51)) * step(a.y, 0.30) * chase;
+	// light sweep drifting across the floor
+	float sweep = fract(t * 0.09);
+	col += vec3(0.35, 0.2, 0.45) * smoothstep(0.035, 0.0, abs(uv.x - sweep)) * step(0.56, uv.y) * 0.3;
+	return col;
+}
+"
+const _ARCADE_STATIC := _HEAD + _ARCADE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(arcadeScene(a, uv), 1.0);
+}
+"
+const _ARCADE_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _ARCADE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = arcadeMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+const _ARCADE_SHADER := _HEAD + _ARCADE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = arcadeScene(a, uv);
+	col = arcadeMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Buccaneer skin (id "pirate") — the deck of a pirate ship in a storm.
+# pirateScene() bakes the stormy sky, moon, drifting cloud silhouettes, deck
+# planking, mast and rigging; pirateMotion() adds the only things that need
+# TIME: slanted rain, a swinging lantern, surging bow foam and rare lightning.
+# ---------------------------------------------------------------------------
+const _PIRATE_FUNCS := "
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+vec3 pirateScene(vec2 a, vec2 uv) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.54;
+	float mastx = cx0 + 0.30;
+	// ---- stormy sky ----
+	vec3 col = mix(vec3(0.15, 0.17, 0.23), vec3(0.03, 0.04, 0.07), smoothstep(0.0, horizon, uv.y));
+	vec2 moonp = vec2(0.32 * aspect, 0.16);
+	float md = distance(a, moonp);
+	col += vec3(0.5, 0.55, 0.6) * smoothstep(0.35, 0.0, md) * 0.4;                 // moon halo
+	col = mix(col, vec3(0.86, 0.87, 0.82), smoothstep(0.078, 0.062, md));          // moon disc
+	col = mix(col, vec3(0.7, 0.72, 0.68), smoothstep(0.062, 0.05, md) * (0.4 + 0.4 * fbm(a * 12.0))); // craters
+	// layered storm clouds, backlit near the moon
+	vec2 q = vec2(a.x, uv.y) * vec2(2.0, 3.4);
+	float c1 = fbm(q + vec2(0.6, 0.0));
+	float c2 = fbm(q * 1.7 + vec2(5.0, 2.0));
+	float clouds = smoothstep(0.5, 0.85, c1) * smoothstep(horizon + 0.06, 0.0, uv.y);
+	vec3 cloudc = mix(vec3(0.05, 0.06, 0.09), vec3(0.30, 0.32, 0.36), smoothstep(0.45, 0.0, md));
+	col = mix(col, cloudc, clouds * 0.85);
+	col = mix(col, cloudc * 0.55, smoothstep(0.58, 0.85, c2) * smoothstep(horizon, 0.0, uv.y) * 0.5);
+	// ---- churning sea ----
+	if (uv.y > horizon) {
+		float ty = (uv.y - horizon) / (1.0 - horizon);
+		float waves = fbm(vec2(a.x * 4.0, uv.y * 10.0));
+		vec3 sea = mix(vec3(0.05, 0.09, 0.12), vec3(0.02, 0.04, 0.06), ty);
+		sea *= 0.7 + 0.55 * waves;
+		sea += vec3(0.3, 0.32, 0.3) * smoothstep(0.07, 0.0, abs(a.x - moonp.x))
+			* (0.5 + 0.5 * sin(uv.y * 42.0)) * smoothstep(1.0, 0.25, ty) * 0.3;     // moon reflection
+		sea += vec3(0.5, 0.55, 0.58) * smoothstep(0.62, 0.78, fbm(vec2(a.x * 6.0, uv.y * 14.0))) * 0.25;  // foam crests
+		col = sea;
+	}
+	col += vec3(0.2, 0.24, 0.26) * smoothstep(0.006, 0.0, abs(uv.y - horizon)) * 0.5;
+	// ---- deck planking + rail ----
+	if (uv.y > 0.82) {
+		float ty = (uv.y - 0.82) / 0.18;
+		vec3 wood = mix(vec3(0.12, 0.08, 0.05), vec3(0.20, 0.14, 0.09), step(0.5, fract(uv.x * aspect * 6.0)));
+		wood *= 0.75 + 0.35 * (0.5 + 0.5 * sin(uv.x * aspect * 26.0));
+		wood *= 0.5 + 0.6 * ty;
+		col = wood;
+	}
+	col = mix(col, vec3(0.10, 0.07, 0.05), aafill(sdBox(a - vec2(cx0, 0.82), vec2(aspect * 0.5, 0.014))));
+	col += vec3(0.3, 0.22, 0.14) * aaline(a.y - 0.808, 0.004) * 0.5;
+	// ---- mast + yard + furled sail + rigging ----
+	col = mix(col, vec3(0.06, 0.045, 0.03), aafill(sdBox(a - vec2(mastx, 0.42), vec2(0.02, 0.5))));
+	col = mix(col, vec3(0.07, 0.05, 0.035), aafill(sdBox(a - vec2(mastx, 0.14), vec2(0.34, 0.014))));   // yard
+	col = mix(col, vec3(0.52, 0.47, 0.37), aafill(sdBox(a - vec2(mastx, 0.175), vec2(0.30, 0.02))) * 0.85); // furled sail
+	vec2 yl = vec2(mastx - 0.34, 0.14);
+	vec2 yr = vec2(mastx + 0.34, 0.14);
+	col = mix(col, vec3(0.10, 0.09, 0.07), smoothstep(0.005, 0.0, sdSeg(a, yl, vec2(0.10, 0.82))));
+	col = mix(col, vec3(0.10, 0.09, 0.07), smoothstep(0.005, 0.0, sdSeg(a, yr, vec2(aspect - 0.10, 0.82))));
+	col = mix(col, vec3(0.10, 0.09, 0.07), smoothstep(0.004, 0.0, sdSeg(a, vec2(mastx, -0.1), vec2(cx0 - 0.3, 0.82))));
+	// ---- ship's wheel (helm) rising from the bottom-left ----
+	vec2 hc = vec2(cx0 - 0.5, 1.04);
+	float hr = 0.22;
+	float hrd = distance(a, hc);
+	col = mix(col, vec3(0.11, 0.07, 0.04), aaline(hrd - hr, 0.020));
+	col = mix(col, vec3(0.12, 0.08, 0.05), aaline(hrd - hr * 0.55, 0.012));
+	for (int s = 0; s < 8; s++) {
+		float sa = float(s) / 8.0 * 6.2832;
+		col = mix(col, vec3(0.13, 0.09, 0.05), aaline(sdSeg(a - hc, vec2(0.0), vec2(cos(sa), sin(sa)) * (hr + 0.05)), 0.008));
+	}
+	col = mix(col, vec3(0.22, 0.15, 0.08), aafill(hrd - 0.03));
+	return col;
+}
+vec3 pirateMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.54;
+	float mastx = cx0 + 0.30;
+	// slanted driving rain
+	for (int i = 0; i < 14; i++) {
+		float fi = float(i);
+		float colx = hash11(fi * 3.7) * aspect;
+		float speed = 1.1 + 0.6 * hash11(fi * 1.3);
+		float ry = fract((a.y - a.x * 0.12) * 3.2 - t * speed + hash11(fi * 5.1) * 10.0);
+		float streak = smoothstep(0.0022, 0.0, abs(a.x - colx)) * smoothstep(0.09, 0.0, ry);
+		col = mix(col, vec3(0.6, 0.65, 0.72), streak * 0.3 * step(a.y, 0.86));
+	}
+	// lantern swinging from the yard
+	float sw = sin(t * 1.3) * 0.20;
+	vec2 piv = vec2(mastx - 0.22, 0.15);
+	vec2 lc = piv + vec2(sin(sw) * 0.17, cos(sw) * 0.17);
+	col = mix(col, vec3(0.06, 0.05, 0.03), aaline(sdSeg(a, piv, lc), 0.003));      // hang wire
+	col = mix(col, vec3(0.05, 0.04, 0.03), aafill(sdBox(a - lc, vec2(0.018, 0.026))));
+	col = mix(col, vec3(1.0, 0.62, 0.26), aafill(sdBox(a - lc, vec2(0.010, 0.016))));
+	col += vec3(1.0, 0.72, 0.34) * smoothstep(0.15, 0.0, distance(a, lc)) * 0.55;
+	// foam surge rolling up from the horizon
+	float surge = fract(t * 0.3);
+	float foamY = horizon + 0.02 + 0.03 * sin(surge * 6.2832 * 2.0) * (1.0 - surge);
+	col = mix(col, vec3(0.62, 0.66, 0.68), smoothstep(0.02, 0.0, abs(uv.y - foamY)) * smoothstep(1.0, 0.5, surge) * 0.5);
+	// lightning: full-sky flash + a jagged bolt
+	float fp = fract(t * 0.09 + 0.3);
+	float flash = max(smoothstep(0.965, 0.99, fp) - smoothstep(0.99, 1.0, fp), 0.0);
+	col += vec3(0.6, 0.65, 0.75) * flash * 1.3;
+	if (flash > 0.01) {
+		float bx = cx0 - 0.4 + 0.05 * sin(a.y * 28.0) + 0.03 * sin(a.y * 90.0);
+		col += vec3(0.85, 0.9, 1.0) * smoothstep(0.006, 0.0, abs(a.x - bx)) * step(a.y, horizon) * flash * 3.0;
+	}
+	return col;
+}
+"
+const _PIRATE_STATIC := _HEAD + _PIRATE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(pirateScene(a, uv), 1.0);
+}
+"
+const _PIRATE_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _PIRATE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = pirateMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+const _PIRATE_SHADER := _HEAD + _PIRATE_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = pirateScene(a, uv);
+	col = pirateMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Jackpot skin (id "casino") — a moody neon casino floor. casinoScene() bakes
+# the carpet, pendant lights, felt table and neon sign frames; casinoMotion()
+# adds neon pulse, an orbiting sparkle and drifting felt-table glints.
+# ---------------------------------------------------------------------------
+const _CASINO_FUNCS := "
+vec3 casinoScene(vec2 a, vec2 uv) {
+	float cx0 = aspect * 0.5;
+	float horizon = 0.58;
+	vec3 col = mix(vec3(0.13, 0.02, 0.05), vec3(0.03, 0.005, 0.02), smoothstep(0.0, 0.6, uv.y));
+	// ---- perspective damask carpet with gold motif ----
+	if (uv.y > horizon) {
+		float ty = max((uv.y - horizon) / (1.0 - horizon), 0.05);
+		vec2 fp = vec2((uv.x - 0.5) / ty, 1.0 / ty);
+		vec2 f = fract(fp * 4.0) - 0.5;
+		float dman = abs(f.x) + abs(f.y);
+		col = mix(vec3(0.12, 0.02, 0.04), vec3(0.21, 0.04, 0.07), step(dman, 0.34));
+		col = mix(col, vec3(0.45, 0.32, 0.10), step(dman, 0.15) * 0.6);            // gold centres
+		col *= 0.35 + 0.72 * ty;
+	}
+	col += vec3(0.6, 0.15, 0.2) * smoothstep(0.02, 0.0, abs(uv.y - horizon)) * 0.4;
+	// ---- felt gaming table across the bottom ----
+	if (uv.y > 0.80) {
+		float ty = (uv.y - 0.80) / 0.20;
+		col = mix(vec3(0.05, 0.23, 0.12), vec3(0.02, 0.11, 0.06), ty);
+		col += vec3(0.8, 0.72, 0.3) * aaline(distance(a, vec2(cx0, 1.15)) - 0.30, 0.004) * 0.6;   // betting arcs
+		col += vec3(0.8, 0.72, 0.3) * aaline(distance(a, vec2(cx0, 1.15)) - 0.22, 0.004) * 0.6;
+		for (int i = 0; i < 3; i++) {                                             // chip stacks
+			float fi = float(i);
+			vec2 cp = vec2(cx0 + (fi - 1.0) * 0.30, 0.90);
+			vec3 chipc = (mod(fi, 2.0) < 0.5) ? vec3(0.8, 0.12, 0.12) : vec3(0.12, 0.14, 0.8);
+			for (int k = 0; k < 4; k++) {
+				float fk = float(k);
+				col = mix(col, chipc, aafill(sdBox(a - (cp - vec2(0.0, fk * 0.016)), vec2(0.03, 0.009))));
+				col += vec3(0.9) * aaline(a.y - (cp.y - fk * 0.016 - 0.009), 0.0018) * 0.2;
+			}
+		}
+		col = mix(col, vec3(0.95, 0.95, 0.92), aafill(sdBox((a - vec2(cx0 - 0.42, 0.92)) * rot(-0.2), vec2(0.05, 0.075))));  // cards
+		col = mix(col, vec3(0.95, 0.95, 0.92), aafill(sdBox((a - vec2(cx0 - 0.35, 0.93)) * rot(0.1), vec2(0.05, 0.075))));
+	}
+	// ---- pendant lights ----
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		vec2 lp = vec2((fi + 0.5) * aspect / 3.0, 0.12);
+		col = mix(col, vec3(0.02, 0.02, 0.03), aaline(a.x - lp.x, 0.003) * step(a.y, lp.y));  // cord
+		col = mix(col, vec3(0.35, 0.28, 0.12), aafill(distance(a, lp) - 0.04));               // brass shade
+		col += vec3(1.0, 0.78, 0.4) * smoothstep(0.16, 0.0, distance(a, lp)) * 0.45;          // warm pool
+	}
+	// ---- neon side signs ----
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float side = (fi < 0.5) ? 0.07 : (aspect - 0.07);
+		vec3 nc = (fi < 0.5) ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
+		float d = sdBox(a - vec2(side, 0.34), vec2(0.05, 0.30));
+		col = mix(col, vec3(0.02, 0.02, 0.03), aafill(d));
+		col += nc * aaline(d, 0.010) * 0.9;
+		col += nc * smoothstep(0.10, 0.0, abs(d)) * 0.12;
+	}
+	// ---- central neon diamond sign ----
+	vec2 sc = vec2(cx0, 0.30);
+	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.10;
+	col += vec3(1.0, 0.85, 0.3) * aaline(dsign, 0.006) * 0.9;
+	col += vec3(1.0, 0.85, 0.3) * smoothstep(0.05, 0.0, abs(dsign)) * 0.1;
+	return col;
+}
+vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx0 = aspect * 0.5;
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float side = (fi < 0.5) ? 0.07 : (aspect - 0.07);
+		vec3 nc = (fi < 0.5) ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
+		float d = sdBox(a - vec2(side, 0.34), vec2(0.05, 0.30));
+		float pulse = 0.6 + 0.4 * sin(t * 2.0 + fi * 3.0);
+		col += nc * aaline(d, 0.010) * 0.5 * pulse;
+		col += nc * smoothstep(0.12, 0.0, abs(d)) * 0.1 * pulse;
+	}
+	// diamond sign chase + circling ball
+	vec2 sc = vec2(cx0, 0.30);
+	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.10;
+	float ang = atan(a.y - sc.y, a.x - sc.x);
+	col += vec3(1.0, 0.9, 0.4) * smoothstep(0.02, 0.0, abs(dsign)) * (0.5 + 0.5 * sin(ang * 8.0 - t * 4.0));
+	vec2 bp = sc + vec2(cos(t * 1.6), sin(t * 1.6)) * 0.13;
+	col += vec3(1.0, 1.0, 0.92) * smoothstep(0.014, 0.0, distance(a, bp)) * 0.9;
+	// gold sparkles across felt + carpet
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float gx = hash11(fi * 3.3) * aspect;
+		float gy = 0.82 + 0.16 * hash11(fi * 5.5);
+		float tw = 0.5 + 0.5 * sin(t * (2.0 + fi) + fi * 10.0);
+		col += vec3(1.0, 0.92, 0.55) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.6;
+	}
+	// slow spotlight sweeping the carpet
+	float sweep = 0.5 + 0.5 * sin(t * 0.5);
+	col += vec3(0.5, 0.15, 0.2) * smoothstep(0.12, 0.0, abs(uv.x - sweep)) * step(0.58, uv.y) * 0.22;
+	return col;
+}
+"
+const _CASINO_STATIC := _HEAD + _CASINO_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(casinoScene(a, uv), 1.0);
+}
+"
+const _CASINO_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _CASINO_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = casinoMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+const _CASINO_SHADER := _HEAD + _CASINO_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = casinoScene(a, uv);
+	col = casinoMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Phantom skin (id "phantom") — a gloomy mansion foyer. phantomScene() bakes
+# the arched window, marble floor, chandelier silhouette and portrait frames;
+# phantomMotion() adds flickering candle glow, drifting mist, a ghostly wisp
+# and the occasional portrait-eye glint.
+# ---------------------------------------------------------------------------
+const _PHANTOM_FUNCS := "
+float sdSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a; vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+vec3 phantomScene(vec2 a, vec2 uv) {
+	float cx0 = aspect * 0.5;
+	vec3 col = mix(vec3(0.06, 0.06, 0.10), vec3(0.015, 0.015, 0.03), smoothstep(0.0, 0.62, uv.y));
+	// ---- tall arched window onto a moonlit sky ----
+	vec2 wc = vec2(cx0, 0.34);
+	float wbox = sdBox(a - vec2(wc.x, wc.y + 0.10), vec2(0.16, 0.28));
+	float warch = min(wbox, length(a - vec2(wc.x, wc.y - 0.16)) - 0.16);
+	float winMask = aafill(warch);
+	vec3 sky = mix(vec3(0.10, 0.12, 0.22), vec3(0.03, 0.04, 0.09), smoothstep(0.0, 0.6, uv.y));
+	vec2 moonp = vec2(cx0 + 0.07, 0.20);
+	sky += vec3(0.5, 0.55, 0.6) * smoothstep(0.14, 0.0, distance(a, moonp)) * 0.5;
+	sky = mix(sky, vec3(0.82, 0.84, 0.8), smoothstep(0.052, 0.04, distance(a, moonp)));
+	sky = mix(sky, sky * 0.55, smoothstep(0.5, 0.85, fbm(a * 4.0 + vec2(3.0, 0.0))) * 0.6);   // clouds
+	col = mix(col, sky, winMask);
+	col = mix(col, vec3(0.08, 0.09, 0.13), winMask * aaline(a.x - wc.x, 0.008));               // muntins
+	col = mix(col, vec3(0.08, 0.09, 0.13), winMask * aaline(a.y - wc.y, 0.008));
+	col = mix(col, vec3(0.08, 0.09, 0.13), winMask * aaline(a.y - (wc.y - 0.14), 0.008));
+	col = mix(col, vec3(0.17, 0.17, 0.21), aaline(warch, 0.014));                              // stone frame
+	col += vec3(0.3, 0.34, 0.42) * winMask * smoothstep(0.12, 0.0, distance(a, moonp)) * 0.2;
+	// moonlight pooling on the floor below the window
+	col += vec3(0.22, 0.26, 0.34) * smoothstep(0.16, 0.0, abs(a.x - cx0)) * smoothstep(0.64, 1.0, uv.y) * 0.10;
+	// ---- checker marble floor ----
+	if (uv.y > 0.64) {
+		float ty = (uv.y - 0.64) / 0.36;
+		vec2 fp = vec2((uv.x - 0.5) / max(ty, 0.06), 1.0 / max(ty, 0.06));
+		vec2 g = floor(fp * 4.0);
+		float chk = mod(g.x + g.y, 2.0);
+		col = mix(vec3(0.13, 0.13, 0.16), vec3(0.05, 0.05, 0.07), chk);
+		col *= 0.4 + 0.7 * ty;
+		col += vec3(0.2, 0.24, 0.3) * smoothstep(0.14, 0.0, abs(uv.x - 0.5)) * ty * 0.1;       // window reflection
+	}
+	// ---- grand chandelier ----
+	vec2 cc = vec2(cx0, 0.10);
+	col = mix(col, vec3(0.10, 0.09, 0.06), aaline(a.x - cc.x, 0.004) * step(a.y, cc.y) * step(-0.02, a.y));  // chain
+	for (int i = 0; i < 6; i++) {
+		float sa = float(i) / 6.0 * 6.2832;
+		col = mix(col, vec3(0.22, 0.18, 0.08), aaline(sdSeg(a - cc, vec2(0.0), vec2(cos(sa), sin(sa)) * 0.14), 0.004));  // arms
+	}
+	col = mix(col, vec3(0.25, 0.20, 0.08), aaline(distance(a, cc) - 0.14, 0.007));             // ring
+	for (int i = 0; i < 7; i++) {
+		float fi = float(i) - 3.0;
+		vec2 cp = cc + vec2(fi * 0.045, 0.14 + abs(fi) * 0.012);
+		col = mix(col, vec3(0.30, 0.28, 0.16), aafill(sdBox(a - cp, vec2(0.006, 0.02))));       // candle body
+	}
+	// ---- portrait frames ----
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float side = (fi < 0.5) ? aspect * 0.13 : aspect * 0.87;
+		vec2 fc = vec2(side, 0.30);
+		float frame = sdBox(a - fc, vec2(0.10, 0.15));
+		col = mix(col, vec3(0.30, 0.10, 0.05), aafill(frame));
+		col = mix(col, vec3(0.5, 0.35, 0.12), aaline(frame, 0.012));                            // gilt edge
+		col = mix(col, vec3(0.05, 0.05, 0.07), aafill(sdBox(a - fc, vec2(0.08, 0.13))));        // canvas
+		col = mix(col, vec3(0.42, 0.42, 0.44), aafill(length((a - fc) * vec2(1.0, 0.82)) - 0.05) * 0.45);  // ghost face
+	}
+	// ---- cobwebs in the top corners ----
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		vec2 corner = vec2((fi < 0.5) ? 0.0 : aspect, 0.0);
+		for (int k = 0; k < 4; k++) {
+			float rr = 0.09 + float(k) * 0.05;
+			col += vec3(0.3) * aaline(distance(a, corner) - rr, 0.0015) * smoothstep(0.28, 0.0, distance(a, corner)) * 0.3;
+		}
+	}
+	return col;
+}
+vec3 phantomMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx0 = aspect * 0.5;
+	vec2 cc = vec2(cx0, 0.10);
+	// candle flames flickering on the chandelier
+	for (int i = 0; i < 7; i++) {
+		float fi = float(i) - 3.0;
+		vec2 cp = cc + vec2(fi * 0.045, 0.14 + abs(fi) * 0.012);
+		float fl = 0.55 + 0.35 * sin(t * (8.0 + fi * 1.7) + fi * 3.0) + 0.2 * fbm(vec2(t * 3.0 + fi, 0.0));
+		vec2 fp = cp - vec2(0.0, 0.025 + 0.004 * sin(t * 10.0 + fi));
+		col += vec3(1.0, 0.66, 0.28) * smoothstep(0.06, 0.0, distance(a, fp)) * fl * 0.5;
+		col = mix(col, vec3(1.0, 0.85, 0.5), aafill(distance(a, fp) - 0.006) * clamp(fl, 0.0, 1.0));
+	}
+	// drifting floor mist
+	float mist = 0.0;
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		float mx = fract(t * (0.03 + 0.01 * fi) + hash11(fi * 3.0)) * (aspect + 0.6) - 0.3;
+		float d = length((a - vec2(mx, 0.80 + fi * 0.05)) * vec2(1.0, 3.0)) - 0.30;
+		mist = max(mist, smoothstep(0.15, -0.10, d) * 0.35);
+	}
+	col = mix(col, vec3(0.35, 0.36, 0.42), mist * step(0.64, uv.y));
+	// ghost wisp drifting across
+	float wp = fract(t * 0.06);
+	vec2 wpos = vec2(mix(-0.2, aspect + 0.2, wp), 0.42 + 0.06 * sin(wp * 6.2832 * 2.0));
+	col += vec3(0.55, 0.66, 0.72) * smoothstep(0.11, 0.0, distance(a, wpos)) * 0.32;
+	col += vec3(0.72, 0.82, 0.86) * smoothstep(0.03, 0.0, distance(a, wpos)) * 0.3;
+	// portrait eyes glinting
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		float side = (fi < 0.5) ? aspect * 0.13 : aspect * 0.87;
+		vec2 fc = vec2(side, 0.28);
+		float blink = step(0.96, fract(t * 0.2 + fi * 0.5));
+		col += vec3(0.9, 0.15, 0.15) * smoothstep(0.016, 0.0, distance(a, fc + vec2(-0.022, 0.0))) * blink;
+		col += vec3(0.9, 0.15, 0.15) * smoothstep(0.016, 0.0, distance(a, fc + vec2(0.022, 0.0))) * blink;
+	}
+	// lightning flashing through the window
+	vec2 wc = vec2(cx0, 0.34);
+	float warch = min(sdBox(a - vec2(wc.x, wc.y + 0.10), vec2(0.16, 0.28)), length(a - vec2(wc.x, wc.y - 0.16)) - 0.16);
+	float fp2 = fract(t * 0.07 + 0.5);
+	float flash = max(smoothstep(0.96, 0.99, fp2) - smoothstep(0.99, 1.0, fp2), 0.0);
+	col += vec3(0.55, 0.6, 0.72) * flash * aafill(warch) * 1.5;
+	col += vec3(0.4, 0.45, 0.55) * flash * 0.25;
+	return col;
+}
+"
+const _PHANTOM_STATIC := _HEAD + _PHANTOM_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(phantomScene(a, uv), 1.0);
+}
+"
+const _PHANTOM_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _PHANTOM_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = phantomMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+const _PHANTOM_SHADER := _HEAD + _PHANTOM_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = phantomScene(a, uv);
+	col = phantomMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+
 # Skin id -> bespoke background shader. Painted on the gameplay screen when the
 # matching complete skin is equipped and no paid theme is overriding it.
 const _SKIN_SHADERS := {
-	"inferno": _NIGHT_SHADER,
+	"inferno": _LAVA_SHADER_3D,           # sea only (the four framing cones were removed)
+	"racing": _RACING_SHADER,
+	"submarine": _SUB_SHADER,
+	"arcade": _ARCADE_SHADER,
+	"pirate": _PIRATE_SHADER,
+	"casino": _CASINO_SHADER,
+	"phantom": _PHANTOM_SHADER,
 }
 
 # Basic static-gradient themes (80 coins each). Each entry drives the shared
@@ -3255,6 +4544,10 @@ const _SHADERS := {
 	"aurora": _AURORA_SHADER,
 	"fairies": _FAIRIES_SHADER,
 	"deepspace": _DEEPSPACE_SHADER,
+	# The moonlit night-castle world (formerly the Volcano skin's background), now a
+	# standalone theme. Full free-running shader drives the shop preview; gameplay
+	# uses its baked plate + dyn overlay (see _NODE_PLATE / _NODE_DYN below).
+	"castle": _NIGHT_SHADER,
 }
 
 # Whether a theme id is renderable by this manager (animated shader OR gradient).
@@ -3317,7 +4610,17 @@ const _NODE_PLATE := {
 	"kitty": _KITTY_STATIC,
 	"reef": _REEF_STATIC,
 	"clouds": _CLOUDS_STATIC,
-	"skin:inferno": _NIGHT_STATIC,
+	"castle": _NIGHT_STATIC,
+	# Volcano gameplay wears the sea-only plate — just the convecting molten sea (the
+	# four framing cones were removed). (The shop skin preview keeps the baked-2D-cone
+	# look via _LAVA_SHADER in _SKIN_SHADERS.)
+	"skin:inferno": _LAVA_STATIC_3D,
+	"skin:racing": _RACING_STATIC,
+	"skin:submarine": _SUB_STATIC,
+	"skin:arcade": _ARCADE_STATIC,
+	"skin:pirate": _PIRATE_STATIC,
+	"skin:casino": _CASINO_STATIC,
+	"skin:phantom": _PHANTOM_STATIC,
 }
 const _NODE_DYN := {
 	"fairies": _FAIRIES_DYN,
@@ -3331,7 +4634,14 @@ const _NODE_DYN := {
 	"kitty": _KITTY_DYN,
 	"reef": _REEF_DYN,
 	"clouds": _CLOUDS_DYN,
-	"skin:inferno": _NIGHT_DYN,
+	"castle": _NIGHT_DYN,
+	"skin:inferno": _LAVA_DYN_3D,
+	"skin:racing": _RACING_DYN,
+	"skin:submarine": _SUB_DYN,
+	"skin:arcade": _ARCADE_DYN,
+	"skin:pirate": _PIRATE_DYN,
+	"skin:casino": _CASINO_DYN,
+	"skin:phantom": _PHANTOM_DYN,
 }
 
 # Trivial full-screen blit: paint a baked plate texture across the _bg ColorRect
@@ -3462,7 +4772,9 @@ func _equipped_bg_key() -> String:
 
 # Build a small ColorRect rendering the theme LIVE (animated shader) at the requested
 # size, for use as a preview tile in the shop. For "default", returns a dark fallback
-# rect. The grid stays fluid because the shaders are pre-compiled via prewarm_previews.
+# rect. The shaders are pre-compiled via prewarm_previews, and the shop only keeps the
+# on-screen previews drawing (see shop_screen._update_preview_visibility), so the grid
+# stays fluid while every visible tile stays fully animated.
 func make_preview(theme_id: String, size: Vector2) -> Control:
 	var rect := ColorRect.new()
 	rect.custom_minimum_size = size
@@ -3479,6 +4791,11 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 	mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
 	rect.material = mat
 	return rect
+
+# True while the preview-shader prewarm queue is still draining, so the shop's loading
+# screen can hold until every THEMES preview shader has compiled (no first-scroll hitch).
+func is_prewarming() -> bool:
+	return _prewarming or not _prewarm_queue.is_empty()
 
 # Pre-compile the scene shaders used by the shop's live theme previews, one per frame.
 # On the Mobile (GL compatibility) renderer a shader is compiled the first time it is

@@ -51,11 +51,60 @@ var _is_editor := OS.get_name() != "Android"
 var _sim_global := {"easy": {}, "moderate": {}, "hard": {}}
 var _sim_daily := {"easy": {}, "moderate": {}, "hard": {}}
 
+# Last-known all-time global rank per difficulty for the signed-in player,
+# persisted to disk so the profile card can show a rank INSTANTLY on open
+# instead of blocking on a network round-trip. Refreshed as a side effect of
+# every real board load (leaderboards screen + profile), and keyed by uid so a
+# different account never sees a stale rank from the previous one.
+const _RANK_CACHE_PATH := "user://rank_cache.cfg"
+var _rank_cache: Dictionary = {}   # diff -> int rank (>0)
+
 func _uid() -> String:  return FirebaseManager.uid
 func _name() -> String: return FirebaseManager.display_name
 
 func _ready() -> void:
 	FirebaseManager.display_name_changed.connect(_on_display_name_changed)
+	FirebaseManager.signed_in.connect(_on_signed_in)
+	FirebaseManager.signed_out.connect(_on_signed_out)
+	# Editor sign-in is synchronous, so we may already be signed in by now.
+	if not _uid().is_empty():
+		_load_rank_cache()
+
+# The last cached all-time rank for `difficulty` (0 if unknown / not signed in).
+func cached_rank(difficulty: String) -> int:
+	return int(_rank_cache.get(difficulty, 0))
+
+func _on_signed_in(_uid_in: String, _name_in: String) -> void:
+	_rank_cache.clear()
+	_load_rank_cache()
+
+func _on_signed_out() -> void:
+	_rank_cache.clear()
+
+# Record a freshly-computed rank for the signed-in player and persist it.
+func _cache_rank(difficulty: String, rank: int) -> void:
+	if rank <= 0 or _uid().is_empty():
+		return
+	if int(_rank_cache.get(difficulty, 0)) == rank:
+		return
+	_rank_cache[difficulty] = rank
+	var cfg := ConfigFile.new()
+	cfg.set_value("meta", "uid", _uid())
+	for d: String in _rank_cache:
+		cfg.set_value("ranks", d, int(_rank_cache[d]))
+	cfg.save(_RANK_CACHE_PATH)
+
+func _load_rank_cache() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(_RANK_CACHE_PATH) != OK:
+		return
+	# Only trust the cache if it belongs to the account that's signed in now.
+	if String(cfg.get_value("meta", "uid", "")) != _uid():
+		return
+	for d in DIFFS:
+		var r := int(cfg.get_value("ranks", d, 0))
+		if r > 0:
+			_rank_cache[d] = r
 
 func reset_session() -> void:
 	pass
@@ -325,7 +374,10 @@ func submit_score_daily(difficulty: String, score: int) -> void:
 # the top 20). Returns the same shape as the daily loader so the screen treats
 # them interchangeably.
 func load_global(difficulty: String) -> Dictionary:
-	return await _load_board("global_" + difficulty, {})
+	var res := await _load_board("global_" + difficulty, {})
+	if bool(res.get("ok", false)):
+		_cache_rank(difficulty, int(res.get("my_rank", 0)))
+	return res
 
 # Loads one daily board (filtered to today's date) with the same shape as
 # load_global.
@@ -367,7 +419,12 @@ func _load_all(prefix: String, extra_eq: Dictionary) -> Dictionary:
 # signals completion. Called WITHOUT await so the boards run in parallel.
 func _load_board_into(collection: String, extra_eq: Dictionary, key: String,
 		out: Dictionary, pending: Dictionary) -> void:
-	out[key] = await _load_board(collection, extra_eq)
+	var res := await _load_board(collection, extra_eq)
+	out[key] = res
+	# Warm the rank cache off the all-time boards the leaderboards screen loads,
+	# so a later profile open shows the rank without waiting on the network.
+	if collection.begins_with("global_") and bool(res.get("ok", false)):
+		_cache_rank(key, int(res.get("my_rank", 0)))
 	pending["left"] -= 1
 	_board_loaded.emit()
 

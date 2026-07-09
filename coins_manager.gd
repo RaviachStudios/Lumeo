@@ -55,6 +55,7 @@ const THEMES := {
 	"aurora":   {"name": "Northern Lights",   "price": 1500, "category": "themes"},
 	"fairies":  {"name": "Enchanted Fairies", "price": 2000, "category": "themes"},
 	"deepspace":{"name": "Deep Space",        "price": 2500, "category": "themes"},
+	"castle":   {"name": "Dragon's Keep",     "price": 3000, "category": "themes"},
 }
 
 # Difficulty unlocks. "easy" is always playable; "moderate" and "hard" are
@@ -88,8 +89,8 @@ const SIMON_COLORS := {
 	"amethyst": {"name": "Amethyst", "price": 80,  "color": Color(0.60, 0.34, 0.92)},
 	"amber":    {"name": "Amber",    "price": 80,  "color": Color(0.97, 0.62, 0.13)},
 	"rose":     {"name": "Rose",     "price": 80,  "color": Color(0.95, 0.36, 0.62)},
-	"silver":   {"name": "Silver",   "price": 200, "color": Color(0.80, 0.82, 0.87)},
-	"gold":     {"name": "Gold",     "price": 350, "color": Color(0.95, 0.78, 0.26)},
+	"silver":   {"name": "Silver",   "price": 110, "color": Color(0.80, 0.82, 0.87)},
+	"gold":     {"name": "Gold",     "price": 130, "color": Color(0.95, 0.78, 0.26)},
 }
 
 # Patterned OUTER-RING styles (no flat colour — the rim wears a repeating pattern).
@@ -111,11 +112,11 @@ const SIMON_OUTER_PATTERNS := {
 }
 
 # Drawn CENTER-HUB styles — a motif rendered on the hub disc. Same `pattern`/
-# `color`/`color2` contract as SIMON_OUTER_PATTERNS, with codes in the 20s.
-# Hub motif codes: 20 heart · 21 star · 22 flower · 23 smiley · 24 dots ·
-#                  25 paw · 26 target · 27 swirl · 28 rainbow · 29 sparkle
+# `color`/`color2` contract as SIMON_OUTER_PATTERNS, with codes in the 20s/30s.
+# Hub motif codes: 21 star · 22 flower · 23 smiley · 24 dots · 25 paw ·
+#                  26 target · 27 swirl · 28 rainbow · 30 crescent · 31 diamond ·
+#                  32 clover · 33 bolt · 34 yin-yang · 35 music note
 const SIMON_INNER_MOTIFS := {
-	"heart":    {"name": "Sweetheart",  "price": 200, "pattern": 20, "color": Color(0.98, 0.52, 0.70), "color2": Color(1.0, 1.0, 1.0)},
 	"star":     {"name": "Gold Star",   "price": 180, "pattern": 21, "color": Color(0.20, 0.24, 0.46), "color2": Color(1.0, 0.84, 0.30)},
 	"daisy":    {"name": "Daisy",       "price": 250, "pattern": 22, "color": Color(0.74, 0.64, 0.96), "color2": Color(1.0, 1.0, 1.0)},
 	"smiley":   {"name": "Smiley",      "price": 200, "pattern": 23, "color": Color(1.0, 0.82, 0.24),  "color2": Color(0.14, 0.10, 0.04)},
@@ -124,7 +125,12 @@ const SIMON_INNER_MOTIFS := {
 	"target":   {"name": "Bullseye",    "price": 160, "pattern": 26, "color": Color(0.90, 0.24, 0.28), "color2": Color(1.0, 1.0, 1.0)},
 	"swirl":    {"name": "Swirl",       "price": 220, "pattern": 27, "color": Color(0.16, 0.78, 0.74), "color2": Color(1.0, 1.0, 1.0)},
 	"rainbow":  {"name": "Rainbow",     "price": 300, "pattern": 28, "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
-	"sparkle":  {"name": "Sparkle",     "price": 260, "pattern": 29, "color": Color(0.15, 0.10, 0.30), "color2": Color(1.0, 0.95, 0.72)},
+	"crescent": {"name": "Crescent Moon","price": 220, "pattern": 30, "color": Color(0.10, 0.12, 0.30), "color2": Color(1.0, 0.93, 0.70)},
+	"diamond":  {"name": "Diamond",     "price": 280, "pattern": 31, "color": Color(0.10, 0.32, 0.45), "color2": Color(0.62, 0.92, 0.99)},
+	"clover":   {"name": "Lucky Clover","price": 240, "pattern": 32, "color": Color(0.95, 0.97, 0.90), "color2": Color(0.22, 0.68, 0.32)},
+	"bolt":     {"name": "Lightning",   "price": 200, "pattern": 33, "color": Color(0.16, 0.14, 0.30), "color2": Color(1.0, 0.86, 0.24)},
+	"yinyang":  {"name": "Harmony",     "price": 260, "pattern": 34, "color": Color(0.10, 0.10, 0.12), "color2": Color(0.97, 0.97, 0.98)},
+	"melody":   {"name": "Melody",      "price": 230, "pattern": 35, "color": Color(0.55, 0.30, 0.85), "color2": Color(1.0, 1.0, 1.0)},
 }
 
 # Complete pre-made wheel skins, each a single bundled look (rings, hub, numeral,
@@ -136,7 +142,13 @@ const SIMON_SKINS := {
 	# Stored id stays "inferno" (selected_skin / owned_skins in Firestore, and the
 	# _skin_id checks in SimonWheel) so existing ownership keeps working; only the
 	# display name changed when the skin was upgraded into the Volcano look.
-	"inferno": {"name": "Volcano", "price": 8000},
+	"inferno":    {"name": "Volcano",   "price": 8000},
+	"racing":     {"name": "Redline",   "price": 7000},
+	"submarine":  {"name": "Nautilus",  "price": 7500},
+	"arcade":     {"name": "Arcade",    "price": 6500},
+	"pirate":     {"name": "Buccaneer", "price": 7200},
+	"casino":     {"name": "Jackpot",   "price": 6800},
+	"phantom":    {"name": "Phantom",   "price": 7800},
 }
 
 # The "level_number" category is NOT a flat colour — it's a font *package* (a whole
@@ -290,6 +302,10 @@ var _loaded_for_uid := ""
 
 # --- state (server truth) ---
 var balance: int = 0
+# The most recently loaded /users/{uid} document, verbatim. Exposed so other
+# managers (e.g. BadgeManager) can read extra fields off the SAME authenticated
+# read without issuing a second one that would race the shared plugin signal.
+var raw_user_doc: Dictionary = {}
 var owned_themes: Array[String] = [DEFAULT_THEME]
 var selected_theme: String = DEFAULT_THEME
 var owned_levels: Array[String] = []     # purchased difficulties; "easy" is implicit
@@ -851,6 +867,7 @@ func _emit_all() -> void:
 	remove_ads_changed.emit()
 
 func _apply_doc(doc: Dictionary) -> void:
+	raw_user_doc = doc.duplicate(true)
 	balance = int(doc.get("coins", 0))
 	# "default" is always owned even if the doc somehow omits it.
 	owned_themes = [DEFAULT_THEME]
