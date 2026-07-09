@@ -154,7 +154,7 @@ var _simon_tiles_box: Control            # holds the three colour tiles
 var _simon_tiles: Dictionary = {}        # category -> {swatch}
 var _skins_root: Control                 # SPECIAL SKINS panel (built lazily) — the ScrollContainer
 										 # card grid, or a plain Control placeholder when detached
-										 # (SKINS_COMING_SOON). Cast to ScrollContainer for scroll ops.
+										 # (_skins_coming_soon). Cast to ScrollContainer for scroll ops.
 var _skins_grid: GridContainer           # the card grid inside _skins_root
 var _skins_by_id: Dictionary = {}        # skin_id -> {root, btn, btn_label, price_label, accent, preview, y}
 # Colour popup (opened from a tile):
@@ -227,9 +227,9 @@ func _begin_load() -> void:
 	BackgroundManager.prewarm_previews(theme_items)
 	# Skip the skin-preview prewarm entirely while the SPECIAL SKINS tab is detached —
 	# the placeholder renders no wheels, so there's nothing to warm.
-	if not SKINS_COMING_SOON:
+	if not _skins_coming_soon():
 		var skin_ids: Array[String] = []
-		for d in SKIN_DEFS:
+		for d in _live_skin_defs():
 			skin_ids.append(String(d["id"]))
 		BackgroundManager.prewarm_skin_previews(skin_ids)
 	# Render the THEMES grid and build the SIMON + SKINS panels while the overlay still
@@ -721,7 +721,7 @@ func _render_category(key: String, incremental := false) -> void:
 		_skins_root.visible = true
 		# The detached placeholder is a plain Control (no scroll_vertical); the real
 		# panel is a ScrollContainer that we reset to the top on show.
-		if not SKINS_COMING_SOON:
+		if not _skins_coming_soon():
 			(_skins_root as ScrollContainer).scroll_vertical = 0
 		_refresh_skin_cards()
 		_layout()
@@ -1049,19 +1049,21 @@ const SKIN_CARD_GAP := 32.0
 const SKIN_GRID_COLS := 3
 const SKIN_GRID_SCROLLBAR_W := 14.0
 
-# The current skin set isn't ready to ship, so the SPECIAL SKINS tab is DETACHED
-# for this release: instead of the card grid it shows a "To be continued" placeholder.
-# Nothing below is deleted — the whole skin card / preview pipeline stays intact and
-# the tab comes back the moment this flips to false (also re-enables the skin-preview
-# prewarm in _begin_load). See _build_skins_panel / _build_skins_coming_soon.
-const SKINS_COMING_SOON := true
+# Most of the skin set isn't ready to ship, so the SPECIAL SKINS tab shows only the
+# skins flagged `released` below. When NONE are released the whole tab is DETACHED —
+# instead of the card grid it shows a "To be continued" placeholder (see
+# _skins_coming_soon / _build_skins_coming_soon). Nothing is deleted — the full skin
+# card / preview pipeline stays intact and each skin returns the moment its entry is
+# flagged released (which also re-enables that skin's preview prewarm in _begin_load).
+# Currently VOLCANO is the only released skin.
 
 # Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
 # Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
 # + the corresponding skin path in SimonWheel. A `blurb` field is optional; when
-# absent the card renders just the title (used for VOLCANO).
+# absent the card renders just the title (used for VOLCANO). Only entries with
+# `released: true` appear in the shop — the rest stay hidden until they're ready.
 const SKIN_DEFS := [
-	{"id": "inferno", "label": "VOLCANO"},
+	{"id": "inferno", "label": "VOLCANO", "released": true},
 	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
 	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
 	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin."},
@@ -1070,12 +1072,26 @@ const SKIN_DEFS := [
 	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
 ]
 
+# The subset of SKIN_DEFS that are live in the shop right now (flagged `released`).
+# All skin building/prewarm iterates this, so unreleased skins never render a card.
+func _live_skin_defs() -> Array:
+	var out: Array = []
+	for d in SKIN_DEFS:
+		if d.get("released", false):
+			out.append(d)
+	return out
+
+# The SPECIAL SKINS tab is detached (shows the "To be continued" placeholder instead
+# of the card grid) exactly when no skins are released yet.
+func _skins_coming_soon() -> bool:
+	return _live_skin_defs().is_empty()
+
 # `incremental` (initial load, behind the veil) yields a frame between skin cards so the
 # loading overlay keeps animating instead of freezing while all 7 live 3D preview wheels —
 # the single heaviest build in the shop — are constructed in one synchronous burst.
 func _build_skins_panel(incremental := false) -> void:
-	# Detached for this release — show the placeholder instead of the card grid.
-	if SKINS_COMING_SOON:
+	# No released skins yet — show the placeholder instead of the card grid.
+	if _skins_coming_soon():
 		_build_skins_coming_soon()
 		return
 	# A vertically scrolling card grid — same structure as the THEMES tab — so the
@@ -1095,8 +1111,9 @@ func _build_skins_panel(incremental := false) -> void:
 	_skins_grid.add_theme_constant_override("v_separation", int(SKIN_CARD_GAP))
 	_skins_root.add_child(_skins_grid)
 	_skins_by_id.clear()
-	for i in SKIN_DEFS.size():
-		var def: Dictionary = SKIN_DEFS[i]
+	var live_defs := _live_skin_defs()
+	for i in live_defs.size():
+		var def: Dictionary = live_defs[i]
 		var card := _make_skin_card(def)
 		# Grid-local top of this card's row, so _update_skin_preview_visibility can
 		# tell which cards are within the scroll band (mirrors the THEMES grid).
@@ -1116,7 +1133,7 @@ func _build_skins_panel(incremental := false) -> void:
 				return
 	_refresh_skin_cards()
 
-# Placeholder shown while the SPECIAL SKINS tab is detached (SKINS_COMING_SOON).
+# Placeholder shown while the SPECIAL SKINS tab is detached (_skins_coming_soon).
 # A single centred glass card in the shop's visual language: no live wheels, no
 # purchase flow — just a "To be continued" note. _skins_root is a plain Control here
 # (not the usual ScrollContainer), and _skins_by_id stays empty so every skin helper
@@ -1369,7 +1386,7 @@ func _update_skin_preview_visibility() -> void:
 	if _skins_root == null or not _skins_root.visible:
 		return
 	# Detached placeholder: a plain Control with no live wheels to gate.
-	if SKINS_COMING_SOON:
+	if _skins_coming_soon():
 		return
 	var sv := float((_skins_root as ScrollContainer).scroll_vertical)
 	var vh := _skins_root.size.y

@@ -80,10 +80,9 @@ static func material(rim_y := H, rim_r := RIM_R) -> ShaderMaterial:
 	m.set_shader_parameter("rim_r", rim_r)
 	return m
 
-# Volcano cone shader: dark basalt rock with bright lava rivulets that flow DOWNHILL
-# from the crater, and a molten, pooling crater floor. The lava channels are vertical
-# ridged-noise veins whose sampling Y scrolls with TIME so the hot rock appears to
-# creep down the slope; emission is strongest at the top and fades downward.
+# Volcano cone shader: earth-brown soil rock on the slopes, with a molten, pooling
+# crater floor at the top. Lava is confined to the crater bowl only — the front and
+# sides of the cone read as plain brown mountainside with no lava running down them.
 const SHADER_CODE := "
 shader_type spatial;
 render_mode cull_disabled;
@@ -124,42 +123,24 @@ void vertex() {
 }
 
 void fragment() {
-	// Cylindrical coords on the cone: angle around the axis, radius from it, and
-	// normalized height up the slope. Streams are placed by ANGLE and run along
-	// HEIGHT, so they read as channels flowing straight down the slope.
-	float ang = atan(v_pos.z, v_pos.x);
+	// Radius from the cone axis — used to isolate the crater bowl at the top.
 	float rad = length(vec2(v_pos.x, v_pos.z));
-	float h = clamp(v_pos.y / max(rim_y, 1e-4), 0.0, 1.2);  // 0 at foot, 1 at rim
-	vec2 ac = vec2(cos(ang), sin(ang)) * 1.7;               // seamless angular coord
 
-	// Black-brown basalt ground — kept clearly visible; lava only threads over it.
+	// Earth-brown mountainside — the front/slopes are plain soil rock, no lava.
 	float rock = fbm(v_pos * 9.0);
-	vec3 rock_dark = vec3(0.030, 0.020, 0.015);
-	vec3 rock_light = vec3(0.105, 0.060, 0.040);
+	vec3 rock_dark = vec3(0.150, 0.090, 0.050);
+	vec3 rock_light = vec3(0.320, 0.200, 0.110);
 	vec3 albedo = mix(rock_dark, rock_light, rock);
 
-	// Keep streams on the OUTER slope only (not inside the crater bowl).
-	float outer = smoothstep(rim_r * 0.9, rim_r * 1.1, rad);
-
-	// A few NARROW lava channels at fixed angular positions ('chan'), each running
-	// the full height of the slope. 'flow' makes the glow creep DOWN over time
-	// (height coord scrolls with +TIME), so the lava streams downhill.
-	float place = fbm(vec3(ac, 3.0));
-	float pridge = 1.0 - abs(2.0 * place - 1.0);
-	float chan = smoothstep(0.80, 0.97, pridge);
-	float flow = fbm(vec3(ac, h * 5.0 + TIME * 0.6));
-	flow = 0.55 + 0.45 * smoothstep(0.30, 0.80, flow);
-	float streams = chan * flow * outer * smoothstep(0.03, 0.25, h);
-	float breath = 0.7 + 0.3 * sin(TIME * 1.6 + place * 12.0);
-
-	// Molten pool filling the crater bowl (everything inside the rim radius).
+	// Molten pool filling the crater bowl (everything inside the rim radius) —
+	// this is the ONLY lava, and it sits at the top of the cone. No streams run
+	// down the slope, so the front of the mountain stays earth brown.
 	float crater = smoothstep(rim_r * 1.0, rim_r * 0.55, rad);
 	float bubble = 0.7 + 0.3 * sin(TIME * 2.2 + rock * 20.0);
 
 	vec3 lava_col = vec3(1.00, 0.30, 0.04);
 	vec3 hot_col = vec3(1.00, 0.78, 0.30);
-	vec3 emission = lava_col * streams * breath * 2.6;
-	emission += mix(lava_col, hot_col, 0.6) * crater * bubble * 4.5;
+	vec3 emission = mix(lava_col, hot_col, 0.6) * crater * bubble * 4.5;
 
 	ALBEDO = albedo;
 	EMISSION = emission;
