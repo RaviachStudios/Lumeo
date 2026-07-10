@@ -78,6 +78,20 @@ const VOLC_CRATER_DROP := 0.10      # how deep the crater recesses below the rim
 # wheel and the small shop preview. Tune if it doesn't land dead-centre on the
 # crater's top circle.
 const VOLC_NUM_LIFT_FRAC := 0.05
+# Eruption lava tongues (one per button gap). Each ribbon follows this profile out
+# from the cone axis: Vector3(radius, height, half-width) in wheel-local units. It
+# leaves the crater rim high (0.45), drapes PROUD over the sulfur-stone tops (which
+# top out at STONE_TOP = 0.28) so no stone corner can cut a hard notch into it, then
+# pours down into the low gap channel between the buttons. Tuned to read as molten
+# lava flowing out of the volcano into the gaps.
+const VOLC_TONGUE_PROFILE := [
+	Vector3(0.17, 0.45, 0.050),   # crater lip — narrow, high on the cone
+	Vector3(0.30, 0.37, 0.066),   # widening down the outer slope
+	Vector3(0.42, 0.30, 0.066),   # PROUD over the stone tops / cone foot (hides the corner)
+	Vector3(0.56, 0.25, 0.058),   # spilling into the gap mouth
+	Vector3(0.74, 0.20, 0.046),   # running down the gap channel
+	Vector3(0.90, 0.16, 0.000),   # tapered molten tip
+]
 
 # Camera framing (slight tilt for a 3D feel while keeping hit-testing simple).
 # Pulled in so the wheel fills most of the widget (large, prominent).
@@ -131,9 +145,19 @@ var _skin_id: String = ""
 var _skin_overlay: Control
 var _skin_overlay_mat: ShaderMaterial
 
-# Volcano skin's central hub cone material + the tween that decays its eruption pulse.
+# Volcano skin's central hub cone material + the tweens that drive an eruption. The
+# eruption plays in two acts on two timelines: _erupt_tween flares the crater (the
+# explosion), _flow_tween drains the lava tongues down through the gaps afterward.
 var _hub_volcano_mat: ShaderMaterial
 var _erupt_tween: Tween
+var _flow_tween: Tween
+# Volcano skin's eruption lava tongues: one emissive molten ribbon per button GAP,
+# draped from the crater rim out over the sulfur stones and down into the gap
+# channel. They share one ShaderMaterial whose `erupt` uniform (0..1) is driven by
+# the same tween as the hub crater, so on each 3-level eruption the lava creeps out
+# through the gaps then recedes. Invisible at rest (alpha keys off `erupt`).
+var _lava_tongues: Array[MeshInstance3D] = []
+var _lava_tongue_mat: ShaderMaterial
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -382,22 +406,135 @@ func _fit_num_size(txt: String) -> int:
 		return NUM_MAX_SIZE
 	return maxi(NUM_MIN_SIZE, int(floor(NUM_MAX_SIZE * NUM_MAX_W / w)))
 
-# Erupt the Volcano skin's central hub cone: the crater floods and lava spills down the
-# slopes, then settles back over ~4s. Called by game.gd every 3 rounds. No-op off the skin.
+# Erupt the Volcano skin's central hub volcano. Called by game.gd every 3 rounds.
+# No-op off the skin. Plays as a real two-act eruption:
+#   Act 1 (0 -> ~2s): the crater EXPLODES — a white-hot fireball bursts up out of the
+#     bowl (an expanding flash dome + a spray of glowing ejecta) while the crater
+#     floods to full, then the blast subsides.
+#   Act 2 (~1.6s onward): molten lava DRAINS down out of the crater through the gaps
+#     between the buttons (the lava tongues), pools there, then slowly recedes.
 func erupt() -> void:
 	if _skin_id != "inferno" or _hub_volcano_mat == null:
 		return
 	if _erupt_tween and _erupt_tween.is_valid():
 		_erupt_tween.kill()
-	_hub_volcano_mat.set_shader_parameter("erupt", 1.0)
+	if _flow_tween and _flow_tween.is_valid():
+		_flow_tween.kill()
 	_kick_render()
-	_erupt_tween = create_tween()
-	_erupt_tween.tween_method(_set_hub_erupt, 1.0, 0.0, 4.0) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_spawn_eruption_blast()   # fireball dome + ejecta thrown up out of the crater
 
-func _set_hub_erupt(v: float) -> void:
+	# Act 1 — the crater flares to white-hot almost instantly, holds through the ~2s
+	# blast, then eases back down (a lingering afterglow trails the draining lava).
+	_erupt_tween = create_tween()
+	_erupt_tween.tween_method(_set_crater_erupt, 0.0, 1.0, 0.16) \
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	_erupt_tween.tween_interval(0.9)
+	_erupt_tween.tween_method(_set_crater_erupt, 1.0, 0.28, 1.9) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_erupt_tween.tween_method(_set_crater_erupt, 0.28, 0.0, 2.4) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	# Act 2 — the lava tongues stay dormant during the explosion, then flow down the
+	# gaps, pool between the buttons, and recede back into the crater.
+	_flow_tween = create_tween()
+	_flow_tween.tween_interval(1.6)                                   # wait out the blast
+	_flow_tween.tween_method(_set_tongue_flow, 0.0, 1.0, 1.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)        # creeps down the gaps
+	_flow_tween.tween_interval(1.0)                                   # pooled between buttons
+	_flow_tween.tween_method(_set_tongue_flow, 1.0, 0.0, 2.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)         # recedes into the crater
+
+# Act 1 driver: the crater cone's `erupt` uniform (its flare / boil intensity).
+func _set_crater_erupt(v: float) -> void:
 	if _hub_volcano_mat:
 		_hub_volcano_mat.set_shader_parameter("erupt", v)
+
+# Act 2 driver: the lava tongues' `erupt` uniform — as it rises the molten front
+# creeps out through the button gaps; as it decays the lava withdraws (invisible at 0).
+func _set_tongue_flow(v: float) -> void:
+	if _lava_tongue_mat:
+		_lava_tongue_mat.set_shader_parameter("erupt", v)
+
+# Spawn the one-shot explosion FX at the crater mouth: a bright expanding fireball
+# dome plus a burst of glowing ejecta hurled up out of the bowl. Both are transient
+# nodes that animate themselves and free when done, so nothing persists at rest.
+func _spawn_eruption_blast() -> void:
+	if _wheel_root == null:
+		return
+	# Crater rim world-y on the hub cone (foot at top_y; rim VOLC_H above it).
+	var top_y := BASE_H * 0.5 + 0.03
+	var origin := Vector3(0.0, top_y + VOLC_H, 0.0)
+	_spawn_blast_flash(origin)
+	_spawn_ejecta(origin)
+
+# A hot fireball that bursts up from the crater: an additive emissive dome that
+# scales up fast and fades out over ~0.75s, then frees itself.
+func _spawn_blast_flash(origin: Vector3) -> void:
+	var flash := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.5
+	sm.height = 1.0
+	sm.radial_segments = 18
+	sm.rings = 9
+	flash.mesh = sm
+	var mat := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = _BLAST_SHADER
+	mat.shader = sh
+	mat.set_shader_parameter("fade", 1.0)
+	flash.material_override = mat
+	flash.position = origin + Vector3(0.0, 0.14, 0.0)
+	flash.scale = Vector3.ONE * 0.06
+	_wheel_root.add_child(flash)
+	var tw := create_tween()
+	tw.tween_property(flash, "scale", Vector3.ONE * 0.95, 0.5) \
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_method(
+		func(a: float) -> void: mat.set_shader_parameter("fade", a), 1.0, 0.0, 0.75) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tw.chain().tween_callback(flash.queue_free)
+
+# A one-shot burst of small glowing rocks thrown up out of the crater under gravity,
+# shrinking to nothing over their lifetime. Freed once the burst has finished.
+func _spawn_ejecta(origin: Vector3) -> void:
+	var p := CPUParticles3D.new()
+	p.position = origin + Vector3(0.0, 0.1, 0.0)
+	p.amount = 30
+	p.lifetime = 1.15
+	p.one_shot = true
+	p.explosiveness = 1.0
+	p.direction = Vector3.UP
+	p.spread = 40.0
+	p.initial_velocity_min = 1.5
+	p.initial_velocity_max = 3.0
+	p.gravity = Vector3(0.0, -5.5, 0.0)
+	p.scale_amount_min = 0.03
+	p.scale_amount_max = 0.06
+	var sc := Curve.new()
+	sc.add_point(Vector2(0.0, 1.0))
+	sc.add_point(Vector2(1.0, 0.0))
+	p.scale_amount_curve = sc
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 0.82, 0.35))
+	grad.set_color(1, Color(0.75, 0.16, 0.03))
+	p.color_ramp = grad
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.5
+	mesh.height = 1.0
+	mesh.radial_segments = 6
+	mesh.rings = 3
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_color = Color(1.0, 0.55, 0.14)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.45, 0.10)
+	mat.emission_energy_multiplier = 3.0
+	mesh.material = mat
+	p.mesh = mesh
+	_wheel_root.add_child(p)
+	p.emitting = true
+	get_tree().create_timer(p.lifetime + 0.3).timeout.connect(p.queue_free)
 
 func set_level(n: int) -> void:
 	var txt := str(n)
@@ -456,6 +593,8 @@ func _rebuild() -> void:
 
 	_halos.clear()
 	_halo_mats.clear()
+	# Eruption tongues are children of _wheel_root (freed above); just drop the refs.
+	_lava_tongues.clear()
 	if _glow_tex == null:
 		_glow_tex = _make_glow_tex()
 
@@ -503,6 +642,7 @@ func _rebuild() -> void:
 		volcano.material_override = vmat
 		_hub_volcano_mat = vmat          # kept so erupt() can pulse the crater's `erupt` uniform
 		_wheel_root.add_child(volcano)
+		_build_lava_tongues()            # molten ribbons that pour into the gaps on eruption
 	else:
 		var hub := _disc_no_mat(HUB_R, HUB_H)
 		# Hub wears the INNER tint (the "CENTER HUB" shop slot); _ring_material is
@@ -892,6 +1032,140 @@ func _volcano_mesh() -> ArrayMesh:
 func _volcano_material() -> ShaderMaterial:
 	# Same shared lava-cone shader the background cones wear (one compile for both).
 	return VolcanoCone.material(VOLC_H, VOLC_RIM_R)
+
+# ---------------- Volcano skin: eruption lava tongues ----------------
+
+# Build one molten ribbon per button GAP. Each gap sits at a segment boundary
+# (_start_angle + k * step); the ribbon runs radially out along that azimuth,
+# following VOLC_TONGUE_PROFILE from the crater lip out into the gap. All tongues
+# share _lava_tongue_mat so a single `erupt` set drives every one of them.
+func _build_lava_tongues() -> void:
+	_lava_tongues.clear()
+	if _lava_tongue_mat == null:
+		_lava_tongue_mat = _make_lava_tongue_material()
+	_lava_tongue_mat.set_shader_parameter("erupt", 0.0)   # dormant until erupt()
+	if _count <= 0:
+		return
+	var step := TAU / _count
+	for k in _count:
+		# Gap between segment k-1 and k is centred on this azimuth (segment 0 is
+		# centred half a step past _start_angle, so the boundaries land here).
+		var phi := _start_angle + float(k) * step
+		var t := MeshInstance3D.new()
+		t.mesh = _lava_tongue_mesh(phi)
+		t.material_override = _lava_tongue_mat
+		_wheel_root.add_child(t)
+		_lava_tongues.append(t)
+
+# A flat-ish emissive ribbon swept along azimuth `phi`. Width runs along the
+# azimuthal tangent; the centreline follows VOLC_TONGUE_PROFILE in the radial /
+# vertical plane. UV.x is across the width (0..1), UV.y is 0 at the crater lip and
+# 1 at the tip, so the shader can soften the edges and advance the molten front.
+func _lava_tongue_mesh(phi: float) -> ArrayMesh:
+	var rad_dir := Vector3(cos(phi), 0.0, sin(phi))
+	var tan_dir := Vector3(-sin(phi), 0.0, cos(phi))
+	var prof := VOLC_TONGUE_PROFILE
+	var n := prof.size()
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for j in n - 1:
+		var p0: Vector3 = prof[j]
+		var p1: Vector3 = prof[j + 1]
+		var v0 := float(j) / float(n - 1)
+		var v1 := float(j + 1) / float(n - 1)
+		var c0 := rad_dir * p0.x + Vector3(0.0, p0.y, 0.0)
+		var c1 := rad_dir * p1.x + Vector3(0.0, p1.y, 0.0)
+		var l0 := c0 + tan_dir * p0.z
+		var r0 := c0 - tan_dir * p0.z
+		var l1 := c1 + tan_dir * p1.z
+		var r1 := c1 - tan_dir * p1.z
+		_tongue_tri(st, l0, Vector2(0.0, v0), r0, Vector2(1.0, v0), l1, Vector2(0.0, v1))
+		_tongue_tri(st, r0, Vector2(1.0, v0), r1, Vector2(1.0, v1), l1, Vector2(0.0, v1))
+	return st.commit()
+
+func _tongue_tri(st: SurfaceTool, a: Vector3, ua: Vector2, b: Vector3, ub: Vector2,
+		c: Vector3, uc: Vector2) -> void:
+	st.set_normal(Vector3.UP)
+	st.set_uv(ua)
+	st.add_vertex(a)
+	st.set_normal(Vector3.UP)
+	st.set_uv(ub)
+	st.add_vertex(b)
+	st.set_normal(Vector3.UP)
+	st.set_uv(uc)
+	st.add_vertex(c)
+
+func _make_lava_tongue_material() -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = _LAVA_TONGUE_SHADER
+	m.shader = sh
+	m.set_shader_parameter("erupt", 0.0)
+	return m
+
+# Additive, unshaded molten shader. Soft across-width falloff means the ribbon has
+# NO hard silhouette; the molten front advances outward as `erupt` rises (reach) and
+# withdraws as it decays, and the whole thing keys its alpha off `erupt` so it is
+# fully invisible at rest. depth_draw_never keeps it from writing depth (it glows
+# over whatever it drapes across without punching a hole in the z-buffer).
+const _LAVA_TONGUE_SHADER := "
+shader_type spatial;
+render_mode blend_add, cull_disabled, unshaded, depth_draw_never, shadows_disabled;
+
+uniform float erupt = 0.0;
+varying vec2 v_uv;
+
+float h2(vec2 p) { return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
+float n2(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(h2(i), h2(i + vec2(1.0, 0.0)), u.x),
+			   mix(h2(i + vec2(0.0, 1.0)), h2(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+void vertex() {
+	v_uv = UV;
+}
+
+void fragment() {
+	// Across the width: 1 at the centreline, 0 at the banks — soft, no hard edge.
+	float across = 1.0 - abs(v_uv.x - 0.5) * 2.0;
+	float edge = smoothstep(0.0, 0.5, across);
+	// The molten front creeps outward as the eruption builds, then retreats.
+	float reach = mix(0.12, 1.08, erupt);
+	float head = smoothstep(reach, reach - 0.32, v_uv.y);
+	// Flowing molten texture scrolling outward down the tongue.
+	float flow = n2(vec2(v_uv.x * 6.0, v_uv.y * 7.0 - TIME * 1.6));
+	float bubble = 0.6 + 0.4 * n2(vec2(v_uv.y * 10.0 + TIME * 0.8, v_uv.x * 4.0));
+	vec3 lava = mix(vec3(0.95, 0.22, 0.02), vec3(1.0, 0.75, 0.28),
+					clamp(smoothstep(0.35, 0.9, flow) * bubble, 0.0, 1.0));
+	float core = smoothstep(0.35, 1.0, across);        // brighter molten core
+	float a = edge * head * clamp(erupt * 1.4, 0.0, 1.0);
+	vec3 col = lava * (1.1 + 2.4 * core);
+	ALBEDO = col;
+	EMISSION = col * 0.7;                                // feeds bloom
+	ALPHA = a;
+}
+"
+
+# Additive fireball shell for the eruption blast. White-hot toward the camera-facing
+# core, molten orange at the rim; `fade` (1 -> 0) drives it out. depth_draw_never so
+# it glows over the crater without punching the z-buffer.
+const _BLAST_SHADER := "
+shader_type spatial;
+render_mode blend_add, cull_disabled, unshaded, depth_draw_never, shadows_disabled;
+
+uniform float fade = 1.0;
+
+void fragment() {
+	float f = pow(clamp(dot(NORMAL, VIEW), 0.0, 1.0), 1.4);   // 1 at the core, 0 at the silhouette
+	vec3 col = mix(vec3(1.0, 0.42, 0.06), vec3(1.0, 0.95, 0.80), f);
+	ALBEDO = col;
+	EMISSION = col * (1.4 + 2.2 * f);
+	ALPHA = fade * (0.30 + 0.70 * f);
+}
+"
 
 # Sulfur-rock material for the raised button stones. A plain StandardMaterial3D —
 # the SAME opaque path as the colored buttons — so the stones are guaranteed to

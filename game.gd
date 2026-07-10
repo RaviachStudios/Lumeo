@@ -417,12 +417,86 @@ func _next_round() -> void:
 	flash_time = maxf(0.18, GameState.flash_time - (level - 1) * speed_inc)
 	flash_gap = maxf(0.08, GameState.flash_gap - (level - 1) * speed_inc * 0.5)
 	_update_hud()
+	# Volcano skin only: hitting level 8 flashes a "you are on fire!" banner. The
+	# round waits for it to fade before the sequence starts, then Simon continues.
+	if level == 8 and _is_volcano_skin():
+		await _show_fire_text()
 	_set_status("Watch carefully...")
 	_state = "showing"
 	await get_tree().create_timer(0.6).timeout
 	await _play_sequence()
 	_state = "input"
 	_set_status("Your turn!")
+
+# True when the equipped Simon look is the Volcano ("inferno") special skin — the
+# same resolution _apply_simon_skin uses (a manual per-part look never counts).
+func _is_volcano_skin() -> bool:
+	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "inferno"
+
+# Flash a big "YOU'RE ON FIRE!" banner across the screen, hold it, then fade it out
+# — ~3.3s total. Awaited by _next_round so the sequence only resumes once it fades.
+# Built from stacked layers (soft outer glow behind a molten-gradient-feel main
+# layer) and bursts in with a scale pop so it lands like a real hype moment.
+func _show_fire_text() -> void:
+	# Full-screen holder we can scale-pop around the screen centre.
+	var holder := Control.new()
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	add_child(holder)
+	var screen := get_viewport_rect().size
+	holder.pivot_offset = screen * 0.5
+
+	# Font size scales with the screen so it reads huge on phones and desktop alike,
+	# but stays within the width (with margins) so the line never clips.
+	var fs := int(clampf(screen.x * 0.16, 72.0, 168.0))
+	var txt := "YOU'RE ON FIRE!"
+
+	# Layer 1 — soft orange glow bloom behind the letters (thick outline, no fill punch).
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(1.0, 0.45, 0.12, 0.85))
+	glow.add_theme_color_override("font_outline_color", Color(1.0, 0.35, 0.05, 0.7))
+	glow.add_theme_constant_override("outline_size", 40)
+	holder.add_child(glow)
+
+	# Layer 2 — the crisp molten face: bright yellow-hot core, deep charred outline,
+	# and a warm drop-shadow bloom so the letters feel lit from within.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(1.0, 0.80, 0.28))       # yellow-hot
+	main.add_theme_color_override("font_outline_color", Color(0.30, 0.02, 0.0))
+	main.add_theme_constant_override("outline_size", 16)
+	main.add_theme_color_override("font_shadow_color", Color(1.0, 0.30, 0.04, 0.6))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 6)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Pop in with an overshoot + fade (together), hold with a gentle heat-shimmer
+	# breath, then fade out. ~0.45 + 1.0 + 1.0 + 0.9 ≈ 3.35s total.
+	holder.scale = Vector2(0.72, 0.72)
+	var tw := create_tween()
+	tw.tween_property(holder, "modulate:a", 1.0, 0.35)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.45) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.04, 1.04), 1.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "scale", Vector2.ONE, 1.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.9)
+	await tw.finished
+	holder.queue_free()
+
+# One centred full-screen text layer for the fire banner (shared setup for the
+# stacked glow + main layers so they line up exactly).
+func _fire_label(txt: String, fs: int) -> Label:
+	var lbl := Label.new()
+	lbl.text = txt
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.add_theme_font_size_override("font_size", fs)
+	return lbl
 
 func _play_sequence() -> void:
 	for idx: int in sequence:
