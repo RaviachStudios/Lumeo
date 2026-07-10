@@ -89,6 +89,9 @@ render_mode cull_disabled;
 
 uniform float rim_y = 0.30;
 uniform float rim_r = 0.186;
+// 0 at rest; pulsed toward 1 (then tweened back to 0) when the wheel erupts every 3
+// rounds — the crater floods brighter and molten lava spills a little way down the slopes.
+uniform float erupt = 0.0;
 varying vec3 v_pos;
 
 vec3 hash3(vec3 p) {
@@ -141,6 +144,23 @@ void fragment() {
 	vec3 lava_col = vec3(1.00, 0.30, 0.04);
 	vec3 hot_col = vec3(1.00, 0.78, 0.30);
 	vec3 emission = mix(lava_col, hot_col, 0.6) * crater * bubble * 4.5;
+
+	// --- ERUPTION (every 3 rounds): the crater floods and lava spills down the slopes ---
+	if (erupt > 0.001) {
+		// crater floor flares much brighter and boils harder while erupting
+		emission += mix(lava_col, hot_col, 0.75) * crater * erupt * (0.6 + 0.4 * bubble) * 5.0;
+		// molten channels running a little way DOWN the outer slope (outside the crater rim):
+		// a few irregular streaks, strongest near the rim and thinning downslope.
+		float ang = atan(v_pos.z, v_pos.x);
+		float chan = 0.5 + 0.5 * sin(ang * 5.0 + fbm(v_pos * 6.0) * 4.0);
+		float streak = smoothstep(0.5, 0.95, chan);
+		float onSlope = smoothstep(rim_r * 1.02, rim_r * 1.14, rad);     // only below the crater lip
+		float down = smoothstep(0.0, rim_y, v_pos.y);                    // 1 at the rim, fades toward the foot
+		float slopeLava = streak * onSlope * down * erupt;
+		float boil = 0.6 + 0.4 * sin(TIME * 3.0 + ang * 4.0);
+		albedo = mix(albedo, vec3(0.32, 0.07, 0.02), clamp(slopeLava, 0.0, 1.0));
+		emission += mix(lava_col, hot_col, 0.5) * slopeLava * boil * 5.0;
+	}
 
 	ALBEDO = albedo;
 	EMISSION = emission;

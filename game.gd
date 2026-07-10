@@ -468,6 +468,11 @@ func _player_pressed(idx: int) -> void:
 		if earned > 0:
 			_show_earn_indicator(earned)
 		BackgroundManager.notify_level_complete(level)      # kitty theme winks + cheers
+		# Every 3 rounds the Volcano skin's central hub volcano erupts and feeds a surge
+		# of fresh lava into the background river. Both calls are no-ops off the skin.
+		if level % 3 == 0:
+			_wheel.erupt()
+			BackgroundManager.surge_river()
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 

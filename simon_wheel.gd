@@ -131,6 +131,10 @@ var _skin_id: String = ""
 var _skin_overlay: Control
 var _skin_overlay_mat: ShaderMaterial
 
+# Volcano skin's central hub cone material + the tween that decays its eruption pulse.
+var _hub_volcano_mat: ShaderMaterial
+var _erupt_tween: Tween
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# configure() may run before the node is in the tree (shop preview wheels are built in
@@ -378,6 +382,23 @@ func _fit_num_size(txt: String) -> int:
 		return NUM_MAX_SIZE
 	return maxi(NUM_MIN_SIZE, int(floor(NUM_MAX_SIZE * NUM_MAX_W / w)))
 
+# Erupt the Volcano skin's central hub cone: the crater floods and lava spills down the
+# slopes, then settles back over ~4s. Called by game.gd every 3 rounds. No-op off the skin.
+func erupt() -> void:
+	if _skin_id != "inferno" or _hub_volcano_mat == null:
+		return
+	if _erupt_tween and _erupt_tween.is_valid():
+		_erupt_tween.kill()
+	_hub_volcano_mat.set_shader_parameter("erupt", 1.0)
+	_kick_render()
+	_erupt_tween = create_tween()
+	_erupt_tween.tween_method(_set_hub_erupt, 1.0, 0.0, 4.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+func _set_hub_erupt(v: float) -> void:
+	if _hub_volcano_mat:
+		_hub_volcano_mat.set_shader_parameter("erupt", v)
+
 func set_level(n: int) -> void:
 	var txt := str(n)
 	var fs := _fit_num_size(txt)
@@ -478,7 +499,9 @@ func _rebuild() -> void:
 		var volcano := MeshInstance3D.new()
 		volcano.mesh = _volcano_mesh()
 		volcano.position.y = top_y
-		volcano.material_override = _volcano_material()
+		var vmat := _volcano_material()
+		volcano.material_override = vmat
+		_hub_volcano_mat = vmat          # kept so erupt() can pulse the crater's `erupt` uniform
 		_wheel_root.add_child(volcano)
 	else:
 		var hub := _disc_no_mat(HUB_R, HUB_H)

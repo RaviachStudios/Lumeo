@@ -3219,17 +3219,18 @@ void fragment() {
 
 # ---------------------------------------------------------------------------
 # VOLCANO SKIN BACKGROUND — "lava". A distant volcanic LANDSCAPE that reads unmistakably as
-# FOUR cartoon volcano MOUNTAINS on the horizon, far behind the board: earth-brown cones
+# FOUR detailed volcano MOUNTAINS on the horizon, far behind the board: earth-brown strato-cones
 # of DIFFERING size & height rising from a warm, glowing orange horizon. Each cone has a wide
-# base and a clear peak with a molten crater bowl (lava stays in the crater — no streams run
-# down the brown slopes), a soft plume of smoke off its summit, and a soft rim-light; embers drift
-# in the sky. A low, dark volcanic plain anchors the foreground without stealing focus. This is
-# PURELY a backdrop — no lava rings, nothing wraps or touches the wheel. The frozen scene (sky,
-# smoke, cones, resting crater glow + flows, ground) bakes into the static plate; the dyn
-# overlay adds only the cheap animated bits (pulsing crater lakes, flow shimmer, rising embers)
-# so the heavy per-pixel work is paid once. (The old NIGHT-CASTLE world that used to live here
-# is now the standalone "Dragon's Keep" theme; see the _NIGHT_* shaders above, registered under
-# the "castle" theme id below.)
+# concave-flared base, erosion gullies & lava-flow strata down its flanks, and a TRUNCATED summit
+# with a cool, dark cinder crater (no permanent glow on the tops), a soft plume of smoke, and a
+# rim-light. A cracked cooled-basalt plain veined with glowing lava anchors the foreground around
+# a molten river. Every 8 seconds ONE random cone ERUPTS: its crater fills with lava and a molten
+# stream runs down the flank across the plain into the river, then it cools before the next. This
+# is PURELY a backdrop — nothing wraps or touches the wheel. The frozen scene (sky, smoke, cones,
+# ground, river bed) bakes into the static plate; the dyn overlay adds only the cheap animated
+# bits (the timed eruption + stream, river flow shimmer, drifting embers) so the heavy per-pixel
+# work is paid once. (The old NIGHT-CASTLE world that used to live here is now the standalone
+# "Dragon's Keep" theme; see the _NIGHT_* shaders above, registered under the "castle" id below.)
 # ---------------------------------------------------------------------------
 const _LAVA_FUNCS := "
 // FOUR VOLCANO MOUNTAINS on a distant horizon — the Volcano skin's backdrop, sitting
@@ -3240,14 +3241,20 @@ const _LAVA_FUNCS := "
 // The frozen scene (sky, smoke, cones, resting crater glow + flows, ground) bakes into
 // the static plate; the dyn overlay adds only the cheap animated bits (pulsing crater
 // lakes, flow shimmer, rising embers) so the heavy per-pixel work is paid once.
-const float HORIZON = 0.605;
+const float HORIZON = 0.762;
+// Pulsed by BackgroundManager.surge_river() when the wheel's central volcano erupts
+// (every 3 rounds): the foreground river swells wider and runs brighter for a few seconds,
+// as if the eruption's lava had just been added to it. Tweened 1 -> 0 from GDScript.
+uniform float river_boost = 0.0;
 // vec4(centre-x (a-space), summit y (smaller = taller), base half-width, seed). Ordered
 // short -> tall so the taller cones draw last and occlude the shorter ones where they meet.
+// Cones sit CLOSE to the viewer: tall summits, wide bases and a low base line so the range
+// looms large and fills the frame (was a small distant ridge high on the horizon).
 vec4 volc(int i) {
-	if (i == 0) return vec4(0.16 * aspect, 0.440, 0.150, 2.0);   // far-left, small
-	if (i == 1) return vec4(0.88 * aspect, 0.400, 0.200, 5.0);   // far-right, small-medium
-	if (i == 2) return vec4(0.66 * aspect, 0.340, 0.240, 4.0);   // right-centre, medium
-	return vec4(0.40 * aspect, 0.290, 0.290, 7.0);               // left-centre, TALL & wide
+	if (i == 0) return vec4(0.13 * aspect, 0.370, 0.200, 2.0);   // far-left, small
+	if (i == 1) return vec4(0.91 * aspect, 0.330, 0.250, 5.0);   // far-right, small-medium
+	if (i == 2) return vec4(0.69 * aspect, 0.250, 0.330, 4.0);   // right-centre, medium
+	return vec4(0.37 * aspect, 0.170, 0.420, 7.0);               // left-centre, TALL & wide
 }
 // Top silhouette line of a cone at horizontal position ax: concave-flared slopes from the
 // summit down to the horizon, a small craggy wobble, and a central dip forming the crater
@@ -3255,9 +3262,20 @@ vec4 volc(int i) {
 float coneTop(vec4 v, float ax, out float dx, out float frac) {
 	dx = ax - v.x;
 	frac = clamp(abs(dx) / v.z, 0.0, 1.0);
-	float cone = mix(v.y, HORIZON, pow(frac, 0.85));
-	cone += (fbm(vec2(ax * 6.0, v.w)) - 0.5) * 0.012;            // craggy edge
-	cone += 0.05 * smoothstep(0.34, 0.0, frac);                 // crater dip at the summit
+	// FLAT truncated summit (a crater-rim disc), then a small rounded shoulder curving
+	// down into concave flared flanks — the classic strato-volcano silhouette. RIM is the
+	// half-width of the flat top as a fraction of the base.
+	const float RIM = 0.24;
+	float slopeFrac = clamp((frac - RIM) / (1.0 - RIM), 0.0, 1.0);
+	float flare  = pow(slopeFrac, 0.72);                     // concave flared slope to a wide base
+	float slopeY = mix(v.y, HORIZON, flare);
+	// the flat summit dips a HAIR toward the centre — a super-small crater bowl seen almost
+	// edge-on (deepest at the axis, rising back up to the rim). y grows downward, so + = lower.
+	float topY = v.y + 0.016 * smoothstep(RIM, 0.02, frac);
+	// soft rounded shoulder where the flat rim rolls into the slope
+	float cone = mix(topY, slopeY, smoothstep(RIM - 0.04, RIM + 0.05, frac));
+	cone += (fbm(vec2(ax * 6.0, v.w)) - 0.5) * 0.012;         // craggy ridgeline
+	cone += (fbm(vec2(ax * 17.0, v.w + 3.3)) - 0.5) * 0.005;  // finer rock jaggedness
 	return cone;
 }
 // Warm volcanic sky: deep red overhead warming down to a hot orange band at the
@@ -3303,10 +3321,10 @@ vec3 lavaAsh(vec3 col, vec2 a) {
 	col = mix(col, vec3(0.22, 0.14, 0.13), ash * 0.32);        // warm ash grey-brown
 	return col;
 }
-// One cone's static body: earth-brown volcanic rock (reddish brown -> burnt umber) with
-// soft volumetric shading, fine craggy detail and ambient occlusion for 3D volume, a soft
-// sky rim-light along the crest and a resting molten crater pool at the summit. Lava is
-// confined to the crater bowl only — the brown slopes carry no streams.
+// One cone's static body: earth-brown volcanic rock (reddish brown -> burnt umber) with soft
+// volumetric shading, erosion gullies + lava-flow strata for real strato-volcano detail,
+// ambient occlusion for 3D volume, a soft sky rim-light along the crest, and a cool dark
+// cinder crater at the summit (NO resting lava — the crater only glows while erupting).
 vec3 lavaCone(vec3 col, vec2 a, vec4 v) {
 	float dx; float frac;
 	float top = coneTop(v, a.x, dx, frac);
@@ -3314,12 +3332,20 @@ vec3 lavaCone(vec3 col, vec2 a, vec4 v) {
 	float body = aafill(sdb);
 	if (body < 0.003) return col;
 
-	// --- volumetric form shading: light the flank facing the central glow, shade the far
-	// flank, and brighten up the slope so each cone reads as a rounded 3D mountain.
+	// --- volumetric form shading: model each cone as a rounded 3D solid lit from the
+	// upper-left. Reconstruct an approximate surface normal across the flank (nx) and up the
+	// slope, then do simple Lambert + terminator + rim so the mountain bulges toward the viewer.
 	float nx = dx / v.z;                                          // -1..1 across the cone
-	float toGlow = (v.x < 0.5 * aspect) ? nx : -nx;             // >0 on the side facing centre
-	float key = 0.58 + 0.42 * smoothstep(-0.8, 1.0, toGlow);    // broad soft key light (warm floor)
-	float vshade = mix(0.80, 1.12, smoothstep(HORIZON, v.y, a.y));  // darker at foot, lit up high
+	// spherical-ish cross-section: the flank curves away at the edges (|nx|->1) and faces the
+	// viewer near the axis, so shade the rims down and round out the belly.
+	float bulge = sqrt(max(0.0, 1.0 - nx * nx));                // 1 on the axis, 0 at the edges
+	vec3 nrm = normalize(vec3(nx * 1.15, 0.55, bulge + 0.35)); // outward-facing surface normal
+	vec3 lgt = normalize(vec3(-0.55, 0.62, 0.56));             // key light from the upper-left
+	float lam = clamp(dot(nrm, lgt), 0.0, 1.0);                 // Lambert term
+	float key = 0.42 + 0.72 * lam;                              // lit face bright, shadow face dark
+	// smooth terminator wrap so the light->shadow transition reads as a curved surface
+	key *= 0.90 + 0.18 * smoothstep(-0.2, 0.9, dot(nrm.xy, lgt.xy));
+	float vshade = mix(0.72, 1.14, smoothstep(HORIZON, v.y, a.y));  // darker at foot, lit up high
 
 	// --- surface detail: coarse rock blotches + fine ridging so the flank reads as stone
 	float tex = fbm(vec2(dx * 8.0, a.y * 10.0) + v.w);
@@ -3332,11 +3358,38 @@ vec3 lavaCone(vec3 col, vec2 a, vec4 v) {
 	rock = mix(rock, rock_lite, smoothstep(0.5, 1.0, rk));
 	rock *= key * vshade;
 	// warm ambient fill so the shadowed flank stays brown, never a flat black silhouette
-	rock += vec3(0.045, 0.022, 0.014) * (1.0 - 0.6 * smoothstep(-0.8, 1.0, toGlow));
+	rock += vec3(0.050, 0.026, 0.016) * (1.0 - 0.55 * lam);
 
-	// ambient occlusion: darken toward the foot and the outer silhouette edges for depth
-	float ao = smoothstep(0.0, 0.09, HORIZON - a.y) * 0.30;     // near the base
-	ao += smoothstep(0.02, 0.0, v.z - abs(dx)) * 0.20;          // near the side edges
+	// erosion detail: irregular vertical ravines carved by domain-warped ridged noise
+	// (NOT regular sin stripes, which read as ugly banded corduroy), plus broad soil-tone
+	// patches and a fine craggy speckle so the flank looks like real weathered stone. Kept
+	// gentle — the troughs only dim the rock a little and it never crushes to black.
+	float warp   = fbm(vec2(nx * 3.0 + v.w, a.y * 4.0)) * 0.6;
+	float ridged = fbm(vec2(nx * 9.0 + warp, a.y * 3.5 + v.w));
+	float gully  = pow(clamp(1.0 - abs(ridged - 0.5) * 2.0, 0.0, 1.0), 2.2);  // sharp, irregularly-spaced ravines
+	rock *= 1.0 - 0.16 * gully;                                 // subtle darkened troughs
+	// broad soil-tone patches drifting across the flank: warmer ochre vs cooler umber
+	float patch = fbm(vec2(dx * 4.5 + v.w, a.y * 5.5));
+	rock = mix(rock, rock * vec3(1.14, 1.02, 0.86), smoothstep(0.45, 0.85, patch) * 0.5);
+	rock = mix(rock, rock * vec3(0.82, 0.86, 0.92), smoothstep(0.45, 0.15, patch) * 0.35);
+	// fine craggy speckle: tiny lit rock faces catching the key light
+	float speck = fbm(vec2(dx * 40.0 + v.w, a.y * 46.0));
+	rock += vec3(0.10, 0.07, 0.045) * smoothstep(0.72, 0.95, speck) * (0.4 + 0.6 * lam);
+	// faint horizontal strata (stacked eruption layers) — very subtle, noise-broken
+	float strata = fbm(vec2(a.x * 2.0, a.y * 40.0 + v.w));
+	rock *= 0.97 + 0.03 * strata;
+
+	// bright directional highlight on the upper-left lit flank — the payoff of the 3D form,
+	// a soft warm sheen wrapping the sunlit shoulder just below the crest.
+	float litFace = smoothstep(0.15, 0.85, -nx);               // strongest on the left flank
+	float upHi    = smoothstep(HORIZON, v.y, a.y);             // fade in toward the summit
+	rock += vec3(0.16, 0.11, 0.06) * litFace * upHi * bulge;
+
+	// ambient occlusion: darken toward the foot, the outer silhouette edges, and the shaded
+	// right flank so the cone reads as a rounded 3D solid with a clear terminator.
+	float ao = smoothstep(0.0, 0.10, HORIZON - a.y) * 0.30;     // near the base
+	ao += smoothstep(0.03, 0.0, v.z - abs(dx)) * 0.22;          // near the side edges
+	ao += smoothstep(0.1, 0.9, nx) * 0.14;                      // core-shadow on the far (right) flank
 	rock *= 1.0 - ao * 0.45;
 	col = mix(col, rock, body);
 
@@ -3344,78 +3397,216 @@ vec3 lavaCone(vec3 col, vec2 a, vec4 v) {
 	// toned down so it reads as sky bounce rather than lava on the edge.
 	float widm = smoothstep(0.012, -0.004, abs(dx) - v.z);
 	col += vec3(0.90, 0.56, 0.30) * aaline(a.y - top, 0.005) * widm * 0.35;
-
-	// resting crater pool — a molten ellipse in the summit dip, bright core to red rim.
-	// Lava is confined to the crater bowl only; the brown slopes carry no streams.
-	vec2 ce = (a - vec2(v.x, v.y + 0.030)) / vec2(v.z * 0.36, v.z * 0.200);
-	float pool = smoothstep(1.0, 0.5, length(ce)) * body;
-	vec3 pc = mix(vec3(1.0, 0.30, 0.05), vec3(1.0, 0.82, 0.42), smoothstep(0.9, 0.0, length(ce)));
-	col = mix(col, pc, pool * 0.85) + pc * pool * 0.30;
+	// crisp cool rim on the shaded right edge to pop the silhouette off the sky
+	col += vec3(0.35, 0.20, 0.16) * aaline(abs(dx) - v.z, 0.004) * smoothstep(-0.2, 0.9, nx) * 0.5 * body;
+	// NO crater bowl — the summit is a plain rounded dome; molten lava only appears there
+	// (as a glowing cap) while this cone is actively erupting, drawn by the animated overlay.
 	return col;
 }
-// Dark volcanic foreground plain below the horizon, warm-lit along the horizon line.
+// Volcanic foreground plain below the horizon: a field of cooled BASALT slabs cut by a
+// web of glowing lava cracks. The crust cools (darkens) with distance from the river, and
+// the ground drinks up warm reflected light from the molten channel running through it, so
+// the land reads as a living lava field rather than a flat dark strip.
 vec3 lavaGround(vec3 col, vec2 a) {
-	float g = smoothstep(HORIZON - 0.004, HORIZON + 0.004, a.y);
-	if (g > 0.001) {
-		float depth = smoothstep(HORIZON, 1.0, a.y);
-		float gtex = gnoise(vec2(a.x * 12.0, a.y * 18.0));
-		float warm = smoothstep(0.05, 0.0, a.y - HORIZON) * 0.5;
-		vec3 gcol = vec3(mix(0.05, 0.02, depth) + 0.50 * warm,
-						 mix(0.03, 0.012, depth) + 0.18 * warm,
-						 mix(0.028, 0.012, depth) + 0.05 * warm) * (0.8 + 0.4 * gtex);
-		col = mix(col, gcol, g);
-		col += vec3(1.0, 0.45, 0.14) * aaline(a.y - HORIZON, 0.004) * 0.5;   // hot horizon line
-	}
+	// soft, wide blend into the plain so the mountains' feet settle into the land with NO hard
+	// line separating them (the old bright orange horizon stroke is gone).
+	float g = smoothstep(HORIZON - 0.020, HORIZON + 0.020, a.y);
+	if (g <= 0.001) return col;
+	float depth = smoothstep(HORIZON, 1.0, a.y);
+	// blocky cooled-lava plates: coarse cell texture with a finer overlay + gentle undulation
+	float plate = fbm(vec2(a.x * 7.0, (a.y - HORIZON) * 16.0));
+	float fine  = gnoise(vec2(a.x * 22.0, a.y * 30.0));
+	float grain = fbm(vec2(a.x * 3.2, a.y * 5.0 + 9.0));        // large soft tonal variation
+	float rough = plate * 0.6 + fine * 0.25 + grain * 0.15;
+	// warm reflected light: a gentle wash down from the mountains and a stronger bloom hugging
+	// the molten channel — no hard band, so the transition reads as a lit plain.
+	float nearRiver = smoothstep(0.16, 0.0, abs(a.y - 0.855));
+	float warm = smoothstep(0.14, 0.0, a.y - HORIZON) * 0.42 + nearRiver * 0.60;
+	vec3 basalt_d = vec3(0.052, 0.034, 0.030);                  // cool crust far from the river
+	vec3 basalt_l = vec3(0.150, 0.094, 0.074);                  // warmer basalt slab tops
+	vec3 gcol = mix(basalt_d, basalt_l, smoothstep(0.28, 0.86, rough) * (1.0 - depth * 0.35));
+	gcol += vec3(0.95, 0.36, 0.11) * warm * (0.40 + 0.45 * rough);   // molten backlight on the rock
+	// subtle cracks between the plates, brightest where the crust is hottest (near the river)
+	float seam = fbm(vec2(a.x * 16.0 + 4.0, (a.y - HORIZON) * 24.0));
+	float crack = smoothstep(0.62, 0.74, seam) * (0.18 + 0.75 * nearRiver);
+	gcol += vec3(1.0, 0.42, 0.13) * crack * 0.50;
+	col = mix(col, gcol, g);
+	return col;
+}
+// A molten LAVA RIVER winding across the foreground plain near the bottom of the frame.
+// Returns coverage 0..1 across the channel; `across` is the signed -1..1 position from the
+// channel centre (via out param) so the caller can shade core -> crusted banks. The flow
+// animation (right -> left current) is added separately in volcanoAnim.
+float riverMask(vec2 a, out float across) {
+	// gently wavy centreline sweeping across the lower foreground
+	float cy = 0.855 + 0.028 * sin(a.x * 4.3 + 0.6) + 0.012 * sin(a.x * 9.0 + 1.9);
+	float halfw = 0.055 + 0.016 * sin(a.x * 3.1 + 0.4);         // width breathes along its length
+	float d = (a.y - cy) / halfw;
+	across = d;
+	return smoothstep(1.0, 0.72, abs(d));                       // 1 in the channel, fades at the banks
+}
+// Static molten bed of the river (baked): bright core cooling to a dark crusted edge, plus
+// a hot glow spilling onto the surrounding plain.
+vec3 lavaRiver(vec3 col, vec2 a) {
+	if (a.y < HORIZON) return col;
+	float across;
+	float m = riverMask(a, across);
+	// hot glow bleeding onto the banks (draw first so the molten surface sits on top)
+	float glow = smoothstep(1.7, 1.0, abs(across)) * (1.0 - m);
+	col += vec3(1.0, 0.34, 0.09) * glow * 0.40;
+	// cooled crusted bank rim hugging the channel edge — a dark basalt lip that lifts the
+	// river off the plain and catches a thin molten highlight on its inner edge.
+	float rim = smoothstep(1.35, 1.05, abs(across)) * smoothstep(0.98, 1.15, abs(across));
+	col = mix(col, vec3(0.06, 0.035, 0.03), rim * 0.7 * (1.0 - m));
+	col += vec3(1.0, 0.40, 0.12) * smoothstep(1.05, 0.95, abs(across)) * (1.0 - m) * 0.35;
+	if (m < 0.001) return col;
+	float bed = fbm(vec2(a.x * 9.0, a.y * 26.0));               // coarse crust variation
+	vec3 core = vec3(1.0, 0.72, 0.30);
+	vec3 edge = vec3(0.72, 0.16, 0.02);
+	vec3 lc = mix(edge, core, smoothstep(1.0, 0.05, abs(across)) * (0.7 + 0.3 * bed));
+	col = mix(col, lc, m);
 	return col;
 }
 // The FROZEN scene (baked plate + shop preview): sky, smoke, the four cones (short -> tall
-// so nearer/taller occlude), then the foreground plain.
+// so nearer/taller occlude), then the foreground plain and the molten river across it.
 vec3 volcanoScene(vec2 a, vec2 uv) {
 	vec3 col = lavaSky(a);
 	col = lavaAsh(col, a);
 	col = lavaSmoke(col, a);
 	for (int i = 0; i < 4; i++) col = lavaCone(col, a, volc(i));
 	col = lavaGround(col, a);
+	col = lavaRiver(col, a);
 	return col;
 }
-// The animated overlay (dyn / preview): pulsing crater lava, a shimmering flow, embers
-// rising off each crater, plus a few drifting sky embers. Cheap — the heavy static work
+// The animated overlay (dyn / preview): the mountain tops are cold at rest — every 8s one
+// RANDOM cone erupts (crater fills with lava, a molten stream runs down its flank all the
+// way to the foreground river, sparks fountain up), then it cools before the next erupts.
+// Plus a shimmering river flow and a few drifting sky embers. Cheap — the heavy static work
 // stays in the baked plate.
 vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
+	// --- eruption schedule: each cycle picks one random cone to erupt, then the lava it lays
+	// down cools through three staged phases before the next eruption begins:
+	//   • violent eruption + flowing stream .................... first ~4.5s
+	//   • GLOW fades: the molten glow slows down to nothing ..... 8s
+	//   • lava turns DARK (cools to solid crust) ................ 5s
+	//   • the crust FADES away completely ....................... 4s
+	// so one full cycle is ~4.5 + 8 + 5 + 4 = 21.5s.
+	const float ERUPT   = 4.5;                           // violent summit eruption duration
+	const float DESCEND = 9.0;                           // the lava front creeps DOWN to the river slowly, over 9s
+	const float PERIOD  = 30.0;                          // one full erupt + slow-flow + cool cycle
+	const float riverY = 0.855;                          // where flows pour into the river
+	float cid = floor(t / PERIOD);
+	float lt  = t - cid * PERIOD;                        // seconds into this eruption cycle
+	int  em   = int(floor(hash11(cid * 1.37 + 0.5) * 4.0));
+	em = clamp(em, 0, 3);
+	// staged curves: the stream stays molten the whole slow descent, then cools once it
+	// has reached the river (glow holds until DESCEND, then fades; crust darkens; crust fades).
+	float erupt = smoothstep(0.0, 0.5, lt) * smoothstep(ERUPT + 0.5, ERUPT - 0.5, lt);  // violent summit phase 0..1
+	float glow  = 1.0 - smoothstep(DESCEND + 1.0, DESCEND + 8.0, lt);   // molten GLOW holds through the descent, then 1 -> 0 over 7s
+	float dark  = smoothstep(DESCEND + 8.0, DESCEND + 13.0, lt);        // cools to DARK crust over 5s
+	float fade  = 1.0 - smoothstep(DESCEND + 13.0, DESCEND + 17.0, lt); // crust FADES away over 4s
+	float front = clamp(lt / DESCEND, 0.0, 1.0);        // lava front descends summit(0) -> river(1) SLOWLY over 9s
+	float dir   = (hash11(cid + 7.13) < 0.5) ? -1.0 : 1.0;   // flank the stream spills down
+
 	for (int i = 0; i < 4; i++) {
+		if (i != em || fade < 0.001) continue;          // only the erupting cone animates (through its full cool-down)
 		vec4 v = volc(i);
-		// pulsing molten crater lake in the summit bowl
-		vec2 ce = (a - vec2(v.x, v.y + 0.030)) / vec2(v.z * 0.36, v.z * 0.200);
-		float pool = smoothstep(1.0, 0.5, length(ce)) * smoothstep(v.y - 0.005, v.y + 0.02, a.y);
-		if (pool > 0.001) {
-			float bub = fbm(vec2(ce.x * 3.0, ce.y * 3.0 - t * 0.8));
-			vec3 lc = mix(vec3(0.95, 0.22, 0.03), vec3(1.0, 0.85, 0.45), smoothstep(0.0, 0.8, bub));
-			lc *= 0.85 + 0.15 * sin(t * 2.5 + v.w);
-			col = mix(col, lc, pool * 0.85);
-			col += vec3(1.0, 0.44, 0.12) * pool * 0.26;
+		// molten lava capping the rounded summit (no bowl — it pools ON the dome top and
+		// overflows). It cools with the same staged glow -> dark -> fade curve as the stream.
+		vec2 ce = (a - vec2(v.x, v.y + 0.010)) / vec2(v.z * 0.24, v.z * 0.115);
+		float cap = smoothstep(1.0, 0.25, length(ce)) * smoothstep(v.y - 0.055, v.y + 0.004, a.y);
+		if (cap > 0.001) {
+			float bub = fbm(vec2(ce.x * 3.0, ce.y * 3.0 - t * 1.2));
+			vec3 hot = mix(vec3(0.95, 0.22, 0.03), vec3(1.0, 0.88, 0.48), smoothstep(0.0, 0.8, bub));
+			hot *= 0.85 + 0.15 * sin(t * 3.0 + v.w);
+			vec3 capcol = mix(vec3(0.10, 0.06, 0.05), hot, glow);        // hot -> cooled dark lava
+			capcol = mix(capcol, vec3(0.05, 0.035, 0.03), dark * 0.85);   // darkens to solid crust
+			col = mix(col, capcol, cap * fade);
+			col += vec3(1.0, 0.5, 0.15) * cap * glow * fade * 0.35;       // glow only while hot
 		}
-		// very subtle heat-distortion shimmer wavering just above the crater
-		float hh = a.y - (v.y - 0.02);
-		if (hh > 0.0 && hh < 0.14 && abs(a.x - v.x) < v.z * 0.5) {
+		// heat-distortion shimmer wavering above the erupting summit (violent phase only)
+		float hh = a.y - (v.y - 0.03);
+		if (hh > 0.0 && hh < 0.16 && abs(a.x - v.x) < v.z * 0.5) {
 			float sh = sin(a.x * 60.0 + t * 6.0 + v.w) * sin(a.y * 40.0 - t * 4.0);
-			float hm = smoothstep(0.14, 0.0, hh) * smoothstep(v.z * 0.5, 0.0, abs(a.x - v.x));
-			col += vec3(1.0, 0.46, 0.15) * hm * (0.035 + 0.03 * sh);
+			float hm = smoothstep(0.16, 0.0, hh) * smoothstep(v.z * 0.5, 0.0, abs(a.x - v.x));
+			col += vec3(1.0, 0.46, 0.15) * hm * erupt * (0.05 + 0.04 * sh);
 		}
-		// glowing embers rising off the crater into the sky
-		for (int e = 0; e < 5; e++) {
+		// --- BIG ERUPTION: a violent blast that hurls small lava chunks flying everywhere ---
+		float burst = erupt * smoothstep(2.4, 0.0, lt);        // most violent at the very onset
+		// initial bright blast flash bursting out of the summit
+		col += vec3(1.0, 0.72, 0.32) * smoothstep(0.20, 0.0, distance(a, vec2(v.x, v.y + 0.01)))
+			 * erupt * smoothstep(0.9, 0.0, lt) * 0.7;
+		// lava chunks launched radially in ballistic arcs — up, sideways, in every direction
+		for (int e = 0; e < 20; e++) {
 			float fe = float(e);
-			float rise = fract(t * (0.14 + 0.07 * hash11(fe + v.w)) + hash11(fe * 2.1 + v.w));
-			vec2 ep = vec2(v.x + (hash11(fe * 3.3 + v.w) - 0.5) * v.z * 0.7 + 0.02 * sin(t * 2.0 + fe), v.y - rise * 0.30);
-			col += vec3(1.0, 0.55, 0.18) * smoothstep(0.011, 0.0, distance(a, ep)) * (1.0 - rise) * 0.8;
+			float life = fract(t * (0.55 + 0.35 * hash11(fe * 1.7 + v.w)) + hash11(fe * 2.9 + v.w));
+			float vx   = (hash11(fe * 3.7 + v.w) - 0.5) * 0.95;  // wide sideways spread (fly anywhere)
+			float vy   = 0.55 + 0.55 * hash11(fe * 4.3 + v.w);   // upward launch speed
+			vec2 ep = vec2(v.x + vx * life * 0.55,
+						   v.y - vy * life * 0.34 + life * life * 0.34);  // arc up, then gravity pulls down
+			float sz   = mix(0.004, 0.011, hash11(fe * 5.1 + v.w));       // small flying pieces
+			col += vec3(1.0, 0.55, 0.16) * smoothstep(sz, 0.0, distance(a, ep)) * (1.0 - life) * burst;
+		}
+		// --- the molten stream running down the flank and across the plain to the river ---
+		float yy = clamp((a.y - v.y) / (riverY - v.y), 0.0, 1.0);   // 0 crater .. 1 river
+		float cx = v.x
+				 + dir * v.z * 0.26 * smoothstep(0.05, 0.9, yy)     // veer onto one flank
+				 + v.z * 0.06 * sin(yy * 7.0 + cid) * yy;           // meander downhill
+		float halfw = mix(0.014, 0.034, yy);                        // WIDE molten stream, widening as it descends
+		float sc    = smoothstep(1.0, 0.20, abs((a.x - cx) / halfw));
+		float below = smoothstep(v.y - 0.005, v.y + 0.02, a.y);     // start at the summit lip
+		float lead  = smoothstep(front + 0.05, front - 0.05, yy);   // lava has reached the front
+		// the stream must FINISH INSIDE the river — it can NEVER cross to the far bank. Fade the
+		// flow out across the near half of the channel so it dissipates into the molten river.
+		float riverCut = smoothstep(riverY + 0.028, riverY - 0.004, a.y);
+		float trail = sc * below * lead * riverCut;
+		if (trail > 0.001) {
+			float shim = fbm(vec2((a.x - cx) * 40.0, a.y * 30.0 - t * 2.0));
+			vec3 hot = mix(vec3(1.0, 0.28, 0.04), vec3(1.0, 0.85, 0.42), 0.4 + 0.5 * shim);
+			vec3 sccol = mix(vec3(0.10, 0.06, 0.05), hot, glow);         // hot -> cooled dark lava
+			sccol = mix(sccol, vec3(0.05, 0.035, 0.03), dark * 0.85);     // darkens to solid crust
+			col = mix(col, sccol, trail * fade);
+			col += vec3(1.0, 0.42, 0.12) * trail * glow * fade * 0.5;     // glow spilling off, only while hot
+			// bright advancing tongue at the creeping lava front — glows the whole slow descent
+			float tongue = smoothstep(0.045, 0.0, abs(yy - front)) * sc * glow * riverCut;
+			col += vec3(1.0, 0.8, 0.4) * tongue * 0.7;
+		}
+		// bright splash where the stream finally pours into the river as the front arrives
+		if (front > 0.9) {
+			col += vec3(1.0, 0.55, 0.18) * smoothstep(0.075, 0.0, distance(a, vec2(cx, riverY))) * glow * 0.6;
 		}
 	}
-	// free glowing embers floating up through the lower sky
-	for (int i = 0; i < 10; i++) {
+	// a few free glowing embers floating up through the lower sky
+	for (int i = 0; i < 8; i++) {
 		float fi = float(i);
 		float rise = fract(t * (0.09 + 0.07 * hash11(fi * 1.7)) + hash11(fi * 2.3));
 		vec2 ep = vec2(hash11(fi * 3.1) * aspect + 0.04 * sin(t * 1.6 + fi), HORIZON - 0.02 - rise * 0.50);
 		float tw = 0.6 + 0.4 * sin(t * 4.0 + fi * 2.0);
-		col += vec3(1.0, 0.52, 0.17) * smoothstep(0.006, 0.0, distance(a, ep)) * (1.0 - rise) * 0.6 * tw;
+		col += vec3(1.0, 0.52, 0.17) * smoothstep(0.006, 0.0, distance(a, ep)) * (1.0 - rise) * 0.5 * tw;
+	}
+	// flowing surface of the foreground lava river — current streams RIGHT -> LEFT.
+	// Advancing the noise sample in +x with time slides the pattern toward -x (leftwards).
+	{
+		float across;
+		float m = riverMask(a, across);
+		if (m > 0.001) {
+			float flow = fbm(vec2(a.x * 7.0 + t * 0.95, a.y * 20.0 - t * 0.25));
+			float crack = fbm(vec2(a.x * 15.0 + t * 1.7, a.y * 34.0 + 3.0));   // dark crust plates drifting left
+			vec3 bright = mix(vec3(0.92, 0.26, 0.03), vec3(1.0, 0.90, 0.52), smoothstep(0.15, 0.85, flow));
+			bright *= 0.75 + 0.35 * smoothstep(0.55, 0.15, crack);            // cooled crust darkens patches
+			col = mix(col, bright, m * 0.72);
+			col += vec3(1.0, 0.44, 0.12) * m * 0.16;                          // overall molten bloom
+		}
+		// SURGE: when the wheel's central volcano erupts (every 3 rounds) fresh lava is
+		// added to the river — it swells past its banks and runs brighter & faster for a
+		// few seconds. river_boost is tweened 1 -> 0 from GDScript (surge_river()).
+		if (river_boost > 0.001) {
+			float bm = smoothstep(1.0 + 0.9 * river_boost, 0.35, abs(across));  // channel swells wider than its bed
+			float bflow = fbm(vec2(a.x * 8.0 + t * 2.4, a.y * 22.0 - t * 0.6)); // faster current
+			vec3 hotcol = mix(vec3(1.0, 0.42, 0.06), vec3(1.0, 0.95, 0.60), smoothstep(0.1, 0.8, bflow));
+			col = mix(col, hotcol, bm * river_boost * 0.85);
+			col += vec3(1.0, 0.50, 0.15) * bm * river_boost * 0.30;            // extra molten bloom spilling onto the banks
+		}
 	}
 	return col;
 }
@@ -4559,6 +4750,8 @@ var _props_key := ""                # theme the current _props_node was built fo
 # its own bespoke background). GameManager flips this on/off as it swaps screens,
 # BEFORE the incoming screen builds, so is_themed() is already correct in _ready().
 var _active := false
+# Active tween decaying the Volcano river's surge (river_boost 1 -> 0) after an eruption.
+var _river_surge_tween: Tween
 
 # DEBUG: set false to hide the on-screen FPS readout before shipping. While true
 # it shows live FPS in the top-left on every screen, so we can compare the cost of
@@ -5055,6 +5248,23 @@ func set_kitty_eyes(l: float, r: float, smile_amt: float) -> void:
 func notify_level_complete(level: int) -> void:
 	if is_instance_valid(_props_node) and _props_node.has_method("on_level_complete"):
 		_props_node.on_level_complete(level)
+
+# Feed a pulse of lava into the Volcano skin's foreground river — called when the wheel's
+# central volcano erupts (every 3 rounds). The river swells wider & brighter, then settles
+# back over ~5s. No-op unless the live background is the Volcano skin's lava world.
+func surge_river(strength := 1.0) -> void:
+	if _mat == null or _resolved_bg_key() != "skin:inferno":
+		return
+	if _river_surge_tween and _river_surge_tween.is_valid():
+		_river_surge_tween.kill()
+	_mat.set_shader_parameter("river_boost", strength)
+	_river_surge_tween = create_tween()
+	_river_surge_tween.tween_method(_set_river_boost, strength, 0.0, 5.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+func _set_river_boost(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("river_boost", v)
 
 # Build Deep Space's dynamic shader with each moving prop's random constants baked
 # in as GLSL literals (no per-pixel hash11) and every prop wrapped in a cheap
