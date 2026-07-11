@@ -6828,6 +6828,10 @@ var _bake_gen := 0
 # the equipped theme (+ whatever is currently displayed) so memory stays ~1-2 plates.
 var _plate_cache: Dictionary = {}   # key -> ImageTexture
 var _baking: Dictionary = {}        # key -> true while a bake is in flight (dedup)
+# Shop SPECIAL SKINS thumbnails: one BAKED still per (skin,size) so each card shows a
+# frozen frame of the skin's world instead of a live animated scene shader (see
+# make_skin_preview). Tiny card-sized textures, a handful of skins -> negligible RAM.
+var _skin_preview_cache: Dictionary = {}
 # Shop theme previews stay LIVE (animated, full quality). To stop the THEMES grid from
 # hitching as new cards scroll into view, their scene shaders are pre-compiled once when
 # the shop opens (see prewarm_previews) — GL compat otherwise compiles each on its first
@@ -7042,23 +7046,42 @@ func _compile_preview_shader(theme_id: String) -> void:
 	await RenderingServer.frame_post_draw
 	vp.queue_free()
 
-# Build a small ColorRect rendering an equipped-skin's bespoke background at the
+# Build a small ColorRect showing an equipped-skin's bespoke background at the
 # requested size, for use behind the wheel preview in the SPECIAL SKINS shop tab.
-# Returns a deep-void fallback rect for skins that ship no background.
+# The card is a STATIC thumbnail: it shows a single BAKED frame of the skin's world
+# (rendered once, held as a still image) rather than a live animated scene shader per
+# card. Several full-screen scene shaders — the Volcano lava world with its embers,
+# flowing lava and eruptions among them — animating at once was the shop's remaining
+# motion on the special skins and needless GPU. The wheel is likewise frozen (see
+# SimonWheel.set_static_preview). Returns a deep-void fallback for skins with no bg.
 func make_skin_preview(skin_id: String, size: Vector2) -> Control:
 	var rect := ColorRect.new()
 	rect.custom_minimum_size = size
 	rect.size = size
 	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if not _SKIN_SHADERS.has(skin_id):
-		rect.color = Color(0.018, 0.008, 0.025)
-		return rect
+	rect.color = Color(0.018, 0.008, 0.025)              # void fallback / holder until the still lands
+	if _SKIN_SHADERS.has(skin_id):
+		_show_skin_still(rect, skin_id, size)
+	return rect
+
+# Bake one frame of `skin_id`'s scene shader at `size` and paint it on `rect` as a
+# still (a BLIT of the baked texture) so the shop preview never animates. Cached per
+# (skin,size), so rebuilding the skins grid reuses the same still with no re-bake.
+func _show_skin_still(rect: ColorRect, skin_id: String, size: Vector2) -> void:
+	var ck := "skinpv:" + skin_id + "@" + str(int(size.x)) + "x" + str(int(size.y))
+	var tex: ImageTexture = _skin_preview_cache.get(ck, null)
+	if tex == null:
+		tex = await _render_plate(_get_shader("skin:" + skin_id), size)
+		if tex == null:
+			return
+		_skin_preview_cache[ck] = tex
+	if not is_instance_valid(rect):
+		return
 	rect.color = Color(1, 1, 1, 1)
 	var mat := ShaderMaterial.new()
-	mat.shader = _get_shader("skin:" + skin_id)
-	mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
+	mat.shader = _compiled("blit", _BLIT_SHADER)
+	mat.set_shader_parameter("plate_tex", tex)
 	rect.material = mat
-	return rect
 
 func _get_shader(key: String) -> Shader:
 	if _cache.has(key):
@@ -7218,8 +7241,10 @@ func _plate_shader_for(key: String) -> Shader:
 # Render a plate shader once into an offscreen SubViewport at native size and
 # return the image as a texture. UPDATE_ONCE + no MSAA, freed right after the read,
 # so it never enters the continuous-redraw path that OOM-crashed the wheel on GL/Mali.
-func _render_plate(shader: Shader) -> ImageTexture:
-	var px := Vector2i(_native_px())
+func _render_plate(shader: Shader, size := Vector2.ZERO) -> ImageTexture:
+	# size.ZERO -> bake at the native framebuffer (gameplay plate); an explicit size
+	# bakes a smaller still (e.g. a shop skin-preview thumbnail).
+	var px := Vector2i(size) if (size.x >= 2.0 and size.y >= 2.0) else Vector2i(_native_px())
 	px.x = maxi(2, px.x)
 	px.y = maxi(2, px.y)
 	var vp := SubViewport.new()

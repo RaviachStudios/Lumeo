@@ -94,11 +94,16 @@ uniform float rim_r = 0.186;
 uniform float erupt = 0.0;
 varying vec3 v_pos;
 
+// sin-free hash (Hoskins). This runs 8x per gnoise x 5 octaves = 40x per fbm, on
+// every pixel of the hub cone EVERY frame (the Volcano skin redraws the wheel
+// viewport continuously). sin() is among the slowest mobile-GPU ops, so the old
+// sin-based hash made the cone a per-frame bottleneck; this is pure arithmetic.
+// The gradient vectors shift slightly, but the noise character/sharpness — and
+// therefore the rock texture and crater look — is identical.
 vec3 hash3(vec3 p) {
-	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-		 dot(p, vec3(269.5, 183.3, 246.1)),
-		 dot(p, vec3(113.5, 271.9, 124.6)));
-	return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
+	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+	p += dot(p, p.yxz + 33.33);
+	return -1.0 + 2.0 * fract((p.xxy + p.yxx) * p.zyx);
 }
 float gnoise(vec3 p) {
 	vec3 i = floor(p);

@@ -1077,6 +1077,13 @@ func _build_simon_panel() -> void:
 	# this small preview it reads too big and the status dot is meaningless here —
 	# shrink the numeral to match the in-game proportion and drop the dot.
 	_simon_preview.set_overlay_compact(0.52, false)
+	# STATIC thumbnail (same as the SPECIAL SKINS cards): the SIMON preview only needs
+	# to show the equipped look, not animate it. A colour/skin change re-renders exactly
+	# one settled frame (apply_skin -> _kick_render), so the tile stays live-accurate
+	# while never redrawing every frame. This also freezes the Luna Park marquee ring
+	# (its own 2D overlay) and any animated-skin flames, which otherwise kept the SIMON
+	# preview animating — and hitching the store — the whole time the tab was open.
+	_simon_preview.set_static_preview(true)
 
 	# The three per-part colour tiles, directly below the preview.
 	var content_y := PREVIEW_WHEEL + 30.0

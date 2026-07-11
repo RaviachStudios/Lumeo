@@ -1446,11 +1446,16 @@ render_mode cull_disabled;
 uniform float heat = 1.0;
 varying vec3 v_pos;
 
+// sin-free hash (Hoskins). The coal shader clads EVERY ring + the hub of the
+// inferno wheel and calls fbm 3x (5 octaves each) = 24 hash3/octave-sample per
+// pixel, redrawn EVERY frame (the Volcano skin runs the wheel viewport
+// continuously). sin() is among the slowest mobile-GPU ops, so the sin-based hash
+// made the whole wheel a per-frame bottleneck; this is pure arithmetic. The
+// gradient vectors shift slightly but the coal/crack character is identical.
 vec3 hash3(vec3 p) {
-	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-		 dot(p, vec3(269.5, 183.3, 246.1)),
-		 dot(p, vec3(113.5, 271.9, 124.6)));
-	return -1.0 + 2.0 * fract(sin(p) * 43758.5453);
+	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+	p += dot(p, p.yxz + 33.33);
+	return -1.0 + 2.0 * fract((p.xxy + p.yxx) * p.zyx);
 }
 
 float gnoise(vec3 p) {
@@ -2219,6 +2224,10 @@ func set_static_preview(on: bool) -> void:
 		return
 	_static_preview = on
 	set_process(not on)
+	# The Luna Park marquee is a SEPARATE 2D overlay with its own idle-breathing
+	# _process — freezing the viewport doesn't stop it, so freeze it explicitly or a
+	# preview wheel's ring keeps animating/redrawing every frame.
+	_refresh_marquee_freeze()
 	if _vp == null or _preview_paused:
 		return
 	# Render exactly one more frame (UPDATE_ONCE self-reverts to DISABLED after it
@@ -2232,11 +2241,19 @@ func set_preview_paused(paused: bool) -> void:
 	if _preview_paused == paused:
 		return
 	_preview_paused = paused
+	_refresh_marquee_freeze()
 	if paused:
 		if _vp:
 			_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	else:
 		_kick_render()
+
+# The Luna Park marquee ring only breathes on the LIVE gameplay wheel. Any shop
+# preview wheel — static thumbnail OR paused off-screen tab — freezes it to a settled
+# still so it isn't redrawing a ring of bulbs every frame behind the store.
+func _refresh_marquee_freeze() -> void:
+	if _marquee != null and is_instance_valid(_marquee):
+		_marquee.set_frozen(_static_preview or _preview_paused)
 
 # ---------------- hit testing ----------------
 

@@ -452,12 +452,16 @@ func _is_lunapark_skin() -> bool:
 func _show_fire_text() -> void:
 	# Full-screen holder we can scale-pop around the screen centre.
 	var holder := Control.new()
-	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.modulate.a = 0.0
-	add_child(holder)
 	var screen := get_viewport_rect().size
+	# Size the holder to the viewport EXPLICITLY (not via an anchor preset): the centred
+	# labels below fill this rect, so an unresolved/zero holder size can't collapse the
+	# text into the top-left corner. Pivot at centre so the scale-pop grows from middle.
+	holder.position = Vector2.ZERO
+	holder.size = screen
 	holder.pivot_offset = screen * 0.5
+	add_child(holder)
 
 	# Font size scales with the screen so it reads huge on phones and desktop alike,
 	# but stays within the width (with margins) so the line never clips.
@@ -516,12 +520,16 @@ func _fire_label(txt: String, fs: int) -> Label:
 # clear). Centred on screen and never awaited, so it runs alongside the light show.
 func _show_jackpot_text() -> void:
 	var holder := Control.new()
-	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.modulate.a = 0.0
-	add_child(holder)
 	var screen := get_viewport_rect().size
+	# Size the holder to the viewport EXPLICITLY (not via an anchor preset): the centred
+	# labels below fill this rect, so an unresolved/zero holder size can't collapse the
+	# text into the top-left corner. Pivot at centre so the scale-pop grows from middle.
+	holder.position = Vector2.ZERO
+	holder.size = screen
 	holder.pivot_offset = screen * 0.5
+	add_child(holder)
 
 	var fs := int(clampf(screen.x * 0.17, 76.0, 176.0))
 	var txt := "JACKPOT!"
@@ -565,12 +573,16 @@ func _show_jackpot_text() -> void:
 # alongside the light show without touching gameplay timing.
 func _show_nice_ride_text() -> void:
 	var holder := Control.new()
-	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.modulate.a = 0.0
-	add_child(holder)
 	var screen := get_viewport_rect().size
+	# Size the holder to the viewport EXPLICITLY (not via an anchor preset): the centred
+	# labels below fill this rect, so an unresolved/zero holder size can't collapse the
+	# text into the top-left corner. Pivot at centre so the scale-pop grows from middle.
+	holder.position = Vector2.ZERO
+	holder.size = screen
 	holder.pivot_offset = screen * 0.5
+	add_child(holder)
 
 	var fs := int(clampf(screen.x * 0.16, 72.0, 168.0))
 	var txt := "NICE RIDE!"
@@ -668,22 +680,24 @@ func _player_pressed(idx: int) -> void:
 			BackgroundManager.arcade_omg()
 			# Luna Park skin: the "NICE RIDE!" moment — the marquee ring powers on, the sky
 			# dims while the Ferris wheel + coaster blaze, fireworks/confetti fire, and a big
-			# "NICE RIDE!" banner pops over the Simon and fades fully out over ~3s. All calls
-			# are no-ops off the skin and none is awaited, so gameplay is never interrupted.
+			# "NICE RIDE!" banner pops over the Simon and fades fully out over ~3s. The light
+			# show is fired concurrently, then the round FREEZES on the banner (awaited) so the
+			# next level only starts once the text is completely gone. All calls no-op off the skin.
 			_wheel.luna_celebrate()
 			BackgroundManager.luna_celebrate()
 			if _is_lunapark_skin():
-				_show_nice_ride_text()
+				await _show_nice_ride_text()   # FREEZE until the "NICE RIDE!" banner fully fades out
 		# Jackpot skin only: every 8th completed level (8, 16, 24, …) fires a Mega
 		# Jackpot celebration — the hall washes through a rainbow, the gold JACKPOT
 		# sign powers on, the roulette ball rolls, and a big "JACKPOT!" banner pops
-		# over the Simon and fades out. Gameplay PAUSES here and waits the full ~3s
-		# for the show to finish. `casino_jackpot()` is a coroutine that awaits its
-		# tween on the Jackpot skin and returns instantly on any other background.
+		# over the Simon and fades out over ~3s. The round FREEZES here until the banner
+		# has fully faded: the light show + rolling ball are fired concurrently, then we
+		# await the on-screen text so the next level only starts once it's gone.
+		# `casino_jackpot()` is a no-op on any other background.
 		if level % 8 == 0 and _is_casino_skin():
-			_show_jackpot_text()          # big "JACKPOT!" over the Simon, fades out in 3s
 			_wheel.roulette_celebrate()   # ball rolls continuously for the whole ~3s show
-			await BackgroundManager.casino_jackpot()
+			BackgroundManager.casino_jackpot()   # rainbow wash + gold sign (concurrent tween)
+			await _show_jackpot_text()    # FREEZE until the "JACKPOT!" banner fully fades out
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 

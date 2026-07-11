@@ -43,6 +43,13 @@ var _evt := 0.0                      # elapsed time inside the active chase/cele
 var _sparkles: Array = []            # [{pos, vel, t, life, size, seed}]
 var _spawn_acc := 0.0
 
+# Frozen = show a single settled still and never advance the clock/redraw. Set by
+# SimonWheel for the SHOP preview wheels (SIMON tab + SPECIAL SKINS cards): a preview
+# wheel's marquee must not keep breathing every frame — that's a per-frame CPU/redraw
+# cost on a screen full of previews AND read as a bug (the ring "kept going" in the
+# SIMON tab). The live gameplay wheel is never frozen, so its ring still breathes.
+var _frozen := false
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -55,14 +62,27 @@ func _ready() -> void:
 # empty array (off the Luna Park skin) parks the node idle and invisible.
 func set_bulbs(pts: PackedVector2Array) -> void:
 	_bulbs = pts
-	if visible and _bulbs.size() > 0:
+	if visible and _bulbs.size() > 0 and not _frozen:
 		set_process(true)
 	else:
 		set_process(false)
 	queue_redraw()
 
 func _on_visibility() -> void:
-	set_process(visible and _bulbs.size() > 0)
+	set_process(visible and _bulbs.size() > 0 and not _frozen)
+
+# Freeze the ring to a single settled still (previews) or let it breathe again (live
+# gameplay). Frozen holds whatever phase `_time` is at, so the bulbs read as lit but
+# never animate or redraw — ~zero ongoing cost. See `_frozen`.
+func set_frozen(on: bool) -> void:
+	if _frozen == on:
+		return
+	_frozen = on
+	if on:
+		set_process(false)
+	else:
+		set_process(visible and _bulbs.size() > 0)
+	queue_redraw()
 
 # Light Chase — a single bright crest sweeps ~2 clockwise laps while every bulb lifts.
 # No-op if there are no bulbs. Force-starts over an in-flight chase; yields to a
