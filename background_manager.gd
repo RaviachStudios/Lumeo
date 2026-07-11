@@ -3977,8 +3977,22 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 	int conePrev  = VSEQ[int(mod(k0 - 1.0, 61.0))];      // last tick's cone (cooling)  — always != coneNow
 	int conePrev2 = VSEQ[int(mod(k0 - 2.0, 61.0))];      // two ticks back (fading out)
 
+	// PERF (lossless CSE): coneTop() and groundTop() each call fbm() and depend ONLY on a.x
+	// (plus per-cone constants), so their value is identical for every cone i on a given
+	// fragment. The occlusion loop below recomputes all four cones' coneTop() for EACH active
+	// cone whose column covers this fragment (up to ~3× in overlapping columns), and onSlopes
+	// evaluated groundTop() twice. Compute each ONCE per fragment here / lazily and reuse. Same
+	// fbm inputs -> bit-for-bit identical output; only the redundant recompute is removed.
+	// volc() is branch-only (no fbm) and was already called 4×/fragment, so caching it is free.
+	vec4 cV[4];
+	for (int c = 0; c < 4; c++) cV[c] = volc(c);
+	// coneTop()/groundTop() DO cost fbm, so defer them: only fragments that actually enter an
+	// active cone's column (nearCol) ever need them — sky fragments must keep paying nothing.
+	bool  cReady = false;      // set true the first time this fragment reaches a nearCol block
+	float cTopY[4];            // each cone's silhouette y (valid once cReady)
+	float gTop = 0.0;          // ground crest y at a.x (valid once cReady)
 	for (int i = 0; i < 4; i++) {
-		vec4 v = volc(i);
+		vec4 v = cV[i];
 		// this cone's trigger tick: the current tick if it's this tick's pick, otherwise the most
 		// recent of the last two ticks it fired on (still cooling); else it is dormant.
 		float trig = -1.0;
@@ -3997,6 +4011,17 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		float front = clamp(lt / DESCEND, 0.0, 1.0);    // lava front descends summit(0) -> river(1) SLOWLY over 9s
 		float dir   = (hash11(cid + 7.13) < 0.5) ? -1.0 : 1.0;   // flank the stream spills down
 		if (fade < 0.001) continue;                      // fully cooled & faded — nothing to draw
+		// SPATIAL GUARD: this cone's vent + molten stream all live in a narrow column around its
+		// axis. For the (many) fragments outside that column they contribute nothing, so skip the
+		// heavy per-cone fbm / occlusion work there — it is only paid where the cone actually draws.
+		bool nearCol = abs(a.x - v.x) < v.z + 0.16;
+		// First time this fragment lands in ANY active cone's column, evaluate the shared
+		// coneTop()/groundTop() (the fbm-bearing terms) once; every cone i below then reuses them.
+		if (nearCol && !cReady) {
+			for (int c = 0; c < 4; c++) { vec4 vc = cV[c]; float _dx; float _fr; cTopY[c] = coneTop(vc, a.x, _dx, _fr); }
+			gTop = groundTop(a.x);
+			cReady = true;
+		}
 		// RUGGED ERUPTION OPENING: molten lava BREAKS THROUGH a fractured breach in the rocky
 		// peak — a broken, ragged mouth (never a round pool or a flat lip) that the stream pours
 		// straight out of. Around it: a collar of fractured dark rock, glowing cracks & small
@@ -4005,10 +4030,9 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		// glow -> dark -> fade curve as the stream so the opening and the flow read as one event.
 		// The vent is declared out here so the stream below emerges straight from it.
 		vec2 vent = vec2(v.x + dir * v.z * 0.05, v.y + 0.024);
-		{
+		if (nearCol) {
 			// clip strictly to the rock so nothing floats in the sky above the summit
-			float dxf; float fracf;
-			float topf = coneTop(v, a.x, dxf, fracf);
+			float topf = cTopY[i];
 			float onBody = smoothstep(topf - 0.004, topf + 0.010, a.y);
 			vec2  d2  = a - vent;
 			float ang = atan(d2.y, d2.x);
@@ -4049,6 +4073,7 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 				float rise = fract(t * (0.22 + 0.10 * hash11(fsm * 2.7 + v.w)) + hash11(fsm * 1.3 + v.w));
 				vec2  sp   = vent + vec2((hash11(fsm * 3.1 + v.w) - 0.5) * 0.05 + rise * 0.04 * dir,
 										 -0.02 - rise * 0.22);
+				if (abs(a.x - sp.x) > 0.065 || abs(a.y - sp.y) > 0.065) continue;  // smoke puff radius <=0.06 — skip elsewhere
 				float sr   = mix(0.018, 0.060, rise);
 				float sm   = smoothstep(sr, 0.0, distance(a, sp)) * (1.0 - rise) * glow * fade;
 				col = mix(col, vec3(0.15, 0.10, 0.10), sm * 0.28);
@@ -4059,6 +4084,7 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 				float rise = fract(t * (0.5 + 0.35 * hash11(fe2 * 1.9 + v.w)) + hash11(fe2 * 4.1 + v.w));
 				vec2  ep2  = vent + vec2((hash11(fe2 * 2.3 + v.w) - 0.5) * 0.06 + rise * 0.03 * dir,
 										 -rise * 0.14);
+				if (abs(a.x - ep2.x) > 0.006 || abs(a.y - ep2.y) > 0.006) continue;  // ember radius 0.004 — skip elsewhere
 				float tw   = 0.5 + 0.5 * sin(t * 5.0 + fe2 * 2.0);
 				col += vec3(1.0, 0.55, 0.18) * smoothstep(0.004, 0.0, distance(a, ep2)) * (1.0 - rise) * glow * fade * tw * 0.8;
 			}
@@ -4071,6 +4097,12 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 			col += vec3(1.0, 0.46, 0.15) * hm * erupt * (0.05 + 0.04 * sh);
 		}
 		// --- BIG ERUPTION: a violent blast that hurls molten debris flying in EVERY direction ---
+		// TIME + SPATIAL GUARD: every contribution below (fireball, shock ring, the 40-chunk debris
+		// fountain, the ash) is multiplied by a factor that is exactly 0 once lt > 3s, and every
+		// piece lands within ~0.6 of the summit. So skip the whole block — including the 40-iteration
+		// debris loop — outside that window/box. Provably identical output, just not computed where
+		// it is guaranteed to be zero (cooling cones, and every fragment away from the summit).
+		if (lt < 3.05 && abs(a.x - v.x) < 0.62 && abs(a.y - (v.y + 0.005)) < 0.64) {
 		vec2 summit = vec2(v.x, v.y + 0.005);
 		float burst = erupt * smoothstep(3.0, 0.0, lt);        // most violent at the very onset
 		float fd = distance(a, summit);
@@ -4091,6 +4123,7 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 			float vx   = (hash11(fe * 3.7 + v.w) - 0.5) * 1.9;   // WIDE sideways spread — fly anywhere
 			float vy   = 0.30 + 0.95 * hash11(fe * 4.3 + v.w);   // strong upward launch (fountain)
 			vec2 ep = summit + vec2(vx, -vy) * life * 0.55 + vec2(0.0, life * life * 0.55);  // arc up, gravity pulls down
+			if (abs(a.x - ep.x) > 0.048 || abs(a.y - ep.y) > 0.048) continue;  // chunk+bloom radius <=0.044 — skip elsewhere
 			float sz   = mix(0.004, 0.017, hash11(fe * 5.1 + v.w));       // varied chunk sizes
 			float d    = distance(a, ep);
 			float glow = 1.0 - life;
@@ -4103,11 +4136,14 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 			float rise = fract(t * 0.35 + hash11(fs * 2.7 + v.w));
 			vec2 sp = summit + vec2((hash11(fs * 3.1 + v.w) - 0.5) * 0.22 + rise * 0.05,
 								   -0.10 - rise * 0.40);
+			if (abs(a.x - sp.x) > 0.12 || abs(a.y - sp.y) > 0.12) continue;  // ash puff radius <=0.11 — skip elsewhere
 			float sr = mix(0.03, 0.11, rise);
 			float sm = smoothstep(sr, 0.0, distance(a, sp)) * (1.0 - rise) * burst;
 			col = mix(col, vec3(0.16, 0.10, 0.09), sm * 0.5);
 		}
+		}  // end BIG ERUPTION time+box guard
 		// --- the molten stream running down the flank and across the plain to the river ---
+		if (nearCol) {  // molten stream only exists in this cone's column — skip the fbm/occlusion elsewhere
 		// It EMERGES from the vent mouth (organic, turbulent, breathing width) and widens as it
 		// descends — never a thin ribbon pinned to a flat summit edge.
 		float rCen = riverCenter(a.x);                              // the winding channel's y at THIS column
@@ -4142,12 +4178,12 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		// Gated to the SLOPES: below the crest the plain is drawn over every cone foot, so down
 		// there the flow runs freely into the river and occludes nothing. The soft smoothstep on
 		// each cone's silhouette gives a clean, natural edge into the hidden zone (no hard clip).
-		float onSlopes = smoothstep(groundTop(a.x) + 0.010, groundTop(a.x) - 0.010, a.y);  // 1 above the crest, 0 on the plain
+		float onSlopes = smoothstep(gTop + 0.010, gTop - 0.010, a.y);  // 1 above the crest, 0 on the plain
 		float ownCover = 0.0, nearerCover = 0.0, fartherCover = 0.0;
 		for (int k = 0; k < 4; k++) {
-			vec4 vk = volc(k);
-			float dxk; float frack;
-			float topk = coneTop(vk, a.x, dxk, frack);
+			vec4 vk = cV[k];
+			float dxk = a.x - vk.x;
+			float topk = cTopY[k];
 			float coverk = smoothstep(topk - 0.006, topk + 0.012, a.y)          // below cone-k's silhouette
 						 * smoothstep(vk.z + 0.006, vk.z - 0.006, abs(dxk));     // within cone-k's base
 			if      (k == i) ownCover     = coverk;
@@ -4163,9 +4199,9 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		// completes a touch ABOVE the silhouette (in the sky/gap) so the flow ends cleanly at the
 		// mountain edge with zero spill onto its face.
 		if (i != 3) {
-			vec4 v3 = volc(3);
-			float dx3; float frac3;
-			float top3 = coneTop(v3, a.x, dx3, frac3);
+			vec4 v3 = cV[3];
+			float dx3 = a.x - v3.x;
+			float top3 = cTopY[3];
 			float onBody3 = smoothstep(top3 - 0.014, top3 - 0.002, a.y)        // 1 at/below the silhouette, ramping up just ABOVE it
 						  * smoothstep(v3.z + 0.002, v3.z - 0.008, abs(dx3));   // within cone 3's base (cut a hair inside its edge)
 			ncut *= (1.0 - onBody3 * onSlopes);                                // only where cone 3 is the DRAWN surface (not buried by the plain)
@@ -4194,6 +4230,7 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		if (front > 0.9 && !leftCone) {
 			col += vec3(1.0, 0.55, 0.18) * smoothstep(0.075, 0.0, distance(a, vec2(cx, riverCenter(cx)))) * glow * 0.6 * ncut;
 		}
+		}  // end stream nearCol guard
 	}
 	// --- LIGHTNING: a jagged bolt cracks across the volcanic sky every ~10s ---
 	{
@@ -4228,12 +4265,16 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		float span = 0.45 + 0.45 * hash11(fi * 4.9);             // how high this ember climbs
 		float baseY = HORIZON - 0.02 + 0.03 * (hash11(fi * 5.7) - 0.5);
 		vec2 ep = vec2(hash11(fi * 3.1) * aspect + 0.05 * sin(t * 1.4 + fi * 1.3), baseY - rise * span);
+		if (abs(a.x - ep.x) > 0.007 || abs(a.y - ep.y) > 0.007) continue;  // dot radius 0.0055 — skip the sqrt/smoothstep away from it
 		float tw = 0.55 + 0.45 * sin(t * 4.0 + fi * 2.0);
 		col += vec3(1.0, 0.52, 0.17) * smoothstep(0.0055, 0.0, distance(a, ep)) * (1.0 - rise) * 0.42 * tw;
 	}
 	// flowing surface of the foreground lava river — current streams RIGHT -> LEFT.
 	// Advancing the noise sample in +x with time slides the pattern toward -x (leftwards).
-	{
+	// The river, its bank glow and the surge swell live entirely in the bottom band (center ~0.9,
+	// the widest surge reaching up to ~0.648); above that everything here is 0, so skip riverMask
+	// + the whole flow/surge pass there.
+	if (a.y > 0.62) {
 		float across;
 		float m = riverMask(a, across);
 		if (m > 0.001) {
@@ -5132,23 +5173,37 @@ vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
 		float fi = float(i);
 		vec2 cc; float cw; float ch; float dscale; float depthN; float tilt; int game; int style;
 		vec3 mc = arcCab(fi, cc, cw, ch, dscale, depthN, game, style, tilt);
+		// ---- cheap AABB guard (tips 3+5): skip the whole per-cabinet block for pixels no
+		// part of this machine can reach. The box spans the marquee glow above, the body,
+		// and the floor reflection below, with a margin covering the lean/shear + falloff.
+		// Every effect below is additive-smoothstep or aafill that is already 0 at this
+		// boundary, so skipping is provably identical — it just stops running the 8× loop
+		// (and its 3× occlusion sub-loop) across the ~80% of the screen it never touches.
+		float gx = cw * 1.06 + 0.12 * dscale + 0.05;
+		if (abs(a.x - cc.x) > gx
+			|| a.y < cc.y - ch * 1.245 - 0.12 * dscale - 0.05
+			|| a.y > cc.y + ch + 0.18 * dscale + 0.05) { continue; }
 		vec2 al = cc + (a - cc) * rot(tilt);           // match the scene's cabinet lean
 		float bright = 1.0 - depthN * 0.4;
+		vec2 scc = cc + vec2(0.0, -ch * 0.40);
 		// Occlusion: this cabinet's lit screen (and its glow) must be hidden wherever a
 		// NEARER same-side cabinet stands in front of it — otherwise the CRT paints across
 		// the neighbour's body. Same side = same parity; nearer = lower index (i-2, i-4,
 		// i-6). Opposite walls never overlap (the centre is left open), so only same-side
-		// occluders matter. `occ` = 1 in the clear, 0 behind a nearer body.
+		// occluders matter. `occ` = 1 in the clear, 0 behind a nearer body. It's only ever
+		// used by the screen game (screen box) + glow bleed (within ch*0.55 of scc), so we
+		// only pay the 3× arcCab/arcCabMask loop near the tube; elsewhere occ stays 1.0.
 		float occ = 1.0;
-		for (int k = 0; k < 3; k++) {
-			int j = i - 2 * (k + 1);
-			if (j < 0) { break; }
-			vec2 jcc; float jcw; float jch; float jds; float jdn; float jtilt; int jgame; int jstyle;
-			arcCab(float(j), jcc, jcw, jch, jds, jdn, jgame, jstyle, jtilt);
-			occ *= 1.0 - arcCabMask(a, jcc, jcw, jch, jstyle, jtilt);
+		if (distance(al, scc) < ch * 0.6) {
+			for (int k = 0; k < 3; k++) {
+				int j = i - 2 * (k + 1);
+				if (j < 0) { break; }
+				vec2 jcc; float jcw; float jch; float jds; float jdn; float jtilt; int jgame; int jstyle;
+				arcCab(float(j), jcc, jcw, jch, jds, jdn, jgame, jstyle, jtilt);
+				occ *= 1.0 - arcCabMask(a, jcc, jcw, jch, jstyle, jtilt);
+			}
 		}
 		// animated game on the tube
-		vec2 scc = cc + vec2(0.0, -ch * 0.40);
 		vec2 hs = vec2(cw * 0.6, ch * 0.2);
 		if (sdBox(al - scc, hs) < 0.0) {
 			vec2 s = (al - scc) / hs * 0.5 + 0.5;
@@ -5741,6 +5796,7 @@ vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
 	for (int i = 0; i < 2; i++) {
 		float fi = float(i);
 		vec2 ch = vec2(cx + (fi < 0.5 ? -0.46 : 0.46), 0.20);
+		if (abs(a.x - ch.x) > 0.21 || abs(a.y - ch.y) > 0.21) continue;   // AABB reject: bloom fades by 0.20, sparkles well inside
 		col += vec3(1.0, 0.80, 0.42) * smoothstep(0.20, 0.0, distance(a, ch)) * 0.10 * (0.5 + 0.5 * sin(t * 1.2 + fi * 2.0));
 		for (int k = 0; k < 3; k++) {
 			float fk = float(k);
@@ -5751,26 +5807,36 @@ vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
 	// JACKPOT sign: warm marquee bulbs chasing around the gold frame + a gentle breath
 	{
 		vec2 sC = vec2(cx, SIGN_Y);
-		float halfW = 3.0 * SIGN_PITCH + SIGN_HW + 0.020;
-		float halfH = SIGN_HH + 0.020;
-		float fd = sdBox(a - sC, vec2(halfW, halfH));
-		float onFrame = smoothstep(0.008, 0.0, abs(fd));            // the gold border band
-		float ph = atan(a.y - sC.y, a.x - sC.x);                    // angle around the sign
-		float chase = 0.5 + 0.5 * sin(ph * 10.0 - t * 3.0);         // running marquee bulbs
-		col += vec3(1.0, 0.86, 0.42) * onFrame * chase * 0.35;
-		// soft breathing bloom so the resting sign always feels alive
-		col += vec3(1.0, 0.82, 0.38) * smoothstep(0.20, 0.0, distance(a, sC)) * (0.05 + 0.03 * sin(t * 1.5));
+		// AABB guard: the frame band reaches ±halfW/±halfH and the breathing bloom fades
+		// by 0.20, so nothing in this block is drawn beyond 0.21 of the sign centre. Skips
+		// the atan + sdBox for every pixel outside the sign — provably identical output.
+		if (abs(a.x - sC.x) < 0.21 && abs(a.y - sC.y) < 0.21) {
+			float halfW = 3.0 * SIGN_PITCH + SIGN_HW + 0.020;
+			float halfH = SIGN_HH + 0.020;
+			float fd = sdBox(a - sC, vec2(halfW, halfH));
+			float onFrame = smoothstep(0.008, 0.0, abs(fd));            // the gold border band
+			float ph = atan(a.y - sC.y, a.x - sC.x);                    // angle around the sign
+			float chase = 0.5 + 0.5 * sin(ph * 10.0 - t * 3.0);         // running marquee bulbs
+			col += vec3(1.0, 0.86, 0.42) * onFrame * chase * 0.35;
+			// soft breathing bloom so the resting sign always feels alive
+			col += vec3(1.0, 0.82, 0.38) * smoothstep(0.20, 0.0, distance(a, sC)) * (0.05 + 0.03 * sin(t * 1.5));
+		}
 	}
-	// warm spotlight slowly sweeping across the felt
-	float sweep = 0.5 + 0.4 * sin(t * 0.45);
-	col += vec3(0.5, 0.30, 0.10) * smoothstep(0.14, 0.0, abs(uv.x - sweep)) * step(0.55, uv.y) * 0.15;
-	// gold sparkles glinting across the felt
-	for (int i = 0; i < 7; i++) {
-		float fi = float(i);
-		float gx = cx + (hash11(fi * 3.3) - 0.5) * 1.3;
-		float gy = 0.82 + 0.15 * hash11(fi * 5.5);
-		float tw = 0.5 + 0.5 * sin(t * (2.0 + fi) + fi * 10.0);
-		col += vec3(1.0, 0.9, 0.5) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.5;
+	// warm spotlight slowly sweeping across the felt (only ever visible below uv.y 0.55)
+	if (uv.y > 0.55) {
+		float sweep = 0.5 + 0.4 * sin(t * 0.45);
+		col += vec3(0.5, 0.30, 0.10) * smoothstep(0.14, 0.0, abs(uv.x - sweep)) * step(0.55, uv.y) * 0.15;
+	}
+	// gold sparkles glinting across the felt (all sit in the y 0.82..0.97 band)
+	if (a.y > 0.80) {
+		for (int i = 0; i < 7; i++) {
+			float fi = float(i);
+			float gx = cx + (hash11(fi * 3.3) - 0.5) * 1.3;
+			float gy = 0.82 + 0.15 * hash11(fi * 5.5);
+			if (abs(a.x - gx) > 0.008 || abs(a.y - gy) > 0.008) continue;   // AABB reject (dot radius 0.006)
+			float tw = 0.5 + 0.5 * sin(t * (2.0 + fi) + fi * 10.0);
+			col += vec3(1.0, 0.9, 0.5) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.5;
+		}
 	}
 	// ============ MEGA JACKPOT CELEBRATION (Stage 5) ============
 	// One elegant 5s event driven by the `jp` clock (seconds, 0..5). The whole hall
@@ -6245,11 +6311,15 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 	if (celeEnv > 0.01)
 		col *= mix(1.0, 0.30, celeEnv * smoothstep(0.60, 0.10, uv.y));
 	// ---------- STRING-LIGHT TWINKLE ----------
-	for (int i = 0; i < 21; i++) {
-		vec3 tn; vec2 bp = lpStr(i, tn);
-		if (abs(a.x - bp.x) < 0.03 && abs(a.y - bp.y) < 0.03) {
-			float tw = 0.55 + 0.45 * sin(t * 1.6 + float(i) * 0.7);
-			lpBulb(col, a, bp, 0.015, 0.28 * tw + (chaseEnv + celeEnv) * 0.45, tn);
+	// Every string bulb sits in the top strip (y <= ~0.105); gate the whole 21-bulb
+	// loop so the bottom ~85% of the screen never runs lpStr()/lpBulb() at all.
+	if (a.y < 0.14) {
+		for (int i = 0; i < 21; i++) {
+			vec3 tn; vec2 bp = lpStr(i, tn);
+			if (abs(a.x - bp.x) < 0.03 && abs(a.y - bp.y) < 0.03) {
+				float tw = 0.55 + 0.45 * sin(t * 1.6 + float(i) * 0.7);
+				lpBulb(col, a, bp, 0.015, 0.28 * tw + (chaseEnv + celeEnv) * 0.45, tn);
+			}
 		}
 	}
 	// ---------- FERRIS WHEEL (illuminated, slowly turning, set back upper-left) ----------
@@ -6261,35 +6331,48 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			vec3 steel    = vec3(0.17, 0.16, 0.21);
 			vec3 steelLit = vec3(0.34, 0.28, 0.26);   // warm bulb-light spilling onto the frame
 			vec3 warmGlow = vec3(1.0, 0.72, 0.36);
-			// soft contact shadow pooled on the boardwalk beneath the wheel (grounds the ride)
-			col = mix(col, col * 0.55, smoothstep(0.13, 0.0, length((a - vec2(fwp.x, 0.648)) * vec2(0.7, 2.6))) * 0.5 * haze);
-			// ---- braced steel A-frame: splayed twin legs each side + a rear leg for depth ----
-			col = mix(col, steel * 0.62, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.03, 0.652)), 0.0050) * haze);  // rear leg (behind the wheel)
-			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.128, 0.652)), 0.0066) * haze);
-			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.128, 0.652)), 0.0066) * haze);
-			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.172, 0.652)), 0.0044) * haze);
-			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.172, 0.652)), 0.0044) * haze);
-			col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.082, 0.478), vec2(fwp.x + 0.082, 0.478)), 0.0034) * haze);  // upper cross-brace
-			col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.150, 0.560), vec2(fwp.x + 0.150, 0.560)), 0.0026) * haze);  // lower truss tie
-			col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x - 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
-			col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x + 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
-			// ---- twin steel rims, warm bulb-light bleeding onto the metal ----
-			col = mix(col, steelLit, aaline(rr - FR, 0.0050) * haze);                              // outer structural rim
-			col += warmGlow * aaline(rr - FR, 0.0034) * 0.5 * litAmt * haze;                       // warm sheen on the outer rim
-			col = mix(col, steel * 1.4, aaline(rr - FR * 0.88, 0.0034) * haze);                    // inner rim
-			col += warmGlow * aaline(rr - FR * 0.88, 0.0024) * 0.32 * litAmt * haze;
-			// ---- elegant spokes to the hub, catching warm light near the rim ----
-			for (int i = 0; i < 12; i++) {
-				float sa = float(i) / 12.0 * TAU + spin;
-				vec2 dir = vec2(cos(sa), sin(sa));
-				col = mix(col, steel, aaline(lpSeg(a, fwp, fwp + dir * FR * 0.9), 0.0013) * 0.75 * haze);
-				col += warmGlow * aaline(lpSeg(a, fwp + dir * FR * 0.62, fwp + dir * FR * 0.9), 0.0015) * 0.12 * litAmt * haze;
+			// A-frame + contact shadow live in the lower half of the box (hub down to the
+			// boardwalk); skip all ~11 lines across the upper wheel where they never draw.
+			if (a.y > 0.255) {
+				// soft contact shadow pooled on the boardwalk beneath the wheel (grounds the ride)
+				col = mix(col, col * 0.55, smoothstep(0.13, 0.0, length((a - vec2(fwp.x, 0.648)) * vec2(0.7, 2.6))) * 0.5 * haze);
+				// ---- braced steel A-frame: splayed twin legs each side + a rear leg for depth ----
+				col = mix(col, steel * 0.62, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.03, 0.652)), 0.0050) * haze);  // rear leg (behind the wheel)
+				col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.128, 0.652)), 0.0066) * haze);
+				col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.128, 0.652)), 0.0066) * haze);
+				col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.172, 0.652)), 0.0044) * haze);
+				col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.172, 0.652)), 0.0044) * haze);
+				col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.082, 0.478), vec2(fwp.x + 0.082, 0.478)), 0.0034) * haze);  // upper cross-brace
+				col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.150, 0.560), vec2(fwp.x + 0.150, 0.560)), 0.0026) * haze);  // lower truss tie
+				col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x - 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
+				col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x + 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
 			}
-			// ---- gold hub ----
-			col = mix(col, vec3(0.22, 0.20, 0.26), aafill(sdCircle(d, 0.024)) * haze);
-			col = mix(col, vec3(0.85, 0.66, 0.34), aafill(sdCircle(d, 0.015)) * haze);
-			lpBulb(col, a, fwp, 0.030, 0.9 * litAmt * haze, vec3(1.0, 0.86, 0.52));                // lit hub
+			// ---- twin steel rims, warm bulb-light bleeding onto the metal ---- (only in the rim annulus)
+			if (rr > FR * 0.82 && rr < FR + 0.02) {
+				col = mix(col, steelLit, aaline(rr - FR, 0.0050) * haze);                              // outer structural rim
+				col += warmGlow * aaline(rr - FR, 0.0034) * 0.5 * litAmt * haze;                       // warm sheen on the outer rim
+				col = mix(col, steel * 1.4, aaline(rr - FR * 0.88, 0.0034) * haze);                    // inner rim
+				col += warmGlow * aaline(rr - FR * 0.88, 0.0024) * 0.32 * litAmt * haze;
+			}
+			// ---- elegant spokes to the hub, catching warm light near the rim ---- (only inside the spoked disk)
+			if (rr < FR * 0.9 + 0.012) {
+				for (int i = 0; i < 12; i++) {
+					float sa = float(i) / 12.0 * TAU + spin;
+					vec2 dir = vec2(cos(sa), sin(sa));
+					col = mix(col, steel, aaline(lpSeg(a, fwp, fwp + dir * FR * 0.9), 0.0013) * 0.75 * haze);
+					col += warmGlow * aaline(lpSeg(a, fwp + dir * FR * 0.62, fwp + dir * FR * 0.9), 0.0015) * 0.12 * litAmt * haze;
+				}
+			}
+			// ---- gold hub ---- (only near the centre)
+			if (rr < 0.06) {
+				col = mix(col, vec3(0.22, 0.20, 0.26), aafill(sdCircle(d, 0.024)) * haze);
+				col = mix(col, vec3(0.85, 0.66, 0.34), aafill(sdCircle(d, 0.015)) * haze);
+				lpBulb(col, a, fwp, 0.030, 0.9 * litAmt * haze, vec3(1.0, 0.86, 0.52));                // lit hub
+			}
 			// ---- passenger gondolas: hung from the rim, staying upright as the wheel turns ----
+			// Gondolas hang just inside/outside the rim; skip the 12-cabin loop for any pixel
+			// well away from the rim annulus (deep in the disk or out past the frame).
+			if (abs(rr - FR) < 0.08) {
 			for (int i = 0; i < 12; i++) {
 				float ga = float(i) / 12.0 * TAU + spin;
 				vec2 anchor = fwp + vec2(cos(ga), sin(ga)) * FR;
@@ -6311,23 +6394,27 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 					col += gc * smoothstep(0.03, 0.0, length(q)) * 0.45 * litAmt * haze;                            // colour bloom
 				}
 			}
-			// celebration bloom: the whole Ferris wheel blazes against the darkened sky
-			col += vec3(1.0, 0.80, 0.46) * smoothstep(FR + 0.05, 0.0, length(d)) * celeEnv * 0.30 * haze;
-			// ---- round rim bulbs: evenly spaced around the whole circumference, organic twinkle ----
-			for (int i = 0; i < 24; i++) {
-				float ba = float(i) / 24.0 * TAU + spin;
-				vec2 bp = fwp + vec2(cos(ba), sin(ba)) * FR;
-				if (abs(a.x - bp.x) < 0.028 && abs(a.y - bp.y) < 0.028) {
-					float ph = hash11(float(i) * 1.7);
-					float tw = 0.55 + 0.45 * sin(t * 1.8 + ph * TAU);
-					tw *= 0.8 + 0.2 * hash11(float(i) * 2.3);                // a few bulbs run a little dimmer -> organic
-					lpBulb(col, a, bp, 0.013, 0.5 * tw * litAmt * haze, warm);
+			}
+			// celebration bloom: the whole Ferris wheel blazes against the darkened sky (event only)
+			if (celeEnv > 0.01)
+				col += vec3(1.0, 0.80, 0.46) * smoothstep(FR + 0.05, 0.0, length(d)) * celeEnv * 0.30 * haze;
+			// ---- round rim bulbs: evenly spaced around the whole circumference, organic twinkle ---- (rim annulus only)
+			if (abs(rr - FR) < 0.02) {
+				for (int i = 0; i < 24; i++) {
+					float ba = float(i) / 24.0 * TAU + spin;
+					vec2 bp = fwp + vec2(cos(ba), sin(ba)) * FR;
+					if (abs(a.x - bp.x) < 0.028 && abs(a.y - bp.y) < 0.028) {
+						float ph = hash11(float(i) * 1.7);
+						float tw = 0.55 + 0.45 * sin(t * 1.8 + ph * TAU);
+						tw *= 0.8 + 0.2 * hash11(float(i) * 2.3);                // a few bulbs run a little dimmer -> organic
+						lpBulb(col, a, bp, 0.013, 0.5 * tw * litAmt * haze, warm);
+					}
 				}
 			}
 		}
 	}
-	// ---------- COASTER TRAIN (idle loop) ----------
-	{
+	// ---------- COASTER TRAIN (idle loop) ---------- (track sits upper-right; skip the rest of the screen)
+	if (a.x > 1.0 && a.y < 0.42) {
 		float headX = 1.05 + fract(t * 0.05) * 0.66;
 		for (int c = 0; c < 4; c++) {
 			float cxp = headX - float(c) * 0.05;

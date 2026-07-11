@@ -199,14 +199,11 @@ const SPOT_LEN := 290.0       # beam length (reaches above the tallest cup + nam
 var _overlay: Panel
 var _overlay_msg: Label
 var _overlay_retry: Button
-# Full-screen loading state: an orbiting-orb spinner + caption (same language as
-# the boot loader) shown over a near-opaque backdrop.
+# Full-screen loading state: a fixed "Loading…" caption (same still frame as the
+# boot loader) shown over a near-opaque backdrop.
 var _ov_spinner: Control
-var _ov_orbit: Node2D
-var _ov_orbs: Array[Node2D] = []
 var _ov_caption: Label
 var _ov_box: VBoxContainer
-var _ov_dots_idx := 0
 
 # Range toggle (TODAY ⇄ ALL-TIME). Default is ALL-TIME (the headline board most
 # players expect to see first). Both ranges are fetched when the screen opens,
@@ -2034,28 +2031,14 @@ func _build_overlay() -> void:
 	_ov_spinner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.add_child(_ov_spinner)
 
-	_ov_orbit = Node2D.new()
-	_ov_spinner.add_child(_ov_orbit)
-	var ring := _make_ring(2.0, Color(0.45, 0.55, 1.0, 0.18))
-	var pts := PackedVector2Array()
-	var n := 64
-	var r := 52.0
-	for i in n + 1:
-		var a: float = TAU * float(i) / n
-		pts.append(Vector2(cos(a), sin(a)) * r)
-	ring.points = pts
-	_ov_orbit.add_child(ring)
-	_ov_orbs.clear()
-	for i in ORB_COLORS.size():
-		var orb := _make_orb(ORB_COLORS[i])
-		orb.scale = Vector2.ONE * 0.62
-		var a: float = -PI * 0.5 + i * TAU / ORB_COLORS.size()
-		orb.position = Vector2(cos(a), sin(a)) * r
-		_ov_orbit.add_child(orb)
-		_ov_orbs.append(orb)
-
+	# Deliberately fully static — a single painted frame with NO animation of any kind
+	# (matches every other loading screen in the app). On the GL-compatibility renderer,
+	# scenes/shaders compile synchronously on first draw, and each compile is a hard
+	# render-thread stall that delivers no frame; anything meant to move — even a caption
+	# whose trailing dots change — freezes and jerks during those stalls, so nothing here
+	# moves: just a fixed "Loading…" caption.
 	_ov_caption = Label.new()
-	_ov_caption.text = "Loading leaderboards"
+	_ov_caption.text = "Loading…"
 	_ov_caption.add_theme_font_size_override("font_size", 24)
 	_ov_caption.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.92))
 	_ov_caption.add_theme_color_override("font_shadow_color", Color(0.30, 0.45, 1.0, 0.35))
@@ -2102,27 +2085,7 @@ func _build_overlay() -> void:
 	_overlay_retry.pressed.connect(func() -> void: _load_initial())
 	_ov_box.add_child(_overlay_retry)
 
-	var rot := create_tween().set_loops()
-	rot.tween_property(_ov_orbit, "rotation", TAU, 2.6).from(0.0).set_trans(Tween.TRANS_LINEAR)
-	for i in _ov_orbs.size():
-		var dur := 0.7 + i * 0.05
-		var base := _ov_orbs[i].scale
-		var pulse := create_tween().set_loops()
-		pulse.tween_property(_ov_orbs[i], "scale", base * 1.14, dur) \
-			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		pulse.tween_property(_ov_orbs[i], "scale", base, dur) \
-			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	var dots := create_tween().set_loops()
-	dots.tween_interval(0.35)
-	dots.tween_callback(_ov_tick_dots)
-
 	_overlay.visible = false
-
-func _ov_tick_dots() -> void:
-	if _ov_caption == null or not _ov_caption.visible:
-		return
-	_ov_dots_idx = (_ov_dots_idx + 1) % 4
-	_ov_caption.text = "Loading leaderboards" + ".".repeat(_ov_dots_idx)
 
 func _layout_overlay() -> void:
 	if _overlay == null:
@@ -2130,10 +2093,8 @@ func _layout_overlay() -> void:
 	var sz := get_viewport_rect().size
 	_overlay.position = Vector2.ZERO
 	_overlay.size = sz
-	if _ov_orbit:
-		_ov_orbit.position = Vector2(sz.x * 0.5, sz.y * 0.45)
 	if _ov_caption:
-		_ov_caption.position = Vector2(sz.x * 0.5 - 180, sz.y * 0.45 + 86)
+		_ov_caption.position = Vector2(sz.x * 0.5 - 180, sz.y * 0.5 - 16)
 
 func _show_loading() -> void:
 	_layout_overlay()

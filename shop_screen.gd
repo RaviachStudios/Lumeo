@@ -137,13 +137,10 @@ var _current_cat: String = "themes"
 
 # --- loading overlay ---
 # Covers the shop while its previews bake + its panels build, so the store is fully
-# seamless the moment it appears (same orbiting-orb language as the leaderboards /
-# boot loading screens). Lifted by _begin_load once everything is ready.
+# seamless the moment it appears. Fully static "Loading…" caption (same still frame as
+# the leaderboards / boot loading screens). Lifted by _begin_load once everything is ready.
 var _ov: Panel
-var _ov_orbit: Node2D
-var _ov_orbs: Array[Node2D] = []
 var _ov_caption: Label
-var _ov_dots_idx := 0
 var _loaded := false
 
 # --- SIMON tab ---
@@ -176,22 +173,16 @@ func _ready() -> void:
 	_layout()
 	get_viewport().size_changed.connect(_layout)
 	_start_animations()
-	# Keep cards + coin pill in sync if the player buys / equips while open.
+	# Keep cards + coin pill in sync if the player buys / equips while open. All three
+	# signals funnel into a single coalesced refresh (see _queue_refresh): a buy fires
+	# balance_changed + themes_changed (+ simon_changed when a skin drops) in the same
+	# frame, and each used to re-run the SAME handlers — restyling every card and
+	# rebuilding the hidden SIMON preview wheel's materials several times per equip.
+	# _flush_refresh runs once per frame and only touches the panel that's actually
+	# visible; hidden panels refresh when their tab is next shown (see _render_category).
 	CoinsManager.balance_changed.connect(_on_balance_changed)
-	CoinsManager.themes_changed.connect(_refresh_cards)
-	# Buying / equipping / toggling on the SIMON tab refreshes its tiles and any
-	# open colour popup, the same way themes_changed refreshes the theme cards.
-	# The same signal is fired on SPECIAL SKINS purchase/equip, so the skin cards
-	# follow along too (their EQUIPPED state also flips when the SIMON tab equips
-	# a per-part colour, since that switches simon_mode back to MANUAL).
-	CoinsManager.simon_changed.connect(_refresh_simon_panel)
-	CoinsManager.simon_changed.connect(_refresh_color_cards)
-	CoinsManager.simon_changed.connect(_refresh_skin_cards)
-	# Equipping from inside the shop flips BackgroundManager.is_themed() under
-	# us — without this, the shop's own deep-space bg stays in place over the
-	# new global theme (or vanishes to grey when the player re-equips default),
-	# and the change only becomes visible after navigating back to home.
-	CoinsManager.themes_changed.connect(_sync_local_background)
+	CoinsManager.themes_changed.connect(_queue_refresh)
+	CoinsManager.simon_changed.connect(_queue_refresh)
 	# Everything the shop shows is already resident in CoinsManager (loaded on the
 	# boot loading screen) — there is nothing to fetch here. The lag came from the
 	# VISUALS: the THEMES grid drew ~20 full-screen animated shaders at once, and the
@@ -219,12 +210,18 @@ func _begin_load() -> void:
 		if c["key"] == "themes":
 			theme_items = c.get("items", [])
 			break
-	# Pre-compile every THEMES preview shader + each SKINS card's background, one per
-	# frame, so no tile hitches on a first-draw shader compile. Previews stay fully
-	# LIVE/animated — what keeps scrolling smooth is that the shop only lets the tiles
-	# actually IN the visible scroll band keep drawing (see _update_preview_visibility),
-	# so at most a handful of shaders run at once instead of all ~20.
-	BackgroundManager.prewarm_previews(theme_items)
+	# Pre-compile the preview shaders one per frame, so no tile hitches on a first-draw
+	# shader compile. Previews stay fully LIVE/animated — what keeps scrolling smooth is
+	# that the shop only lets the tiles actually IN the visible scroll band keep drawing
+	# (see _update_preview_visibility), so at most a handful of shaders run at once.
+	#
+	# We hold the veil only for the FIRST screenful of theme shaders (+ the skin card
+	# backgrounds) — compiling all ~20 up front is what made first-open feel long. The
+	# rest are queued in the background right after the veil lifts (see below); by the
+	# time the player scrolls past the first rows they're compiled, and any that aren't
+	# yet warm cost a single one-frame hitch instead of blocking the whole open.
+	var priority_count := GRID_COLS * 3          # first three rows cover the opening view
+	BackgroundManager.prewarm_previews(theme_items.slice(0, priority_count))
 	# Skip the skin-preview prewarm entirely while the SPECIAL SKINS tab is detached —
 	# the placeholder renders no wheels, so there's nothing to warm.
 	if not _skins_coming_soon():
@@ -265,6 +262,11 @@ func _begin_load() -> void:
 	_loaded = true
 	_hide_loading()
 	_update_preview_visibility()
+	# The shop is now interactive. Compile the remaining theme preview shaders in the
+	# background (one per frame) so scrolling further down stays hitch-free. Already-warm
+	# and already-queued ids are skipped inside prewarm_previews, so passing the full
+	# list just enqueues whatever the priority pass didn't cover.
+	BackgroundManager.prewarm_previews(theme_items)
 
 # Builds the non-default category panels ahead of time so switching to them is
 # instant. Each builder add_child()s its root; SIMON is hidden immediately, but the
@@ -578,12 +580,40 @@ func _open_coins_popup() -> void:
 	add_child(popup)
 
 func _on_balance_changed(new_balance: int) -> void:
+	# The coin pill updates immediately (instant feedback); card affordability rides
+	# the coalesced refresh with the other signals fired by the same purchase.
 	if _coin_lbl:
 		_coin_lbl.text = str(new_balance)
-	# Card affordability changes with balance too.
-	_refresh_cards()
+	_queue_refresh()
+
+# --- coalesced card refresh ---
+# balance_changed / themes_changed / simon_changed all arrive together on a buy or
+# equip; funnel them into a SINGLE refresh next idle frame so the work runs once,
+# not three times. _flush_refresh only restyles the panel that's currently visible —
+# hidden panels are refreshed when their tab is next shown by _render_category.
+var _refresh_queued := false
+
+func _queue_refresh() -> void:
+	if _refresh_queued:
+		return
+	_refresh_queued = true
+	call_deferred("_flush_refresh")
+
+func _flush_refresh() -> void:
+	_refresh_queued = false
+	# An open colour popup is modal over any tab, so always refresh it (the guard
+	# inside makes it a no-op when none is open).
 	_refresh_color_cards()
-	_refresh_skin_cards()
+	# Equipping inside the shop can flip is_themed() (a paid theme / skin background),
+	# so keep the shop's own background in sync regardless of the active tab.
+	_sync_local_background()
+	match _current_cat:
+		"themes":
+			_refresh_cards()
+		"simon":
+			_refresh_simon_panel()
+		"skins":
+			_refresh_skin_cards()
 
 # ---------------- category tabs ----------------
 
@@ -893,59 +923,89 @@ func _update_preview_visibility() -> void:
 		if preview.visible != on:
 			preview.visible = on
 
+# Every shop card (theme / skin / colour) shares the same four button states —
+# EQUIPPED, owned EQUIP, affordable BUY, locked BUY — differing only by accent and
+# corner radius. Building the five StyleBoxFlats fresh on each card each refresh meant
+# ~5 allocations × 21 theme cards on every equip; instead we build them ONCE per
+# (accent, radius, state) and share the resources across all cards in that state.
+var _btn_style_cache: Dictionary = {}
+
+# Returns the cached visual for a card button state:
+#   { normal, hover, pressed, disabled : StyleBoxFlat, fg : Color,
+#     text : String, disabled_btn : bool }
+# `state` is one of "equipped" | "owned" | "afford" | "locked".
+func _card_button_style(accent: Color, radius: int, state: String) -> Dictionary:
+	var key := "%s|%d|%s" % [accent.to_html(true), radius, state]
+	if _btn_style_cache.has(key):
+		return _btn_style_cache[key]
+	var equipped := state == "equipped"
+	var bg_col: Color
+	var fg_col := Color.WHITE
+	var text := ""
+	match state:
+		"equipped":
+			bg_col = Color(0.18, 0.45, 0.28)
+			text = "EQUIPPED"
+		"owned":
+			bg_col = Color(0.20, 0.55, 0.95)
+			text = "EQUIP"
+		"afford":
+			bg_col = Color(1.00, 0.66, 0.10)
+			fg_col = Color(0.18, 0.10, 0.0)
+		_:  # "locked"
+			bg_col = Color(0.30, 0.30, 0.40)
+			fg_col = Color(0.85, 0.85, 0.95, 0.7)
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg_col
+	s.set_corner_radius_all(radius)
+	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
+	s.set_border_width_all(2 if equipped else 0)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = bg_col.lightened(0.12)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = bg_col.darkened(0.20)
+	var sd := s.duplicate() as StyleBoxFlat
+	sd.bg_color = bg_col.darkened(0.05)
+	var out := {
+		"normal": s, "hover": sh, "pressed": sp, "disabled": sd,
+		"fg": fg_col, "text": text, "disabled_btn": equipped or state == "locked",
+	}
+	_btn_style_cache[key] = out
+	return out
+
+# Resolve which of the four states a card is in, given its ownership flags.
+func _card_state(owned: bool, equipped: bool, affordable: bool) -> String:
+	if equipped:
+		return "equipped"
+	if owned:
+		return "owned"
+	return "afford" if affordable else "locked"
+
+# Apply a resolved state's cached styling to a card's button + price block.
+func _style_card_button(btn: Button, price_box: Control, price_label: Label,
+		accent: Color, radius: int, state: String, owned: bool) -> void:
+	var st := _card_button_style(accent, radius, state)
+	# Unowned cards show the price block in the button; owned ones show EQUIP/EQUIPPED.
+	price_box.visible = not owned
+	price_label.add_theme_color_override("font_color", st["fg"])
+	btn.text = st["text"]
+	btn.disabled = st["disabled_btn"]
+	btn.add_theme_stylebox_override("normal", st["normal"])
+	btn.add_theme_stylebox_override("hover", st["hover"])
+	btn.add_theme_stylebox_override("pressed", st["pressed"])
+	btn.add_theme_stylebox_override("disabled", st["disabled"])
+	btn.add_theme_color_override("font_color", st["fg"])
+	btn.add_theme_color_override("font_disabled_color", st["fg"])
+
 func _apply_card_state(theme_id: String, c: Dictionary) -> void:
-	var btn: Button = c["btn"]
-	var accent: Color = c["accent"]
-	var price_box: Control = c["price_box"]
-	var price_label: Label = c["price_label"]
 	var owned := CoinsManager.owns(theme_id)
 	# In SKIN mode the skin's own world overrides every theme, so no theme reads as
 	# equipped — it shows EQUIP instead (tapping it drops the skin and re-applies
 	# the theme as the background).
 	var equipped := CoinsManager.is_simon_manual() and CoinsManager.selected_theme == theme_id
 	var affordable := CoinsManager.can_afford(theme_id)
-
-	# Unowned cards show the price block in the button; owned ones show EQUIP/EQUIPPED.
-	price_box.visible = not owned
-	btn.disabled = false
-
-	var label_text := ""
-	var bg_col: Color
-	var fg_col := Color.WHITE
-	if equipped:
-		label_text = "EQUIPPED"
-		bg_col = Color(0.18, 0.45, 0.28)
-		btn.disabled = true
-	elif owned:
-		label_text = "EQUIP"
-		bg_col = Color(0.20, 0.55, 0.95)
-	elif affordable:
-		bg_col = Color(1.00, 0.66, 0.10)
-		fg_col = Color(0.18, 0.10, 0.0)
-	else:
-		bg_col = Color(0.30, 0.30, 0.40)
-		fg_col = Color(0.85, 0.85, 0.95, 0.7)
-		btn.disabled = true
-
-	price_label.add_theme_color_override("font_color", fg_col)
-	btn.text = label_text
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg_col
-	s.set_corner_radius_all(14)
-	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
-	s.set_border_width_all(2 if equipped else 0)
-	btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = bg_col.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = bg_col.darkened(0.20)
-	btn.add_theme_stylebox_override("pressed", sp)
-	var sd := s.duplicate() as StyleBoxFlat
-	sd.bg_color = bg_col.darkened(0.05)
-	btn.add_theme_stylebox_override("disabled", sd)
-	btn.add_theme_color_override("font_color", fg_col)
-	btn.add_theme_color_override("font_disabled_color", fg_col)
+	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
+		_card_state(owned, equipped, affordable), owned)
 
 func _on_action(theme_id: String) -> void:
 	if CoinsManager.owns(theme_id):
@@ -1127,6 +1187,11 @@ func _build_skins_panel(incremental := false) -> void:
 		wheel.set_level(1)
 		wheel.set_overlay_compact(0.52, false)
 		wheel.apply_skin(null, null, null, String(def["id"]))
+		# SPECIAL SKINS previews are STATIC thumbnails: render one settled frame, then
+		# freeze. Several live 3D wheels (each with shadows + bloom, and Volcano's coal
+		# animating forever) redrawing at once was the skins-tab lag. The still is
+		# captured behind the loading veil and held with ~zero ongoing cost.
+		wheel.set_static_preview(true)
 		_skins_by_id[def["id"]] = card
 		if incremental:
 			await get_tree().process_frame
@@ -1317,54 +1382,11 @@ func _refresh_skin_cards() -> void:
 # mode back to MANUAL, at which point even the formerly-selected skin reads as
 # merely OWNED, not equipped.
 func _apply_skin_card_state(skin_id: String, c: Dictionary) -> void:
-	var btn: Button = c["btn"]
-	var accent: Color = c["accent"]
-	var price_box: Control = c["price_box"]
-	var price_label: Label = c["price_label"]
 	var owned := CoinsManager.owns_skin(skin_id)
 	var equipped := (not CoinsManager.is_simon_manual()) and CoinsManager.selected_skin == skin_id
 	var affordable := CoinsManager.can_afford_skin(skin_id)
-
-	price_box.visible = not owned
-	btn.disabled = false
-
-	var label_text := ""
-	var bg_col: Color
-	var fg_col := Color.WHITE
-	if equipped:
-		label_text = "EQUIPPED"
-		bg_col = Color(0.18, 0.45, 0.28)
-		btn.disabled = true
-	elif owned:
-		label_text = "EQUIP"
-		bg_col = Color(0.20, 0.55, 0.95)
-	elif affordable:
-		bg_col = Color(1.00, 0.66, 0.10)
-		fg_col = Color(0.18, 0.10, 0.0)
-	else:
-		bg_col = Color(0.30, 0.30, 0.40)
-		fg_col = Color(0.85, 0.85, 0.95, 0.7)
-		btn.disabled = true
-
-	price_label.add_theme_color_override("font_color", fg_col)
-	btn.text = label_text
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg_col
-	s.set_corner_radius_all(14)
-	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
-	s.set_border_width_all(2 if equipped else 0)
-	btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = bg_col.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = bg_col.darkened(0.20)
-	btn.add_theme_stylebox_override("pressed", sp)
-	var sd := s.duplicate() as StyleBoxFlat
-	sd.bg_color = bg_col.darkened(0.05)
-	btn.add_theme_stylebox_override("disabled", sd)
-	btn.add_theme_color_override("font_color", fg_col)
-	btn.add_theme_color_override("font_disabled_color", fg_col)
+	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
+		_card_state(owned, equipped, affordable), owned)
 
 # Re-applies each card's skin to its preview wheel. Cheap; safe to call any time
 # the skin's appearance might have changed (e.g. catalog re-tuned during dev).
@@ -1686,57 +1708,14 @@ func _refresh_color_cards() -> void:
 		_apply_color_card_state(_popup_category, color_id, _popup_cards[color_id])
 
 func _apply_color_card_state(category: String, color_id: String, c: Dictionary) -> void:
-	var btn: Button = c["btn"]
-	var accent: Color = c["accent"]
-	var price_box: Control = c["price_box"]
-	var price_label: Label = c["price_label"]
 	var owned := CoinsManager.owns_simon_color(category, color_id)
 	# Only the MANUAL mode actually wears these per-part colours; in SKIN mode the
 	# complete skin overrides them, so nothing should advertise itself as equipped.
 	var equipped := CoinsManager.is_simon_manual() \
 		and CoinsManager.equipped_simon_color(category) == color_id
 	var affordable := CoinsManager.can_afford_simon_item(category, color_id)
-
-	price_box.visible = not owned
-	btn.disabled = false
-
-	var label_text := ""
-	var bg_col: Color
-	var fg_col := Color.WHITE
-	if equipped:
-		label_text = "EQUIPPED"
-		bg_col = Color(0.18, 0.45, 0.28)
-		btn.disabled = true
-	elif owned:
-		label_text = "EQUIP"
-		bg_col = Color(0.20, 0.55, 0.95)
-	elif affordable:
-		bg_col = Color(1.00, 0.66, 0.10)
-		fg_col = Color(0.18, 0.10, 0.0)
-	else:
-		bg_col = Color(0.30, 0.30, 0.40)
-		fg_col = Color(0.85, 0.85, 0.95, 0.7)
-		btn.disabled = true
-
-	price_label.add_theme_color_override("font_color", fg_col)
-	btn.text = label_text
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg_col
-	s.set_corner_radius_all(12)
-	s.border_color = accent.lightened(0.2) if equipped else bg_col.lightened(0.15)
-	s.set_border_width_all(2 if equipped else 0)
-	btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = bg_col.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = bg_col.darkened(0.20)
-	btn.add_theme_stylebox_override("pressed", sp)
-	var sd := s.duplicate() as StyleBoxFlat
-	sd.bg_color = bg_col.darkened(0.05)
-	btn.add_theme_stylebox_override("disabled", sd)
-	btn.add_theme_color_override("font_color", fg_col)
-	btn.add_theme_color_override("font_disabled_color", fg_col)
+	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 12,
+		_card_state(owned, equipped, affordable), owned)
 
 func _on_color_action(category: String, color_id: String) -> void:
 	if CoinsManager.owns_simon_color(category, color_id):
@@ -1772,28 +1751,14 @@ func _build_loading_overlay() -> void:
 	_ov.add_theme_stylebox_override("panel", s)
 	add_child(_ov)
 
-	_ov_orbit = Node2D.new()
-	_ov.add_child(_ov_orbit)
-	var ring := _make_ring(2.0, Color(0.45, 0.55, 1.0, 0.18))
-	var pts := PackedVector2Array()
-	var n := 64
-	var r := 52.0
-	for i in n + 1:
-		var a: float = TAU * float(i) / n
-		pts.append(Vector2(cos(a), sin(a)) * r)
-	ring.points = pts
-	_ov_orbit.add_child(ring)
-	_ov_orbs.clear()
-	for i in ORB_COLORS.size():
-		var orb := _make_orb(ORB_COLORS[i])
-		orb.scale = Vector2.ONE * 0.55
-		var a: float = -PI * 0.5 + i * TAU / ORB_COLORS.size()
-		orb.position = Vector2(cos(a), sin(a)) * r
-		_ov_orbit.add_child(orb)
-		_ov_orbs.append(orb)
-
+	# Deliberately fully static — a single painted frame with NO animation of any kind
+	# (matches every other loading screen in the app). On the GL-compatibility renderer,
+	# first shop-open compiles ~20 preview shaders + the skin wheels, and each compile is
+	# a hard render-thread stall that delivers no frame; anything meant to move — even a
+	# caption whose trailing dots change — freezes and jerks during those stalls, so
+	# nothing here moves: just a fixed "Loading…" caption.
 	_ov_caption = Label.new()
-	_ov_caption.text = "Loading shop"
+	_ov_caption.text = "Loading…"
 	_ov_caption.add_theme_font_size_override("font_size", 24)
 	_ov_caption.add_theme_color_override("font_color", Color(0.78, 0.84, 1.0, 0.92))
 	_ov_caption.add_theme_color_override("font_shadow_color", Color(0.30, 0.45, 1.0, 0.35))
@@ -1804,28 +1769,8 @@ func _build_loading_overlay() -> void:
 	_ov_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ov.add_child(_ov_caption)
 
-	var rot := create_tween().set_loops()
-	rot.tween_property(_ov_orbit, "rotation", TAU, 2.6).from(0.0).set_trans(Tween.TRANS_LINEAR)
-	for i in _ov_orbs.size():
-		var dur := 0.7 + i * 0.05
-		var base: Vector2 = _ov_orbs[i].scale
-		var pulse := create_tween().set_loops()
-		pulse.tween_property(_ov_orbs[i], "scale", base * 1.14, dur) \
-			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		pulse.tween_property(_ov_orbs[i], "scale", base, dur) \
-			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	var dots := create_tween().set_loops()
-	dots.tween_interval(0.35)
-	dots.tween_callback(_ov_tick_dots)
-
 	_ov.visible = false
 	_layout_loading()
-
-func _ov_tick_dots() -> void:
-	if _ov_caption == null or _ov == null or not _ov.visible:
-		return
-	_ov_dots_idx = (_ov_dots_idx + 1) % 4
-	_ov_caption.text = "Loading shop" + ".".repeat(_ov_dots_idx)
 
 func _layout_loading() -> void:
 	if _ov == null:
@@ -1833,11 +1778,9 @@ func _layout_loading() -> void:
 	var sz := get_viewport_rect().size
 	_ov.position = Vector2.ZERO
 	_ov.size = sz
-	if _ov_orbit:
-		_ov_orbit.position = Vector2(sz.x * 0.5, sz.y * 0.46)
 	if _ov_caption:
 		_ov_caption.size = Vector2(320, 32)
-		_ov_caption.position = Vector2(sz.x * 0.5 - 160, sz.y * 0.46 + 92)
+		_ov_caption.position = Vector2(sz.x * 0.5 - 160, sz.y * 0.5 - 16)
 
 func _show_loading() -> void:
 	_layout_loading()

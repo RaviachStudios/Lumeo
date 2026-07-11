@@ -111,6 +111,11 @@ var _vp: SubViewport
 # is forced idle (UPDATE_DISABLED) so an animated skin can't keep burning GPU while
 # invisible. set_preview_paused(false) resumes it. See _update_render_activity.
 var _preview_paused := false
+# True when this wheel is a STATIC shop thumbnail (SPECIAL SKINS cards): it renders
+# one settled frame and then never redraws — even an animated skin (Volcano's coal
+# glow) is frozen, and _process is turned off. This is what keeps the skins tab from
+# driving several live 3D scenes at once. See set_static_preview.
+var _static_preview := false
 var _cam: Camera3D
 var _wheel_root: Node3D
 var _segments: Array[MeshInstance3D] = []
@@ -2187,7 +2192,8 @@ func _update_render_activity(animating: bool) -> void:
 	if _preview_paused:
 		_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		return
-	if _animated_skin() or animating:
+	# A static thumbnail never drives a continuous redraw (see set_static_preview).
+	if (_animated_skin() or animating) and not _static_preview:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	elif _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
 		# Draw the final settled frame, then idle.
@@ -2198,10 +2204,26 @@ func _update_render_activity(animating: bool) -> void:
 func _kick_render() -> void:
 	if _vp == null or _preview_paused:
 		return
-	if _animated_skin():
+	if _animated_skin() and not _static_preview:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	elif _vp.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+# Freeze this wheel to a single settled still, used by the shop's SPECIAL SKINS
+# cards. Turning it on forces one final render (even if an animated skin had it on
+# UPDATE_ALWAYS) and disables _process, so the tab shows static thumbnails instead of
+# several live 3D scenes redrawing every frame. The wheel keeps its last-rendered
+# frame on screen (the SubViewport's render target persists) at ~zero ongoing cost.
+func set_static_preview(on: bool) -> void:
+	if _static_preview == on:
+		return
+	_static_preview = on
+	set_process(not on)
+	if _vp == null or _preview_paused:
+		return
+	# Render exactly one more frame (UPDATE_ONCE self-reverts to DISABLED after it
+	# draws), capturing the settled look to hold as the thumbnail.
+	_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 # Pause/resume this wheel's off-screen rendering. Shop preview wheels on a hidden
 # tab pause so an animated skin's viewport stops eating GPU while it isn't visible;
