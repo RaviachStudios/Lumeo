@@ -21,6 +21,23 @@ var _canvas: CanvasLayer
 # and the prompt only appears on the first home open of an app launch.
 var welcome_prompt_shown := false
 
+# --- pause/resume GL-context stability ---
+# On Android our surface can be torn down and its EGL/GL context recreated
+# whenever another activity covers us (most notably the Google Sign-In dialog).
+# Doing heavy GL work on the resume frame — compiling shaders, uploading
+# textures, baking offscreen SubViewports (see BackgroundManager / simon_wheel)
+# — can dereference an invalid render target and segfault the GL thread on
+# Adreno. We track background state here and expose await_gl_stable() so callers
+# can defer such work until the context is proven good again.
+signal app_resumed
+var _app_paused := false
+# Set on pause, cleared once we've confirmed the restored context can render.
+var _resume_pending := false
+# Completed frames to let render with a valid context before heavy GL work is
+# considered safe. frame_post_draw only fires after a successful GPU frame, so
+# each one is proof the context is alive.
+const _RESUME_SETTLE_FRAMES := 2
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -31,11 +48,29 @@ func _ready() -> void:
 	show_loading()
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		if _current is HomeScreen:
-			get_tree().quit()
-		else:
-			show_home()
+	match what:
+		NOTIFICATION_WM_GO_BACK_REQUEST:
+			if _current is HomeScreen:
+				get_tree().quit()
+			else:
+				show_home()
+		NOTIFICATION_APPLICATION_PAUSED:
+			_app_paused = true
+			_resume_pending = true
+		NOTIFICATION_APPLICATION_RESUMED:
+			_app_paused = false
+			app_resumed.emit()
+
+# Awaits until the app is foregrounded AND a few frames have rendered against a
+# valid GL context, so callers can safely (re)build screens or bake textures
+# after a pause/resume. A cheap no-op when we were never backgrounded.
+func await_gl_stable() -> void:
+	while _app_paused:
+		await app_resumed
+	if _resume_pending:
+		for _i in _RESUME_SETTLE_FRAMES:
+			await RenderingServer.frame_post_draw
+		_resume_pending = false
 
 func _swap(screen: Control) -> void:
 	if _current:

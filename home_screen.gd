@@ -1953,6 +1953,14 @@ func _on_sign_out() -> void:
 
 func _on_signed_in(_uid: String, _display_name: String) -> void:
 	_signing_in = false
+	# The Google sign-in dialog is a separate Android activity that tears down and
+	# recreates our GL context. Rebuilding the whole screen here (shader compiles,
+	# texture uploads, offscreen SubViewport bakes) on the resume frame can hit an
+	# invalid render target and segfault the GL thread on Adreno. Wait for the
+	# context to be proven stable before swapping screens.
+	await game_manager.await_gl_stable()
+	if not is_inside_tree():
+		return  # navigated away (or freed) while we were waiting out the resume
 	if FirebaseManager.has_display_name():
 		game_manager.show_home()  # rebuild to show name + leaderboards access
 	else:
