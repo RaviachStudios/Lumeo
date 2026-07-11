@@ -149,6 +149,7 @@ const SIMON_SKINS := {
 	"pirate":     {"name": "Buccaneer", "price": 7200},
 	"casino":     {"name": "Jackpot",   "price": 6800},
 	"phantom":    {"name": "Phantom",   "price": 7800},
+	"lunapark":   {"name": "Luna Park", "price": 5500},
 }
 
 # The "level_number" category is NOT a flat colour — it's a font *package* (a whole

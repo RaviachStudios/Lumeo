@@ -433,6 +433,18 @@ func _next_round() -> void:
 func _is_volcano_skin() -> bool:
 	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "inferno"
 
+# True when the equipped look is the Jackpot ("casino") special skin — the same
+# resolution used for the Stage-5 Mega Jackpot celebration. Its bespoke casino
+# world is the live background, so the celebration's shader effects land on it.
+func _is_casino_skin() -> bool:
+	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "casino"
+
+# True when the equipped look is the Luna Park ("lunapark") special skin — the same
+# resolution used for the every-5-rounds "NICE RIDE!" carnival moment. Its bespoke
+# park world is the live background, so the celebration's shader effects land on it.
+func _is_lunapark_skin() -> bool:
+	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "lunapark"
+
 # Flash a big "YOU'RE ON FIRE!" banner across the screen, hold it, then fade it out
 # — ~3.3s total. Awaited by _next_round so the sequence only resumes once it fades.
 # Built from stacked layers (soft outer glow behind a molten-gradient-feel main
@@ -498,6 +510,104 @@ func _fire_label(txt: String, fs: int) -> Label:
 	lbl.add_theme_font_size_override("font_size", fs)
 	return lbl
 
+# Big bold gold "JACKPOT!" banner that pops over the Simon during the Mega Jackpot
+# party, holds, then fades out and is freed exactly as the ~3s show ends. Built from a
+# soft gold glow layer behind a crisp bright-gold face (thick dark outline = bold and
+# clear). Centred on screen and never awaited, so it runs alongside the light show.
+func _show_jackpot_text() -> void:
+	var holder := Control.new()
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	add_child(holder)
+	var screen := get_viewport_rect().size
+	holder.pivot_offset = screen * 0.5
+
+	var fs := int(clampf(screen.x * 0.17, 76.0, 176.0))
+	var txt := "JACKPOT!"
+
+	# Layer 1 — soft gold bloom behind the letters (thick, low-punch outline).
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(1.0, 0.82, 0.34, 0.85))
+	glow.add_theme_color_override("font_outline_color", Color(1.0, 0.72, 0.22, 0.7))
+	glow.add_theme_constant_override("outline_size", 40)
+	holder.add_child(glow)
+
+	# Layer 2 — crisp bright-gold face with a deep outline (reads bold + clear) and a
+	# warm drop shadow so the letters feel lit.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(1.0, 0.90, 0.45))
+	main.add_theme_color_override("font_outline_color", Color(0.24, 0.10, 0.0))
+	main.add_theme_constant_override("outline_size", 18)
+	main.add_theme_color_override("font_shadow_color", Color(1.0, 0.60, 0.12, 0.6))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 6)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Pop in (0.45s incl. parallel scale) → breathe hold (1.15s) → fade fully out (1.4s) = 3.0s.
+	holder.scale = Vector2(0.72, 0.72)
+	var tw := create_tween()
+	tw.tween_property(holder, "modulate:a", 1.0, 0.35)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.45) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.05, 1.05), 1.15) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 1.4) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
+	holder.queue_free()
+
+# Big carnival "NICE RIDE!" banner that pops over the Simon during the Luna Park every-5
+# celebration, holds, then fades fully out and is freed exactly as the ~3s show ends
+# (synced with the background's `cele` clock — sky dims, rides blaze). Built from a soft
+# pink bloom behind a bright warm-gold face. Centred on screen; never awaited, so it runs
+# alongside the light show without touching gameplay timing.
+func _show_nice_ride_text() -> void:
+	var holder := Control.new()
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	add_child(holder)
+	var screen := get_viewport_rect().size
+	holder.pivot_offset = screen * 0.5
+
+	var fs := int(clampf(screen.x * 0.16, 72.0, 168.0))
+	var txt := "NICE RIDE!"
+
+	# Layer 1 — soft carnival-pink bloom behind the letters (thick, low-punch outline).
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(1.0, 0.42, 0.72, 0.85))
+	glow.add_theme_color_override("font_outline_color", Color(1.0, 0.35, 0.62, 0.7))
+	glow.add_theme_constant_override("outline_size", 40)
+	holder.add_child(glow)
+
+	# Layer 2 — crisp bright warm-gold face with a deep outline (bold + clear) and a warm
+	# drop shadow so the letters feel lit like the rides.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(1.0, 0.92, 0.52))
+	main.add_theme_color_override("font_outline_color", Color(0.28, 0.06, 0.12))
+	main.add_theme_constant_override("outline_size", 18)
+	main.add_theme_color_override("font_shadow_color", Color(1.0, 0.55, 0.30, 0.6))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 6)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Pop in (0.45s incl. parallel scale) → breathe hold (1.0s) → fade fully out (1.5s) ≈ 3.0s,
+	# so the banner is completely gone right as the park eases back to its idle night.
+	holder.scale = Vector2(0.72, 0.72)
+	var tw := create_tween()
+	tw.tween_property(holder, "modulate:a", 1.0, 0.3)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.45) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.05, 1.05), 1.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 1.5) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
+	holder.queue_free()
+
 func _play_sequence() -> void:
 	for idx: int in sequence:
 		await _flash(idx, flash_time)
@@ -545,15 +655,35 @@ func _player_pressed(idx: int) -> void:
 		# Every 3 rounds the Volcano skin's central hub volcano erupts and feeds a surge
 		# of fresh lava into the background river. Both calls are no-ops off the skin.
 		if level % 3 == 0:
-			_wheel.electric_pulse()   # premium electric charge flourish (non-casino skins)
+			_wheel.electric_pulse()   # premium electric charge flourish (non-casino/lunapark skins)
 			_wheel.roulette_spin()    # Jackpot skin: ivory ball laps the gold ring
+			_wheel.luna_light_chase() # Luna Park skin: marquee bulbs chase around the wheel
 			_wheel.erupt()
 			BackgroundManager.surge_river()
+			BackgroundManager.luna_light_chase()   # Luna Park: environment bulbs briefly synchronise
 		# Every 5 rounds the Arcade skin's cabinets all flash a giant glowing "OMG" for 4s.
 		# No-op off the Arcade skin. Independent of the every-3 pulse; on round 15/30 both
 		# fire together. Purely cosmetic — never awaited, so gameplay timing is untouched.
 		if level % 5 == 0:
 			BackgroundManager.arcade_omg()
+			# Luna Park skin: the "NICE RIDE!" moment — the marquee ring powers on, the sky
+			# dims while the Ferris wheel + coaster blaze, fireworks/confetti fire, and a big
+			# "NICE RIDE!" banner pops over the Simon and fades fully out over ~3s. All calls
+			# are no-ops off the skin and none is awaited, so gameplay is never interrupted.
+			_wheel.luna_celebrate()
+			BackgroundManager.luna_celebrate()
+			if _is_lunapark_skin():
+				_show_nice_ride_text()
+		# Jackpot skin only: every 8th completed level (8, 16, 24, …) fires a Mega
+		# Jackpot celebration — the hall washes through a rainbow, the gold JACKPOT
+		# sign powers on, the roulette ball rolls, and a big "JACKPOT!" banner pops
+		# over the Simon and fades out. Gameplay PAUSES here and waits the full ~3s
+		# for the show to finish. `casino_jackpot()` is a coroutine that awaits its
+		# tween on the Jackpot skin and returns instantly on any other background.
+		if level % 8 == 0 and _is_casino_skin():
+			_show_jackpot_text()          # big "JACKPOT!" over the Simon, fades out in 3s
+			_wheel.roulette_celebrate()   # ball rolls continuously for the whole ~3s show
+			await BackgroundManager.casino_jackpot()
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 

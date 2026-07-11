@@ -1070,6 +1070,7 @@ const SKIN_DEFS := [
 	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
 	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets.", "released": true},
 	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
+	{"id": "lunapark", "label": "LUNA PARK", "blurb": "Step right up.", "released": true},
 ]
 
 # The subset of SKIN_DEFS that are live in the shop right now (flagged `released`).

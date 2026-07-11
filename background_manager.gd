@@ -5375,13 +5375,77 @@ void fragment() {
 # plus jittered chip stacks (red/black/white/green/gold); a dealer button and a
 # central pot sit low, and five community cards fan across the centre so the
 # machine naturally overlaps them. Helpers drawCard/chipDisc/drawChips/
-# drawFlatChip/drawDealer render each prop with its own contact shadow.
-# casinoMotion() adds chandelier twinkle, a warm spotlight sweep across the
-# felt, a circling roulette ball on the JACKPOT marquee and gold sparkles.
+# drawFlatChip/drawDealer render each prop with its own contact shadow. A large
+# premium JACKPOT marquee — a gold metallic frame around warm golden neon letters,
+# soft-focus so it reads as background — sits top-centre behind the machine top.
+# casinoMotion() adds chandelier twinkle, a warm spotlight sweep across the felt,
+# marquee bulbs chasing around the JACKPOT sign and gold sparkles.
 # All poker props sit under/around the machine so gameplay + "Your Turn" stay
 # clear — the machine (drawn on top) is what covers the centre.
 # ---------------------------------------------------------------------------
 const _CASINO_FUNCS := "
+// Mega Jackpot Celebration clock, in seconds (0..5). 0 = inactive. Driven from
+// BackgroundManager.casino_jackpot() every 8th level on the Jackpot skin; the
+// whole celebration is derived from this single value so it's perfectly synced
+// and costs nothing off-event (the overlay is skipped when its envelope is 0).
+uniform float jp = 0.0;
+// Shared JACKPOT sign geometry (a-space, y-down). The permanent baked marquee in
+// casinoScene() and the Stage-5 celebration overlay in casinoMotion() both derive
+// their letter layout from these, so the powered-on letters land EXACTLY on the
+// decorative ones — one sign, brightening during the celebration.
+const float SIGN_PITCH = 0.052;   // horizontal spacing between letter cells
+const float SIGN_HW = 0.017;      // letter cell half-width
+const float SIGN_HH = 0.028;      // letter cell half-height
+const float SIGN_Y = 0.145;       // sign centre height (above the machine top)
+float casSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a; vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+// Smooth, saturated rainbow for a hue in [0,1): sweeps R->O->Y->G->C->B->P with a
+// little easing so the transitions read fluid and rich rather than linear/harsh.
+vec3 casHue(float h) {
+	h = fract(h);
+	vec3 c = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+	return c * c * (3.0 - 2.0 * c);
+}
+// Blocky neon-tube glyphs for the word JACKPOT (idx 0..6 = J A C K P O T). `p` is
+// local to the letter cell (x right, y down) with half-extents (hw, hh); returns
+// distance to the letter's tube strokes so the sign can be lit letter-by-letter.
+float casGlyph(vec2 p, int idx, float hw, float hh) {
+	float d = 1e9;
+	if (idx == 0) {            // J
+		d = min(d, casSeg(p, vec2(hw * 0.55, -hh), vec2(hw * 0.55, hh * 0.55)));
+		d = min(d, casSeg(p, vec2(hw * 0.55, hh * 0.55), vec2(-hw * 0.35, hh)));
+		d = min(d, casSeg(p, vec2(-hw * 0.35, hh), vec2(-hw * 0.72, hh * 0.5)));
+	} else if (idx == 1) {     // A
+		d = min(d, casSeg(p, vec2(-hw, hh), vec2(0.0, -hh)));
+		d = min(d, casSeg(p, vec2(hw, hh), vec2(0.0, -hh)));
+		d = min(d, casSeg(p, vec2(-hw * 0.5, hh * 0.2), vec2(hw * 0.5, hh * 0.2)));
+	} else if (idx == 2) {     // C
+		d = min(d, casSeg(p, vec2(hw, -hh), vec2(-hw, -hh)));
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(-hw, hh)));
+		d = min(d, casSeg(p, vec2(-hw, hh), vec2(hw, hh)));
+	} else if (idx == 3) {     // K
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(-hw, hh)));
+		d = min(d, casSeg(p, vec2(-hw, hh * 0.05), vec2(hw, -hh)));
+		d = min(d, casSeg(p, vec2(-hw * 0.35, -hh * 0.1), vec2(hw, hh)));
+	} else if (idx == 4) {     // P
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(-hw, hh)));
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(hw, -hh)));
+		d = min(d, casSeg(p, vec2(hw, -hh), vec2(hw, 0.0)));
+		d = min(d, casSeg(p, vec2(hw, 0.0), vec2(-hw, 0.0)));
+	} else if (idx == 5) {     // O
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(hw, -hh)));
+		d = min(d, casSeg(p, vec2(-hw, hh), vec2(hw, hh)));
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(-hw, hh)));
+		d = min(d, casSeg(p, vec2(hw, -hh), vec2(hw, hh)));
+	} else {                   // T
+		d = min(d, casSeg(p, vec2(-hw, -hh), vec2(hw, -hh)));
+		d = min(d, casSeg(p, vec2(0.0, -hh), vec2(0.0, hh)));
+	}
+	return d;
+}
 // perspective damask carpet colour at a floor pixel (deep burgundy + gold motif)
 vec3 casinoCarpet(vec2 uv) {
 	float ty = max(uv.y - 0.50, 0.03);
@@ -5633,13 +5697,38 @@ vec3 casinoScene(vec2 a, vec2 uv) {
 		}
 		col += vec3(1.0, 0.72, 0.34) * smoothstep(0.20, 0.0, distance(a, ch)) * 0.30;           // warm bloom
 	}
-	// ---------- JACKPOT MARQUEE (soft gold diamond behind the machine top) ----------
+	// ---------- JACKPOT SIGN (permanent gold marquee, top-centre, behind the machine) ----------
+	// A premium Las-Vegas marquee: a gold metallic frame ringing the word JACKPOT in
+	// warm golden neon tubes, with a soft bloom + elegant halo. Rendered a touch soft
+	// (wide, low-contrast falloffs) so it reads as a slightly out-of-focus background
+	// element; the machine drawn on top hides its lower edge, seating it behind the
+	// wheel. The Stage-5 celebration powers these same letters up (see casinoMotion).
 	{
-		vec2 sc = vec2(cx, 0.16);
-		float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.075;
-		col += vec3(1.0, 0.85, 0.34) * aaline(dsign, 0.006) * 0.7;
-		col += vec3(1.0, 0.78, 0.30) * smoothstep(0.05, 0.0, abs(dsign)) * 0.12;
-		col += vec3(1.0, 0.86, 0.45) * smoothstep(0.16, 0.0, distance(a, sc)) * 0.10;           // soft halo
+		vec2 sC = vec2(cx, SIGN_Y);
+		float halfW = 3.0 * SIGN_PITCH + SIGN_HW + 0.020;
+		float halfH = SIGN_HH + 0.020;
+		float fd = sdBox(a - sC, vec2(halfW, halfH));
+		// soft warm inner backing glow — seats the neon without a hard black panel
+		col += vec3(0.35, 0.20, 0.06) * aafill(fd) * 0.30;
+		// gold metallic frame: brushed vertical sheen, a bright edge specular + an inner
+		// reveal line so it reads as a machined double bezel, not a flat outline.
+		float sheenV = 0.4 + 0.6 * (0.5 + 0.5 * cos((a.x - cx) * 55.0));
+		vec3 frameGold = mix(vec3(0.34, 0.22, 0.07), vec3(1.0, 0.83, 0.42), sheenV);
+		col = mix(col, frameGold, smoothstep(0.011, 0.0, abs(fd)));                    // outer band
+		col = mix(col, frameGold * 0.8, smoothstep(0.004, 0.0, abs(fd + 0.016)));      // inner reveal
+		col += vec3(1.0, 0.92, 0.58) * smoothstep(0.0022, 0.0, abs(fd)) * 0.7;         // edge specular
+		col += vec3(1.0, 0.85, 0.44) * smoothstep(0.24, 0.0, distance(a, sC)) * 0.10;  // soft halo
+		// warm golden neon letters — soft (wide falloff) so they read slightly out of focus
+		vec3 neon = vec3(1.0, 0.78, 0.32);
+		for (int i = 0; i < 7; i++) {
+			float fi = float(i);
+			vec2 lc = vec2(cx + (fi - 3.0) * SIGN_PITCH, SIGN_Y);
+			vec2 p = a - lc;
+			if (abs(p.x) > SIGN_HW + 0.03 || abs(p.y) > SIGN_HH + 0.03) continue;      // bbox guard
+			float gd = casGlyph(p, i, SIGN_HW, SIGN_HH);
+			col += neon * aaline(gd, 0.0040) * 0.60;          // soft neon tube core
+			col += neon * smoothstep(0.026, 0.0, gd) * 0.22;  // tube bloom/halo
+		}
 	}
 	// gentle vignette to seat the frame
 	vec2 vp = (uv - vec2(0.5)) * vec2(aspect, 1.0);
@@ -5659,13 +5748,19 @@ vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			col += vec3(1.0, 0.95, 0.7) * smoothstep(0.006, 0.0, distance(a, sp)) * (0.5 + 0.5 * sin(t * 3.0 + fk * 4.0));
 		}
 	}
-	// JACKPOT marquee chase + circling roulette ball
-	vec2 sc = vec2(cx, 0.16);
-	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.075;
-	float ang = atan(a.y - sc.y, a.x - sc.x);
-	col += vec3(1.0, 0.9, 0.4) * smoothstep(0.02, 0.0, abs(dsign)) * (0.4 + 0.4 * sin(ang * 8.0 - t * 4.0));
-	vec2 bp = sc + vec2(cos(t * 1.6), sin(t * 1.6)) * 0.10;
-	col += vec3(1.0, 1.0, 0.9) * smoothstep(0.012, 0.0, distance(a, bp)) * 0.8;
+	// JACKPOT sign: warm marquee bulbs chasing around the gold frame + a gentle breath
+	{
+		vec2 sC = vec2(cx, SIGN_Y);
+		float halfW = 3.0 * SIGN_PITCH + SIGN_HW + 0.020;
+		float halfH = SIGN_HH + 0.020;
+		float fd = sdBox(a - sC, vec2(halfW, halfH));
+		float onFrame = smoothstep(0.008, 0.0, abs(fd));            // the gold border band
+		float ph = atan(a.y - sC.y, a.x - sC.x);                    // angle around the sign
+		float chase = 0.5 + 0.5 * sin(ph * 10.0 - t * 3.0);         // running marquee bulbs
+		col += vec3(1.0, 0.86, 0.42) * onFrame * chase * 0.35;
+		// soft breathing bloom so the resting sign always feels alive
+		col += vec3(1.0, 0.82, 0.38) * smoothstep(0.20, 0.0, distance(a, sC)) * (0.05 + 0.03 * sin(t * 1.5));
+	}
 	// warm spotlight slowly sweeping across the felt
 	float sweep = 0.5 + 0.4 * sin(t * 0.45);
 	col += vec3(0.5, 0.30, 0.10) * smoothstep(0.14, 0.0, abs(uv.x - sweep)) * step(0.55, uv.y) * 0.15;
@@ -5676,6 +5771,78 @@ vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
 		float gy = 0.82 + 0.15 * hash11(fi * 5.5);
 		float tw = 0.5 + 0.5 * sin(t * (2.0 + fi) + fi * 10.0);
 		col += vec3(1.0, 0.9, 0.5) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.5;
+	}
+	// ============ MEGA JACKPOT CELEBRATION (Stage 5) ============
+	// One elegant 5s event driven by the `jp` clock (seconds, 0..5). The whole hall
+	// slowly washes through a rainbow while the gold JACKPOT sign powers on letter-
+	// by-letter, glows and takes a single luxury glint, then everything eases back
+	// to the warm casino look over the final ~0.5s. All additive/tint over the baked
+	// scene, so it stays behind the machine + UI and never touches gameplay. The
+	// `env` envelope fades in over the first ~0.3s and out over the last ~0.5s, and
+	// is exactly 0 when idle (jp rests at 0 or 5) so the block is skipped for free.
+	float env = smoothstep(0.0, 0.3, jp) * smoothstep(5.0, 4.5, jp);
+	if (env > 0.002) {
+		float signY = SIGN_Y;   // powers up the SAME letters as the baked marquee
+		vec2 signC = vec2(cx, signY);
+		// slow flowing rainbow across the room — the spatial offset makes coloured
+		// light appear to drift across the hall rather than flatly recolour it.
+		float hue = jp * 0.19 + uv.x * 0.22 - uv.y * 0.06;
+		vec3 rc = casHue(hue);
+		float luma = dot(col, vec3(0.299, 0.587, 0.114));
+		// keep the JACKPOT sign gold: suppress the rainbow wash around it.
+		float signKeep = smoothstep(0.20, 0.05, distance(a, signC));
+		float wash = clamp(env * (1.0 - 0.9 * signKeep) * 0.72, 0.0, 1.0);
+		vec3 washed = col * 0.32 + rc * (luma * 1.7 + 0.05);   // recolour, keep brightness
+		col = mix(col, washed, wash);
+		// slightly increased bloom on the brightest fixtures (chandeliers/lamps/signs)
+		col += rc * smoothstep(0.45, 1.0, luma) * env * 0.35 * (1.0 - 0.7 * signKeep);
+		// soft coloured reflections rolling across the poker felt (lower area only)
+		float feltBand = smoothstep(0.60, 0.72, uv.y) * smoothstep(1.02, 0.86, uv.y);
+		float roll = 0.5 + 0.5 * sin(uv.x * 7.0 - jp * 2.2);
+		col += rc * feltBand * roll * env * 0.10;
+		// a few subtle coloured sparkles drifting near the ceiling lights (not the sign)
+		for (int i = 0; i < 6; i++) {
+			float fi = float(i);
+			vec2 sp = vec2((0.12 + 0.76 * hash11(fi * 4.7 + 2.0)) * aspect, 0.06 + 0.30 * hash11(fi * 9.1 + 5.0));
+			float tw = 0.5 + 0.5 * sin(t * (2.4 + fi * 0.6) + fi * 6.2);
+			vec3 spc = mix(rc, vec3(1.0, 0.95, 0.8), 0.4);
+			col += spc * smoothstep(0.006, 0.0, distance(a, sp)) * tw * env * 0.4
+				* (1.0 - smoothstep(0.16, 0.06, distance(sp, signC)));
+		}
+		// -------- GOLD JACKPOT SIGN (stays gold, over the rainbow) --------
+		if (a.y < 0.37) {   // covers the letters + their soft halo (no hard clip)
+			float pitch = SIGN_PITCH;
+			float hw = SIGN_HW;
+			float hh = SIGN_HH;
+			vec3 gold = vec3(1.0, 0.80, 0.34);
+			float ignite = smoothstep(0.0, 0.62, jp);          // whole-sign power ramp
+			float glintX = mix(cx - 3.4 * pitch, cx + 3.4 * pitch, smoothstep(0.68, 1.12, jp));
+			float glintLive = smoothstep(0.66, 0.72, jp) * smoothstep(1.18, 1.08, jp);
+			float streak = smoothstep(0.014, 0.0, abs(a.x - glintX));   // thin glint highlight
+			for (int i = 0; i < 7; i++) {
+				float fi = float(i);
+				vec2 lc = vec2(cx + (fi - 3.0) * pitch, signY);
+				vec2 p = a - lc;
+				if (abs(p.x) > hw + 0.03 || abs(p.y) > hh + 0.03) continue;   // cheap bbox guard
+				float gd = casGlyph(p, i, hw, hh);
+				float ti = 0.04 + fi * 0.078;                  // letters ignite L->R over ~0.6s
+				float lit = smoothstep(ti, ti + 0.14, jp);
+				float tube = aaline(gd, 0.0032);               // bright tube core
+				float glow = smoothstep(0.030, 0.0, gd);       // soft halo around the tube
+				float shim = 0.75 + 0.25 * sin((lc.x - cx) * 26.0 - t * 2.4);   // travelling shimmer
+				col += gold * tube * lit * (0.9 + 0.5 * ignite) * shim * env;
+				col += gold * glow * lit * (0.28 + 0.22 * ignite) * env;
+				col += vec3(1.0, 0.97, 0.85) * tube * streak * glintLive * lit * env * 2.2;
+			}
+			// warm gold halo around the whole wordmark + tiny gold edge sparkles
+			col += gold * smoothstep(0.19, 0.0, distance(a, signC)) * ignite * env * 0.16;
+			for (int i = 0; i < 5; i++) {
+				float fi = float(i);
+				vec2 ep = signC + vec2((hash11(fi * 3.1 + 1.0) - 0.5) * 6.6 * pitch, (hash11(fi * 7.7 + 3.0) - 0.5) * 2.2 * hh);
+				float tw = 0.5 + 0.5 * sin(t * (3.0 + fi) + fi * 5.0);
+				col += vec3(1.0, 0.9, 0.55) * smoothstep(0.005, 0.0, distance(a, ep)) * tw * ignite * env * 0.7;
+			}
+		}
 	}
 	return col;
 }
@@ -5702,6 +5869,560 @@ void fragment() {
 	vec2 a = vec2(uv.x * aspect, uv.y);
 	vec3 col = casinoScene(a, uv);
 	col = casinoMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+
+# ---------------------------------------------------------------------------
+# Luna Park skin (id "lunapark") — a premium nighttime amusement park. lunaScene()
+# bakes the still world in depth-sorted layers: a deep night sky with stars + a warm
+# horizon glow, distant blurred ride-glows + atmospheric haze (background), a soft
+# crowd of visitor silhouettes, a premium wooden BOARDWALK decking the whole floor
+# (perspective planks, grain, seams, warm reflections + scattered confetti), a grand
+# striped BIG-TOP tent + handcrafted vintage game booths (planked walls, prize toys,
+# header signs, scalloped awnings, marquee bulbs) flanking the centre, tied bunches of
+# balloons, swagged strings of warm bulbs + colourful pennant bunting + hanging
+# lanterns across the top, and a baked roller-coaster track — the carnival runs
+# clean to the screen edges (no outer frame). lunaMotion() adds the
+# living layer over that plate: a luxurious illuminated Ferris wheel (braced steel
+# A-frame, twin rims, glowing gondolas) turning slowly and set back into the haze, a
+# coaster train running the track, the string bulbs twinkling, and occasional fireworks.
+# Two event clocks drive the celebrations, both 0 when idle (their blocks are skipped
+# for free): `chase` (0..2s, the every-3 Light Chase — the environment bulbs briefly
+# synchronise) and `cele` (0..3s, the every-5 "NICE RIDE!" moment — the sky dims right
+# down while the Ferris wheel + coaster blaze, the coaster races a fast train across,
+# fireworks launch and confetti falls, then everything eases back to the idle night).
+# Everything is kept clear of the screen centre + rendered a touch soft so the Simon
+# wheel (drawn on top) always stays the focal point.
+# ---------------------------------------------------------------------------
+const _LUNA_FUNCS := "
+uniform float chase = 0.0;   // Light Chase clock, seconds 0..2 (0 = idle)
+uniform float cele = 0.0;    // Carnival Celebration clock, seconds 0..3 (0 = idle)
+float lpSeg(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a; vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+// Smooth saturated rainbow for a hue in [0,1) — used for fireworks + confetti.
+vec3 lpHue(float h) {
+	h = fract(h);
+	vec3 c = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+	return c * c * (3.0 - 2.0 * c);
+}
+// Roller-coaster track height at a-space x (a couple of gentle hills, upper-right sky).
+float lpTrackY(float x) {
+	return 0.235 + 0.070 * sin(x * 6.5 - 1.1) + 0.026 * sin(x * 15.0 + 0.4);
+}
+// One warm incandescent bulb: a soft outer halo + a hot core, added over the scene.
+void lpBulb(inout vec3 col, vec2 a, vec2 p, float rad, float bright, vec3 tint) {
+	float d = distance(a, p);
+	col += tint * smoothstep(rad, 0.0, d) * bright;
+	col += vec3(1.0, 0.96, 0.86) * smoothstep(rad * 0.34, 0.0, d) * bright * 0.8;
+}
+// String-light bulb idx 0..20 -> position on one of three swagged catenary strings
+// across the top of the screen, plus its warm tint. Shared by the baked scene (draws
+// them lit) and the motion pass (twinkles them), so the two always line up.
+vec2 lpStr(int idx, out vec3 tint) {
+	int s = idx / 7; int b = idx - s * 7;
+	float x0 = float(s) / 3.0 * aspect; float x1 = float(s + 1) / 3.0 * aspect;
+	float ub = (float(b) + 0.5) / 7.0;
+	float bx = mix(x0, x1, ub);
+	float dip = 4.0 * ub * (1.0 - ub);              // parabolic sag, lowest mid-span
+	float by = 0.050 + 0.055 * dip;
+	tint = mix(vec3(1.0, 0.78, 0.34), vec3(1.0, 0.90, 0.62), fract(float(idx) * 0.137));
+	return vec2(bx, by);
+}
+// Premium wooden boardwalk under the whole scene. Planks run toward the viewer and
+// fan apart with perspective; per-plank tone + grain + dark seams + receding board
+// ends read as real timber, hazing into the warm dark at the horizon (`hz`).
+vec3 lpFloor(vec2 a, float cx) {
+	float hz = 0.560;
+	float d = clamp((a.y - hz) / (1.0 - hz), 0.0, 1.0);       // 0 far .. 1 near
+	float persp = mix(0.10, 0.92, d * d);                     // boards fan out toward the viewer
+	float px = (a.x - cx) / persp;
+	float pid = floor(px * 7.0);
+	float plank = fract(px * 7.0);
+	float groove = smoothstep(0.055, 0.0, min(plank, 1.0 - plank));
+	float wz = 1.0 / (1.0 - d * 0.9 + 0.05);                  // depth coord for board-end seams
+	float crs = fract(wz * 2.0 + hash11(pid) * 0.7);
+	float crossSeam = smoothstep(0.05, 0.0, min(crs, 1.0 - crs));
+	vec3 wood = mix(vec3(0.26, 0.15, 0.08), vec3(0.46, 0.29, 0.15), hash11(pid * 1.3));
+	wood *= 0.70 + 0.55 * fbm(vec2(px * 2.5, wz * 5.0));
+	wood = mix(wood, wood * 0.30, max(groove, crossSeam * 0.7));
+	wood = mix(vec3(0.05, 0.035, 0.05), wood, 0.22 + 0.78 * smoothstep(0.0, 0.32, d));  // haze into horizon
+	return wood;
+}
+// Soft distant visitor silhouette (head + body blob), kept low-contrast so it reads
+// as a person in the crowd without pulling focus. `h` is the figure height.
+void lpPerson(inout vec3 col, vec2 a, vec2 p, float h, float tone) {
+	vec2 q = a - p;
+	float body = sdBox(q - vec2(0.0, h * 0.35), vec2(h * 0.17, h * 0.42)) - h * 0.12;
+	float head = sdCircle(q - vec2(0.0, -h * 0.02), h * 0.17);
+	col = mix(col, vec3(0.04, 0.035, 0.06), aafill(min(body, head)) * 0.60 * tone);
+}
+// A tied bunch of floating balloons rising from base `b`, colours varied by `seed`.
+void lpBalloons(inout vec3 col, vec2 a, vec2 b, float seed) {
+	if (a.x < b.x - 0.09 || a.x > b.x + 0.09 || a.y < b.y - 0.28 || a.y > b.y + 0.02) return;
+	for (int i = 0; i < 6; i++) {
+		float fi = float(i);
+		vec2 bp = b + vec2((hash11(seed + fi) * 2.0 - 1.0) * 0.045, -0.11 - hash11(seed + fi * 2.1) * 0.11);
+		vec2 q = a - bp;
+		vec3 bc = lpHue(hash11(seed * 3.1 + fi));
+		col = mix(col, vec3(0.72, 0.60, 0.40), aaline(lpSeg(a, bp + vec2(0.0, 0.026), b), 0.0011) * 0.32);  // string
+		col = mix(col, bc * 0.92, aafill(ellip(q, vec2(0.0), vec2(0.020, 0.026), 0.0)));
+		col = mix(col, min(bc + 0.45, vec3(1.0)), aafill(sdCircle(q + vec2(0.006, 0.008), 0.005)));         // highlight
+	}
+}
+// A warm hanging paper lantern with a soft glow, cap + base fittings and a rib.
+void lpLantern(inout vec3 col, vec2 a, vec2 p, vec3 tint) {
+	if (distance(a, p) > 0.075) return;
+	vec2 q = a - p;
+	col += tint * smoothstep(0.060, 0.0, length(q)) * 0.55;                                    // glow
+	col = mix(col, tint * 0.55, aafill(ellip(q, vec2(0.0), vec2(0.018, 0.024), 0.0)));
+	col = mix(col, vec3(0.14, 0.10, 0.06), aafill(sdBox(q - vec2(0.0, -0.028), vec2(0.010, 0.005))));  // cap
+	col = mix(col, vec3(0.14, 0.10, 0.06), aafill(sdBox(q - vec2(0.0, 0.028), vec2(0.008, 0.004))));   // base
+	col = mix(col, vec3(0.20, 0.14, 0.08), aaline(q.x, 0.0016) * step(-0.024, q.y) * step(q.y, 0.024) * 0.4);
+}
+// A colourful pennant garland sagging between (x0,y0) and (x1,y0): a cord with
+// alternating downward triangular flags, edge-ramped so it seats cleanly.
+void lpBunting(inout vec3 col, vec2 a, float x0, float x1, float y0, float seed) {
+	if (a.x < x0 || a.x > x1 || a.y < y0 - 0.006 || a.y > y0 + 0.090) return;
+	float ew = smoothstep(x0, x0 + 0.014, a.x) * (1.0 - smoothstep(x1 - 0.014, x1, a.x));
+	float u = (a.x - x0) / (x1 - x0);
+	float sag = y0 + 0.050 * 4.0 * u * (1.0 - u);
+	col = mix(col, vec3(0.22, 0.16, 0.10), aaline(a.y - sag, 0.0016) * ew);                    // cord
+	float seg = floor(u * 20.0);
+	float fu = fract(u * 20.0);
+	float depth = 0.050;
+	float v = (a.y - sag) / depth;
+	if (v > 0.0 && v < 1.0 && abs(fu - 0.5) * 2.0 < (1.0 - v)) {
+		vec3 pc = lpHue(hash11(seg * 1.7 + seed));
+		col = mix(col, pc * (0.80 + 0.20 * (1.0 - v)), 0.92 * ew);
+	}
+}
+// ---------------------------------------------------------------------------
+// One handcrafted vintage carnival game booth, centred at bc, half-width hw. Built
+// back-to-front: warm interior glow -> planked wooden back wall -> a row of hanging
+// prize toys -> a colourful header sign with lettering -> counter ledge + corner
+// posts -> a scalloped striped awning -> a rim of warm marquee bulbs. `seed` varies
+// the awning + prize colours. Every contribution is multiplied by a box window so
+// the booth seats cleanly when the caller wraps it in a bounding guard.
+// ---------------------------------------------------------------------------
+void lpBooth(inout vec3 col, vec2 a, vec2 bc, float hw, float seed) {
+	float awnY  = bc.y - 0.150;    // awning / roof line
+	float wallY = bc.y - 0.100;    // back-wall top (just below the awning)
+	float cntY  = bc.y;            // counter top
+	float signY = wallY + 0.016;
+	float win = win1(a.x, bc.x - hw - 0.014, bc.x + hw + 0.014, 0.006)
+	          * win1(a.y, awnY - 0.055, cntY + 0.048, 0.006);
+	if (win <= 0.0) return;
+	vec2 q = a - bc;
+	vec3 s1 = lpHue(hash11(seed * 1.7));                       // awning stripe A
+	vec3 s2 = mix(vec3(0.97, 0.94, 0.88), s1, 0.12);          // awning stripe B (cream)
+	// interior warm glow (a lit stall behind the counter)
+	col += vec3(1.0, 0.72, 0.36) * smoothstep(0.13, 0.0, distance(a, vec2(bc.x, cntY - 0.05))) * 0.34 * win;
+	// planked wooden back wall
+	float wall = sdBox(vec2(q.x, a.y - (wallY + cntY) * 0.5), vec2(hw * 0.92, (cntY - wallY) * 0.5));
+	if (wall < 0.006) {
+		vec3 wood = mix(vec3(0.24, 0.13, 0.07), vec3(0.42, 0.24, 0.12), fbm(vec2(a.x * 34.0, a.y * 9.0)));
+		col = mix(col, wood, aafill(wall) * win);
+		col = mix(col, wood * 0.42, aaline(fract((a.x - bc.x) * 24.0) - 0.5, 0.016) * aafill(wall) * win * 0.7);        // crisp plank seams
+		col = mix(col, min(wood + 0.12, vec3(1.0)), aaline(fract((a.x - bc.x) * 24.0), 0.006) * aafill(wall) * win * 0.25);  // plank highlight
+	}
+	// hanging prize toys
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		vec2 pp = vec2(bc.x + (fi - 2.0) * (hw * 0.34), wallY + 0.050 + 0.010 * sin(fi * 1.7));
+		vec3 tc = lpHue(hash11(seed * 2.3 + fi * 0.7));
+		col = mix(col, tc * 0.35, aaline(sdCircle(a - pp, 0.015), 0.0022) * win);          // crisp dark rim
+		col = mix(col, tc, aafill(sdCircle(a - pp, 0.014)) * win);
+		col += vec3(0.45) * aafill(sdCircle(a - pp + vec2(0.004, 0.004), 0.004)) * win;    // sharper highlight
+	}
+	// colourful header sign + abstract lettering
+	col = mix(col, s1 * 0.85, aafill(sdBox(a - vec2(bc.x, signY), vec2(hw * 0.86, 0.013))) * win);
+	col = mix(col, vec3(1.0, 0.95, 0.8), aaline(sdBox(a - vec2(bc.x, signY), vec2(hw * 0.86, 0.013)), 0.003) * win * 0.6);
+	for (int i = 0; i < 6; i++)
+		col = mix(col, vec3(1.0, 0.96, 0.82), aafill(sdBox(a - vec2(bc.x + (float(i) - 2.5) * (hw * 0.26), signY), vec2(0.004, 0.007))) * win * 0.85);
+	// counter ledge + corner posts
+	col = mix(col, vec3(0.10, 0.07, 0.06), aafill(sdBox(a - vec2(bc.x, cntY + 0.020), vec2(hw, 0.020))) * win);
+	col = mix(col, vec3(0.30, 0.18, 0.10), aaline(sdBox(a - vec2(bc.x, cntY + 0.020), vec2(hw, 0.020)), 0.003) * win);
+	col = mix(col, vec3(0.16, 0.10, 0.06), aafill(sdBox(a - vec2(bc.x - hw * 0.94, (wallY + cntY) * 0.5), vec2(0.006, (cntY - wallY) * 0.5))) * win);
+	col = mix(col, vec3(0.16, 0.10, 0.06), aafill(sdBox(a - vec2(bc.x + hw * 0.94, (wallY + cntY) * 0.5), vec2(0.006, (cntY - wallY) * 0.5))) * win);
+	// scalloped striped awning
+	if (a.y >= awnY && a.y <= awnY + 0.055 && abs(q.x) <= hw) {
+		float scal = 0.040 + 0.012 * (0.5 + 0.5 * cos((a.x - bc.x) * 60.0));   // wavy hem
+		if (a.y - awnY <= scal) {
+			float st = step(0.5, fract((a.x - bc.x) * 22.0));
+			col = mix(col, mix(s1, s2, st) * (1.0 - 0.28 * (a.y - awnY) / 0.055), win);
+			col = mix(col, vec3(0.12, 0.08, 0.06), aaline((a.y - awnY) - scal, 0.0035) * win * 0.7);   // crisp scallop hem edge
+		}
+	}
+	// warm marquee bulbs along the awning hem
+	for (int i = 0; i < 7; i++)
+		lpBulb(col, a, vec2(bc.x + (float(i) - 3.0) * (hw / 3.2), awnY + 0.050), 0.010, 0.34 * win, vec3(1.0, 0.82, 0.42));
+}
+// ---------------------------------------------------------------------------
+// A grand striped big-top tent centred at tc: a curved bell canopy with radial
+// red/cream stripes + rib lines, a scalloped hem valance, a dark glowing entrance
+// with tied-back curtains, a crowning pole + pennant flag, marquee bulbs down the
+// two leading ribs, and a soft level contact shadow seating it flat on the boardwalk.
+// Windowed like the booths so it seats cleanly under a bounding guard.
+// ---------------------------------------------------------------------------
+void lpTent(inout vec3 col, vec2 a, vec2 tc, float hw, float roofH) {
+	float top  = tc.y - roofH;     // peak
+	float hemY = tc.y;             // hem line
+	float win = win1(a.x, tc.x - hw - 0.05, tc.x + hw + 0.05, 0.008)
+	          * win1(a.y, top - 0.09, hemY + 0.11, 0.008);
+	if (win <= 0.0) return;
+	vec2 q = a - tc;
+	float v = clamp((hemY - a.y) / roofH, 0.0, 1.0);          // 0 hem .. 1 peak
+	float hlf = hw * pow(1.0 - v, 0.72);                      // bell profile -> 0 at peak
+	// soft, perfectly LEVEL contact shadow so the tent seats flat on the boardwalk
+	// (no ropes streaking up the floor, no warped join between the hem and the planks)
+	col = mix(col, col * 0.5, aafill(ellip(a - vec2(tc.x, hemY + 0.052), vec2(0.0), vec2(hw * 1.0, 0.024), 0.0)) * win * 0.6);
+	// interior spill behind the entrance
+	col += vec3(1.0, 0.70, 0.34) * smoothstep(0.15, 0.0, distance(a, vec2(tc.x, hemY - 0.02))) * 0.30 * win;
+	// striped canopy — deep saturated red / bright cream for crisp, premium contrast
+	if (a.y >= top && a.y <= hemY && abs(q.x) <= hlf) {
+		float ang = q.x / max(hlf, 0.001);
+		float stripe = step(0.5, fract(ang * 5.0 + 0.5));
+		vec3 canopy = mix(vec3(0.82, 0.09, 0.12), vec3(0.99, 0.96, 0.90), stripe);
+		canopy *= (0.66 + 0.40 * (1.0 - abs(ang))) * (0.74 + 0.30 * v);
+		col = mix(col, canopy, win);
+		col = mix(col, canopy * 0.40, aaline(fract(ang * 5.0 + 0.5) - 0.5, 0.012) * win * 0.9);   // crisp rib seams
+	}
+	// crisp bell silhouette edge (dark piping) so the canopy reads sharply on the sky
+	if (a.y >= top && a.y <= hemY)
+		col = mix(col, vec3(0.34, 0.05, 0.07), aaline(abs(q.x) - hlf, 0.005) * win);
+	// bright cream piping along the hem line — a premium, crisp base to the canopy
+	col = mix(col, vec3(1.0, 0.96, 0.86), aaline(a.y - hemY, 0.004) * (1.0 - step(hlf, abs(q.x))) * step(top, a.y) * win * 0.9);
+	// LEVEL ground skirt seating the tent: a flat, in-shadow strip filling the hem
+	// band so the boardwalk's perspective planks can't streak up through the scallop
+	// gaps (which read as the floor 'rising up' into the red/cream valance). The
+	// scallop stripes then hang against this clean base instead of raw diagonal floor.
+	col = mix(col, vec3(0.07, 0.045, 0.055), aafill(sdBox(a - vec2(tc.x, hemY + 0.026), vec2(hw, 0.024))) * win);
+	// scalloped hem valance
+	if (a.y >= hemY && a.y <= hemY + 0.042 && abs(q.x) <= hw) {
+		float scal = 0.030 + 0.010 * (0.5 + 0.5 * cos((a.x - tc.x) * 70.0));
+		if (a.y - hemY <= scal) {
+			col = mix(col, mix(vec3(0.82, 0.09, 0.12), vec3(0.99, 0.96, 0.90), step(0.5, fract((a.x - tc.x) * 26.0))), win);
+			col = mix(col, vec3(0.30, 0.04, 0.06), aaline((a.y - hemY) - scal, 0.004) * win * 0.8);   // crisp scallop hem edge
+		}
+	}
+	// dark illuminated entrance + tied-back curtains
+	col = mix(col, vec3(0.05, 0.03, 0.04), aafill(sdBox(a - vec2(tc.x, hemY + 0.032), vec2(hw * 0.24, 0.048))) * win);
+	col += vec3(1.0, 0.66, 0.30) * smoothstep(0.055, 0.0, distance(a, vec2(tc.x, hemY + 0.030))) * 0.5 * win;
+	col = mix(col, vec3(0.90, 0.86, 0.76), aaline(a.x - (tc.x - hw * 0.24), 0.004) * step(hemY, a.y) * step(a.y, hemY + 0.078) * win);
+	col = mix(col, vec3(0.90, 0.86, 0.76), aaline(a.x - (tc.x + hw * 0.24), 0.004) * step(hemY, a.y) * step(a.y, hemY + 0.078) * win);
+	// crowning pole + pennant flag
+	col = mix(col, vec3(0.20, 0.16, 0.12), aaline(a.x - tc.x, 0.0022) * step(top - 0.06, a.y) * step(a.y, top + 0.004) * win);
+	{
+		vec2 fq = a - vec2(tc.x, top - 0.045);
+		col = mix(col, vec3(0.95, 0.30, 0.28), aafill(max(sdBox(fq - vec2(0.022, 0.0), vec2(0.024, 0.012)), fq.x - (0.046 - abs(fq.y) * 1.6))) * win);
+	}
+	// marquee bulbs down the two leading ribs
+	for (int i = 0; i < 8; i++) {
+		float fv = float(i) / 7.0;
+		float hh = hw * pow(1.0 - fv, 0.72);
+		float yy = mix(hemY, top, fv);
+		lpBulb(col, a, vec2(tc.x - hh, yy), 0.009, 0.30 * win, vec3(1.0, 0.83, 0.44));
+		lpBulb(col, a, vec2(tc.x + hh, yy), 0.009, 0.30 * win, vec3(1.0, 0.83, 0.44));
+	}
+	// (guy-ropes removed: they streaked diagonally onto the boardwalk and read as the
+	// floor 'rising up' to meet the tent. The level contact shadow above seats it flat.)
+}
+vec3 lunaScene(vec2 a, vec2 uv) {
+	float cx = aspect * 0.5;
+	// ---------- NIGHT SKY ----------
+	vec3 col = mix(vec3(0.055, 0.045, 0.125), vec3(0.115, 0.060, 0.150), smoothstep(0.55, 0.0, uv.y));
+	col += vec3(0.22, 0.10, 0.14) * smoothstep(0.55, 0.20, uv.y) * smoothstep(0.0, 0.35, uv.y) * 0.55;  // warm horizon band
+	// baked stars (hashed grid, faded toward the horizon)
+	vec2 sg = a * 80.0; vec2 sid = floor(sg); vec2 sf = fract(sg) - 0.5;
+	float star = smoothstep(0.11, 0.0, length(sf)) * step(0.93, hash21(sid));
+	col += vec3(0.80, 0.85, 1.0) * star * smoothstep(0.52, 0.0, uv.y) * 0.7;
+	// soft moon glow, tucked up-right so it never fights the centre
+	col += vec3(0.60, 0.56, 0.70) * smoothstep(0.22, 0.0, distance(a, vec2(aspect - 0.30, 0.11))) * 0.28;
+	// ---------- DISTANT PARK GLOWS (blurred, low-contrast — depth of field) ----------
+	for (int i = 0; i < 5; i++) {
+		float fi = float(i);
+		float fx = (0.12 + 0.76 * hash11(fi * 2.7 + 1.0)) * aspect;
+		if (abs(fx - cx) < 0.30) fx += sign(fx - cx + 0.001) * 0.30;   // keep the centre clear
+		vec2 gp = vec2(fx, 0.47 + 0.02 * hash11(fi * 5.1));
+		vec3 gc = mix(vec3(0.9, 0.5, 0.30), vec3(0.40, 0.60, 0.95), hash11(fi * 3.3));
+		col += gc * smoothstep(0.10, 0.0, distance(a, gp)) * 0.18;
+	}
+	col += vec3(0.20, 0.10, 0.12) * smoothstep(0.07, 0.0, abs(uv.y - 0.50)) * 0.30;   // horizon haze
+	// atmospheric depth haze: a soft warm-blue fog along the midground so the
+	// background rides (Ferris wheel, coaster, tent) read as further away.
+	col += vec3(0.17, 0.12, 0.16) * smoothstep(0.18, 0.46, uv.y) * smoothstep(0.60, 0.46, uv.y) * 0.40;
+	// ---------- BOARDWALK FLOOR (premium timber decking beneath the whole scene) ----------
+	float floorHz = 0.560;
+	if (uv.y > floorHz - 0.02) {
+		vec3 fl = lpFloor(a, cx);
+		col = mix(col, fl, smoothstep(floorHz - 0.02, floorHz + 0.03, uv.y));
+		// soft warm ambient pooling on the near boards
+		col += vec3(0.90, 0.55, 0.28) * smoothstep(0.62, 1.0, uv.y) * 0.10 * (0.5 + 0.5 * fbm(a * vec2(5.0, 9.0)));
+		// warm reflections of the stall lights streaking down the boards
+		float refl = smoothstep(floorHz, 1.0, uv.y) * (0.6 + 0.4 * sin(a.y * 60.0));
+		col += vec3(1.0, 0.60, 0.30) * smoothstep(0.10, 0.0, abs(a.x - (cx + 0.55))) * refl * 0.10;
+		col += vec3(1.0, 0.70, 0.35) * smoothstep(0.06, 0.0, abs(a.x - 0.155)) * refl * 0.08;
+		col += vec3(1.0, 0.70, 0.35) * smoothstep(0.06, 0.0, abs(a.x - (aspect - 0.155))) * refl * 0.08;
+	}
+	// ---------- DISTANT VISITOR SILHOUETTES (a soft crowd along the midground) ----------
+	for (int i = 0; i < 9; i++) {
+		float fi = float(i);
+		float px = (0.06 + 0.88 * hash11(fi * 4.1)) * aspect;
+		if (abs(px - cx) < 0.30) px += sign(px - cx + 0.001) * 0.30;   // keep the centre clear
+		lpPerson(col, a, vec2(px, 0.548 + 0.010 * hash11(fi * 2.7)), 0.045 + 0.020 * hash11(fi * 6.3), 0.9);
+	}
+	// ---------- ROLLER-COASTER TRACK (baked rails + posts, upper-right) ----------
+	if (a.x > 1.02 && a.x < 1.75 && a.y < 0.42) {
+		float ty = lpTrackY(a.x);
+		col += vec3(0.50, 0.35, 0.52) * aaline(a.y - ty, 0.0035) * 0.7;          // upper rail
+		col += vec3(0.40, 0.28, 0.42) * aaline(a.y - ty + 0.018, 0.0028) * 0.5;  // lower rail
+	}
+	for (int i = 0; i < 8; i++) {
+		float px = 1.08 + float(i) * 0.085;
+		float ty = lpTrackY(px);
+		col += vec3(0.16, 0.12, 0.20) * aaline(a.x - px, 0.0032) * step(ty, a.y) * step(a.y, 0.60) * 0.55;  // support post
+	}
+	// ---------- BIG-TOP TENT (grand striped canopy, mid-ground right) ----------
+	lpTent(col, a, vec2(cx + 0.55, 0.590), 0.150, 0.230);
+	// ---------- CARNIVAL BOOTHS (handcrafted, flanking the centre) ----------
+	lpBooth(col, a, vec2(0.155, 0.615), 0.078, 0.35);
+	lpBooth(col, a, vec2(0.375, 0.585), 0.066, 1.20);
+	lpBooth(col, a, vec2(aspect - 0.155, 0.615), 0.078, 2.10);
+	// tied bunches of balloons near the booths
+	lpBalloons(col, a, vec2(0.280, 0.545), 4.2);
+	lpBalloons(col, a, vec2(aspect - 0.285, 0.545), 7.7);
+	// ---------- STRING LIGHTS (swagged catenaries across the top) ----------
+	for (int s = 0; s < 3; s++) {
+		float x0 = float(s) / 3.0 * aspect; float x1 = float(s + 1) / 3.0 * aspect;
+		if (a.x >= x0 && a.x <= x1) {
+			float u = (a.x - x0) / (x1 - x0);
+			float sy = 0.050 + 0.055 * (4.0 * u * (1.0 - u));
+			col += vec3(0.24, 0.17, 0.10) * aaline(a.y - sy, 0.0022);   // the wire
+		}
+	}
+	for (int i = 0; i < 21; i++) {
+		vec3 tn; vec2 bp = lpStr(i, tn);
+		lpBulb(col, a, bp, 0.014, 0.42, tn);
+	}
+	// ---------- PENNANT BUNTING (colourful garlands under the strings) ----------
+	lpBunting(col, a, 0.05, cx - 0.34, 0.140, 3.0);
+	lpBunting(col, a, cx + 0.34, aspect - 0.05, 0.140, 8.0);
+	// ---------- HANGING LANTERNS (small warm glows tucked into the corners) ----------
+	lpLantern(col, a, vec2(0.095, 0.175), vec3(1.0, 0.55, 0.30));
+	lpLantern(col, a, vec2(aspect - 0.095, 0.175), vec3(1.0, 0.45, 0.55));
+	lpLantern(col, a, vec2(0.520, 0.120), vec3(1.0, 0.70, 0.32));
+	lpLantern(col, a, vec2(aspect - 0.520, 0.120), vec3(0.55, 0.70, 1.0));
+	// ---------- GROUND CONFETTI (scattered specks on the boardwalk) ----------
+	if (uv.y > floorHz + 0.02) {
+		vec2 g = a * 26.0; vec2 gid = floor(g); vec2 gf = fract(g) - 0.5;
+		float has = step(0.86, hash21(gid));
+		vec3 cc = lpHue(hash21(gid * 1.7));
+		col = mix(col, cc, smoothstep(0.30, 0.0, length(gf * vec2(1.0, 1.8))) * has * 0.50 * smoothstep(floorHz, floorHz + 0.10, uv.y));
+	}
+	// gentle warm bloom haze rising off the top-of-frame lights (volumetric feel)
+	col += vec3(1.0, 0.72, 0.40) * smoothstep(0.34, 0.0, abs(uv.y - 0.14)) * 0.05;
+	// gentle vignette to push focus to the centre
+	vec2 vp = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+	col *= mix(0.74, 1.0, smoothstep(1.15, 0.25, length(vp)));
+	return col;
+}
+vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float cx = aspect * 0.5;
+	// Event envelopes: fade in fast, hold, fade out — exactly 0 when idle so the whole
+	// event block is skipped for free.
+	float chaseEnv = smoothstep(0.0, 0.25, chase) * smoothstep(2.0, 1.55, chase);
+	float celeEnv = smoothstep(0.0, 0.30, cele) * smoothstep(3.0, 2.55, cele);
+	float litAmt = 0.78 + 0.22 * chaseEnv + 0.30 * celeEnv;
+	vec3 warm = vec3(1.0, 0.80, 0.42);
+	// ---------- CELEBRATION: THE NIGHT DIMS SO THE RIDES BLAZE (NICE RIDE!) ----------
+	// For the ~3s every-5 moment the park sky drops right down — strongest overhead,
+	// eased to nothing at the boardwalk so the floor stays lit — and the illuminated
+	// Ferris wheel + roller-coaster glow against the dark. Everything eases back after.
+	if (celeEnv > 0.01)
+		col *= mix(1.0, 0.30, celeEnv * smoothstep(0.60, 0.10, uv.y));
+	// ---------- STRING-LIGHT TWINKLE ----------
+	for (int i = 0; i < 21; i++) {
+		vec3 tn; vec2 bp = lpStr(i, tn);
+		if (abs(a.x - bp.x) < 0.03 && abs(a.y - bp.y) < 0.03) {
+			float tw = 0.55 + 0.45 * sin(t * 1.6 + float(i) * 0.7);
+			lpBulb(col, a, bp, 0.015, 0.28 * tw + (chaseEnv + celeEnv) * 0.45, tn);
+		}
+	}
+	// ---------- FERRIS WHEEL (illuminated, slowly turning, set back upper-left) ----------
+	{
+		vec2 fwp = vec2(0.335, 0.275); float FR = 0.170; vec2 d = a - fwp;
+		float haze = 0.86;   // recede into the night, but a touch sharper than before
+		if (a.y < 0.70 && a.x < fwp.x + FR + 0.12 && a.x > fwp.x - FR - 0.12 && a.y > fwp.y - FR - 0.09) {
+			float rr = length(d); float spin = t * 0.13;
+			vec3 steel    = vec3(0.17, 0.16, 0.21);
+			vec3 steelLit = vec3(0.34, 0.28, 0.26);   // warm bulb-light spilling onto the frame
+			vec3 warmGlow = vec3(1.0, 0.72, 0.36);
+			// soft contact shadow pooled on the boardwalk beneath the wheel (grounds the ride)
+			col = mix(col, col * 0.55, smoothstep(0.13, 0.0, length((a - vec2(fwp.x, 0.648)) * vec2(0.7, 2.6))) * 0.5 * haze);
+			// ---- braced steel A-frame: splayed twin legs each side + a rear leg for depth ----
+			col = mix(col, steel * 0.62, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.03, 0.652)), 0.0050) * haze);  // rear leg (behind the wheel)
+			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.128, 0.652)), 0.0066) * haze);
+			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.128, 0.652)), 0.0066) * haze);
+			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x - 0.172, 0.652)), 0.0044) * haze);
+			col = mix(col, steel, aaline(lpSeg(a, fwp, vec2(fwp.x + 0.172, 0.652)), 0.0044) * haze);
+			col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.082, 0.478), vec2(fwp.x + 0.082, 0.478)), 0.0034) * haze);  // upper cross-brace
+			col = mix(col, steel, aaline(lpSeg(a, vec2(fwp.x - 0.150, 0.560), vec2(fwp.x + 0.150, 0.560)), 0.0026) * haze);  // lower truss tie
+			col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x - 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
+			col = mix(col, steel, aafill(sdBox(a - vec2(fwp.x + 0.150, 0.650), vec2(0.020, 0.006))) * haze);   // foot
+			// ---- twin steel rims, warm bulb-light bleeding onto the metal ----
+			col = mix(col, steelLit, aaline(rr - FR, 0.0050) * haze);                              // outer structural rim
+			col += warmGlow * aaline(rr - FR, 0.0034) * 0.5 * litAmt * haze;                       // warm sheen on the outer rim
+			col = mix(col, steel * 1.4, aaline(rr - FR * 0.88, 0.0034) * haze);                    // inner rim
+			col += warmGlow * aaline(rr - FR * 0.88, 0.0024) * 0.32 * litAmt * haze;
+			// ---- elegant spokes to the hub, catching warm light near the rim ----
+			for (int i = 0; i < 12; i++) {
+				float sa = float(i) / 12.0 * TAU + spin;
+				vec2 dir = vec2(cos(sa), sin(sa));
+				col = mix(col, steel, aaline(lpSeg(a, fwp, fwp + dir * FR * 0.9), 0.0013) * 0.75 * haze);
+				col += warmGlow * aaline(lpSeg(a, fwp + dir * FR * 0.62, fwp + dir * FR * 0.9), 0.0015) * 0.12 * litAmt * haze;
+			}
+			// ---- gold hub ----
+			col = mix(col, vec3(0.22, 0.20, 0.26), aafill(sdCircle(d, 0.024)) * haze);
+			col = mix(col, vec3(0.85, 0.66, 0.34), aafill(sdCircle(d, 0.015)) * haze);
+			lpBulb(col, a, fwp, 0.030, 0.9 * litAmt * haze, vec3(1.0, 0.86, 0.52));                // lit hub
+			// ---- passenger gondolas: hung from the rim, staying upright as the wheel turns ----
+			for (int i = 0; i < 12; i++) {
+				float ga = float(i) / 12.0 * TAU + spin;
+				vec2 anchor = fwp + vec2(cos(ga), sin(ga)) * FR;
+				float sway = 0.05 * sin(t * 1.25 + float(i) * 1.7);          // gentle pendulum swing
+				vec2 down = vec2(sin(sway), cos(sway));                      // near-vertical, gravity-hung
+				vec2 cp = anchor + down * 0.032;
+				if (abs(a.x - cp.x) < 0.05 && abs(a.y - cp.y) < 0.055) {
+					// A carnival-rainbow gondola: it's the ride's signature so it stays punchy
+					// (barely hazed). Detailed enough to read as a real cabin — a suspension
+					// hanger, a little roof, a rounded body, a bright lit window and a glossy glint.
+					vec3 gc = lpHue(float(i) / 12.0 + 0.03);
+					vec2 q = a - cp;
+					float lit = mix(haze, 1.0, 0.6);
+					col = mix(col, steel, aaline(lpSeg(a, anchor, cp - down * 0.013), 0.0016) * haze);   // suspension hanger
+					col = mix(col, gc * 0.5, aafill(sdBox(q + down * 0.016, vec2(0.017, 0.0035)) - 0.002) * lit);   // roof cap
+					col = mix(col, gc * 0.92, aafill(sdBox(q, vec2(0.014, 0.0125)) - 0.0072) * lit);                // rounded cabin body
+					col = mix(col, mix(gc, vec3(1.0), 0.6), aafill(sdBox(q, vec2(0.0085, 0.0068)) - 0.004) * lit);  // lit window
+					col = mix(col, vec3(1.0), aafill(sdCircle(q - vec2(-0.004, -0.004), 0.0026)) * 0.55 * lit);     // glossy glint
+					col += gc * smoothstep(0.03, 0.0, length(q)) * 0.45 * litAmt * haze;                            // colour bloom
+				}
+			}
+			// celebration bloom: the whole Ferris wheel blazes against the darkened sky
+			col += vec3(1.0, 0.80, 0.46) * smoothstep(FR + 0.05, 0.0, length(d)) * celeEnv * 0.30 * haze;
+			// ---- round rim bulbs: evenly spaced around the whole circumference, organic twinkle ----
+			for (int i = 0; i < 24; i++) {
+				float ba = float(i) / 24.0 * TAU + spin;
+				vec2 bp = fwp + vec2(cos(ba), sin(ba)) * FR;
+				if (abs(a.x - bp.x) < 0.028 && abs(a.y - bp.y) < 0.028) {
+					float ph = hash11(float(i) * 1.7);
+					float tw = 0.55 + 0.45 * sin(t * 1.8 + ph * TAU);
+					tw *= 0.8 + 0.2 * hash11(float(i) * 2.3);                // a few bulbs run a little dimmer -> organic
+					lpBulb(col, a, bp, 0.013, 0.5 * tw * litAmt * haze, warm);
+				}
+			}
+		}
+	}
+	// ---------- COASTER TRAIN (idle loop) ----------
+	{
+		float headX = 1.05 + fract(t * 0.05) * 0.66;
+		for (int c = 0; c < 4; c++) {
+			float cxp = headX - float(c) * 0.05;
+			if (cxp < 1.03 || cxp > 1.72) continue;
+			float cy = lpTrackY(cxp) - 0.013; vec2 cp = vec2(cxp, cy);
+			if (abs(a.x - cxp) < 0.03 && abs(a.y - cy) < 0.03) {
+				float f = win1(cxp, 1.06, 1.71, 0.06);
+				col = mix(col, vec3(0.90, 0.25, 0.20), aafill(sdBox(a - cp, vec2(0.016, 0.009)) - 0.003) * f);
+				col += warm * smoothstep(0.02, 0.0, distance(a, cp)) * 0.25 * f;
+			}
+		}
+	}
+	// ---------- CELEBRATION: THE COASTER BLAZES (cele only) ----------
+	// Re-light the baked rails so the whole roller-coaster glows warm against the
+	// darkened sky, matching the Ferris wheel's celebration bloom.
+	if (celeEnv > 0.01 && a.x > 1.02 && a.x < 1.76 && a.y < 0.44) {
+		float ty = lpTrackY(a.x);
+		vec3 rideGlow = vec3(1.0, 0.74, 0.44);
+		col += rideGlow * aaline(a.y - ty, 0.006) * celeEnv * 1.0;                        // upper rail blazes
+		col += rideGlow * aaline(a.y - ty + 0.018, 0.005) * celeEnv * 0.7;                // lower rail
+		col += rideGlow * smoothstep(0.045, 0.0, abs(a.y - ty + 0.009)) * celeEnv * 0.22; // soft halo hugging the track
+	}
+	// ---------- CELEBRATION RACE TRAIN (a single fast pass, cele only) ----------
+	if (celeEnv > 0.01) {
+		float rx = 1.03 + clamp(cele / 2.6, 0.0, 1.0) * 0.70;
+		for (int c = 0; c < 5; c++) {
+			float cxp = rx - float(c) * 0.045;
+			if (cxp < 1.03 || cxp > 1.73) continue;
+			float cy = lpTrackY(cxp) - 0.013; vec2 cp = vec2(cxp, cy);
+			if (abs(a.x - cxp) < 0.03 && abs(a.y - cy) < 0.03) {
+				col = mix(col, vec3(1.0, 0.85, 0.30), aafill(sdBox(a - cp, vec2(0.017, 0.010)) - 0.003));
+				col += warm * smoothstep(0.03, 0.0, distance(a, cp)) * 0.5;
+			}
+		}
+	}
+	// ---------- FIREWORKS (two slow idle bursts + two fast ones during a celebration) ----------
+	for (int i = 0; i < 4; i++) {
+		if (i >= 2 && celeEnv < 0.01) break;
+		float fi = float(i);
+		float period = (i < 2) ? 4.5 : 1.6;
+		float ph = t / period + hash11(fi * 3.1 + 1.0);
+		float k = floor(ph); float lt = fract(ph) * period;
+		vec2 bc = vec2((0.15 + 0.70 * hash11(k * 1.7 + fi)) * aspect, 0.08 + 0.20 * hash11(k * 2.3 + fi));
+		if (abs(a.x - bc.x) < 0.20 && abs(a.y - bc.y) < 0.20) {
+			float rad = lt * 0.13;
+			float spokes = 0.5 + 0.5 * sin(atan(a.y - bc.y, a.x - bc.x) * 16.0);
+			float ring = smoothstep(0.012, 0.0, abs(distance(a, bc) - rad)) * spokes;
+			float fade = smoothstep(1.4, 0.0, lt) * smoothstep(0.0, 0.05, lt);
+			vec3 fc = lpHue(hash11(k * 4.7 + fi));
+			float amp = (i < 2) ? 0.5 : celeEnv;
+			col += fc * ring * fade * amp;
+			col += fc * smoothstep(0.02, 0.0, distance(a, bc)) * fade * amp * 0.6;   // launch flash
+		}
+	}
+	// ---------- CONFETTI (cele only, gently falling) ----------
+	if (celeEnv > 0.01) {
+		for (int i = 0; i < 16; i++) {
+			float fi = float(i);
+			float px = hash11(fi * 2.3) * aspect;
+			float speed = 0.12 + 0.10 * hash11(fi * 3.7);
+			float yy = fract(cele * speed + hash11(fi * 5.1));
+			vec2 cp = vec2(px + 0.02 * sin(cele * 3.0 + fi), yy);
+			if (abs(a.x - cp.x) < 0.02 && abs(a.y - cp.y) < 0.02) {
+				vec3 cc = lpHue(hash11(fi * 7.3));
+				col = mix(col, cc, aafill(sdBox(a - cp, vec2(0.006, 0.003)) - 0.001) * celeEnv * 0.9);
+			}
+		}
+		// soft warm bloom behind the machine as the whole park powers on
+		col += warm * smoothstep(0.35, 0.0, distance(a, vec2(cx, 0.60))) * celeEnv * 0.15;
+	}
+	return col;
+}
+"
+const _LUNA_STATIC := _HEAD + _LUNA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	COLOR = vec4(lunaScene(a, uv), 1.0);
+}
+"
+const _LUNA_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _LUNA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = texture(static_tex, uv).rgb;
+	col = lunaMotion(col, a, uv, TIME);
+	COLOR = vec4(col, 1.0);
+}
+"
+const _LUNA_SHADER := _HEAD + _LUNA_FUNCS + "
+void fragment() {
+	vec2 uv = UV;
+	vec2 a = vec2(uv.x * aspect, uv.y);
+	vec3 col = lunaScene(a, uv);
+	col = lunaMotion(col, a, uv, TIME);
 	COLOR = vec4(col, 1.0);
 }
 "
@@ -5865,6 +6586,7 @@ const _SKIN_SHADERS := {
 	"pirate": _PIRATE_SHADER,
 	"casino": _CASINO_SHADER,
 	"phantom": _PHANTOM_SHADER,
+	"lunapark": _LUNA_SHADER,
 }
 
 # Basic static-gradient themes (80 coins each). Each entry drives the shared
@@ -5980,6 +6702,7 @@ const _NODE_PLATE := {
 	"skin:pirate": _PIRATE_STATIC,
 	"skin:casino": _CASINO_STATIC,
 	"skin:phantom": _PHANTOM_STATIC,
+	"skin:lunapark": _LUNA_STATIC,
 }
 const _NODE_DYN := {
 	"fairies": _FAIRIES_DYN,
@@ -6001,6 +6724,7 @@ const _NODE_DYN := {
 	"skin:pirate": _PIRATE_DYN,
 	"skin:casino": _CASINO_DYN,
 	"skin:phantom": _PHANTOM_DYN,
+	"skin:lunapark": _LUNA_DYN,
 }
 
 # Trivial full-screen blit: paint a baked plate texture across the _bg ColorRect
@@ -6037,6 +6761,12 @@ var _active := false
 var _river_surge_tween: Tween
 # Active tween driving the Arcade skin's global "OMG" event (omg_active 0 -> 1, hold, -> 0).
 var _omg_tween: Tween
+# Active tween driving the Jackpot skin's Stage-5 Mega Jackpot celebration (jp clock 0 -> 5).
+var _jackpot_tween: Tween
+# Active tweens driving the Luna Park skin's Light Chase (chase clock 0 -> 2) and
+# Carnival Celebration (cele clock 0 -> 4).
+var _luna_chase_tween: Tween
+var _luna_cele_tween: Tween
 
 # DEBUG: set false to hide the on-screen FPS readout before shipping. While true
 # it shows live FPS in the top-left on every screen, so we can compare the cost of
@@ -6570,6 +7300,64 @@ func arcade_omg() -> void:
 func _set_omg(v: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("omg_active", v)
+
+# Mega Jackpot Celebration — fired every 8th completed level (8, 16, 24, …) on the
+# Jackpot (casino) skin. Runs the casino dynamic shader's `jp` clock linearly 0 -> 5
+# over 3s: the hall washes through a rainbow while the gold JACKPOT sign powers on
+# letter-by-letter, glows and takes a single luxury glint, then everything eases back
+# to the warm casino look over the final stretch (the shader derives the whole
+# sequence + fade envelope from this one value, so compressing the duration just
+# plays it faster). This coroutine AWAITS the tween, so the caller can pause gameplay
+# until the lights finish; on any non-Jackpot background it returns immediately.
+func casino_jackpot() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:casino":
+		return
+	if _jackpot_tween and _jackpot_tween.is_valid():
+		_jackpot_tween.kill()
+	_set_jp(0.0)
+	_jackpot_tween = create_tween()
+	_jackpot_tween.tween_method(_set_jp, 0.0, 5.0, 3.0)
+	await _jackpot_tween.finished
+
+func _set_jp(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("jp", v)
+
+# Luna Park skin's every-3-rounds Light Chase — the environment bulbs (frame + strings +
+# rides) briefly synchronise and a crest chases around the entrance frame. Runs the
+# `chase` clock 0 -> 2 over ~2s. Fire-and-forget (never awaited): gameplay is never
+# interrupted. No-op on any non-Luna-Park background.
+func luna_light_chase() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:lunapark":
+		return
+	if _luna_chase_tween and _luna_chase_tween.is_valid():
+		_luna_chase_tween.kill()
+	_set_luna_chase(0.0)
+	_luna_chase_tween = create_tween()
+	_luna_chase_tween.tween_method(_set_luna_chase, 0.0, 2.0, 2.0)
+
+func _set_luna_chase(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("chase", v)
+
+# Luna Park skin's every-5-rounds "NICE RIDE!" celebration — the night sky dims right
+# down while the Ferris wheel and roller-coaster blaze, a fast train races across the
+# coaster, fireworks launch and confetti falls, then everything eases fully back to the
+# idle atmosphere. Runs the `cele` clock 0 -> 3 over exactly 3s (matched to the on-screen
+# "NICE RIDE!" banner's fade). Fire-and-forget so gameplay keeps flowing. No-op on any
+# non-Luna-Park background.
+func luna_celebrate() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:lunapark":
+		return
+	if _luna_cele_tween and _luna_cele_tween.is_valid():
+		_luna_cele_tween.kill()
+	_set_luna_cele(0.0)
+	_luna_cele_tween = create_tween()
+	_luna_cele_tween.tween_method(_set_luna_cele, 0.0, 3.0, 3.0)
+
+func _set_luna_cele(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("cele", v)
 
 # Build Deep Space's dynamic shader with each moving prop's random constants baked
 # in as GLSL literals (no per-pixel hash11) and every prop wrapped in a cheap

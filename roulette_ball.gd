@@ -28,6 +28,21 @@ const TOTAL := GLOW_DUR + LAP_DUR + SETTLE_DUR
 
 const TRAIL_LIFE := 0.16       # seconds a trail sample lingers behind the ball
 
+# ---- Mega Jackpot celebration (every 8th level): a continuous multi-lap roll, ~3s ----
+# The ball spins up smoothly from rest, cruises at a constant elegant speed for the
+# bulk of the celebration, then eases to a stop landing EXACTLY back on its rest
+# spot. Total time and the cruise speed are chosen so the trapezoidal velocity
+# profile integrates to a whole number of turns (see _cele_ang) — no teleport, no
+# jitter, and it comes home dead-centre beneath the numeral.
+const CELE_DUR := 3.0          # matches BackgroundManager.casino_jackpot()'s 3s tween
+const CELE_SPINUP := 0.40      # ease from rest up to cruise speed
+const CELE_SETTLE := 0.60      # ease from cruise speed back down to rest (smooth stop)
+const CELE_LAPS := 2.0         # whole turns over the whole celebration (elegant ~1.25s/lap)
+# Cruise angular speed: the spin-up and settle ramps are smoothstep, each of which
+# integrates to exactly half its rectangle, so the total swept angle is
+# OMEGA * (DUR - SPINUP/2 - SETTLE/2). Solving that == CELE_LAPS full turns:
+const CELE_OMEGA := CELE_LAPS * TAU / (CELE_DUR - 0.5 * CELE_SPINUP - 0.5 * CELE_SETTLE)
+
 # Ivory finish. Dark = the shaded/terminator side, mid = the lit body, bright = the
 # highlit cap; the specular is white and the reflected rim is warm gold (the ring).
 const IVORY_DARK := Color(0.56, 0.53, 0.46)
@@ -45,6 +60,7 @@ var _rest := Vector2.ZERO      # resting position of the ball (bottom of the rin
 var _radius := 40.0            # lap radius (rest is _orbit + (0, _radius))
 
 var _spinning := false
+var _mode := "lap"             # "lap" = single every-3 lap; "celebrate" = Stage-5 roll
 var _t := 0.0
 var _rolled := false           # rolling sound fired at lap start
 var _landed := false           # landing pulse fired at lap end
@@ -74,6 +90,7 @@ func set_geometry(center: Vector2, radius: float, rest: Vector2) -> void:
 func spin() -> void:
 	if _spinning:
 		return
+	_mode = "lap"
 	_spinning = true
 	_t = 0.0
 	_rolled = false
@@ -86,42 +103,70 @@ func spin() -> void:
 	set_process(true)
 	queue_redraw()
 
+# Stage-5 Mega Jackpot celebration: the ball rolls continuously around the ring for
+# ~5s (multiple laps at a constant elegant speed), then smoothly slows and settles
+# back onto its exact rest spot. Force-starts over any in-flight lap so the two
+# never fight. Cosmetic and self-contained — it never blocks input or the 3D wheel.
+func celebrate() -> void:
+	_mode = "celebrate"
+	_spinning = true
+	_t = 0.0
+	_rolled = true         # the roll sound is started here, not gated on GLOW_DUR
+	_landed = true         # no discrete landing pulse — the ease-to-rest reads as settling
+	_land = 0.0
+	_spawn_acc = 0.0
+	_trail.clear()
+	_sparkles.clear()
+	_prev_pos = _rest
+	AudioManager.play_roulette_roll(CELE_DUR)
+	set_process(true)
+	queue_redraw()
+
 func _process(dt: float) -> void:
 	_t += dt
-
-	# Play the soft rolling sound the instant the ball starts moving; the WAV lasts
-	# one lap and ends with a click, so the click lands as the ball drops back home.
-	if not _rolled and _t >= GLOW_DUR:
-		_rolled = true
-		AudioManager.play_roulette_roll(LAP_DUR)
-
-	# Landing pulse the instant the lap completes.
-	if not _landed and _t >= GLOW_DUR + LAP_DUR:
-		_landed = true
-		_land = 1.0
-	if _land > 0.0:
-		_land = maxf(0.0, _land - dt / SETTLE_DUR)
+	var total := CELE_DUR if _mode == "celebrate" else TOTAL
 
 	var pos := _ball_pos()
-	var lapping := _t > GLOW_DUR and _t < GLOW_DUR + LAP_DUR
 	var tangent := pos - _prev_pos
 	if tangent.length() > 0.001:
 		tangent = tangent.normalized()
 	_prev_pos = pos
 
-	# Golden motion trail: sample the ball's path while it laps, age & prune the rest.
-	if lapping:
+	# `moving` gates the trail + sparkles; `speed01` (0..1) scales sparkle density with
+	# how fast the ball is travelling, so effects swell mid-motion and thin at the ends.
+	var moving := false
+	var speed01 := 0.0
+	if _mode == "celebrate":
+		moving = _t < CELE_DUR
+		speed01 = _cele_env(_t)
+	else:
+		# Play the soft rolling sound the instant the ball starts moving; the WAV lasts
+		# one lap and ends with a click, so the click lands as the ball drops back home.
+		if not _rolled and _t >= GLOW_DUR:
+			_rolled = true
+			AudioManager.play_roulette_roll(LAP_DUR)
+		# Landing pulse the instant the lap completes.
+		if not _landed and _t >= GLOW_DUR + LAP_DUR:
+			_landed = true
+			_land = 1.0
+		moving = _t > GLOW_DUR and _t < GLOW_DUR + LAP_DUR
+		if moving:
+			speed01 = sin(PI * (_t - GLOW_DUR) / LAP_DUR)
+
+	if _land > 0.0:
+		_land = maxf(0.0, _land - dt / SETTLE_DUR)
+
+	# Golden motion trail: sample the ball's path while it moves, age & prune the rest.
+	if moving:
 		_trail.append({"pos": pos, "age": 0.0})
 	for s in _trail:
 		s["age"] += dt
 	while _trail.size() > 0 and _trail[0]["age"] > TRAIL_LIFE:
 		_trail.remove_at(0)
 
-	# Gold sparkles behind the ball — denser mid-lap (when it's fastest), none at rest.
-	if lapping:
-		var u := (_t - GLOW_DUR) / LAP_DUR
-		var speed := sin(PI * u)
-		_spawn_acc += dt * (26.0 * speed + 4.0)
+	# Gold sparkles behind the ball — denser the faster it's rolling, none at rest.
+	if moving:
+		_spawn_acc += dt * (26.0 * speed01 + 4.0)
 		while _spawn_acc >= 1.0:
 			_spawn_acc -= 1.0
 			_spawn_sparkle(pos, tangent)
@@ -135,7 +180,7 @@ func _process(dt: float) -> void:
 			alive.append(s)
 	_sparkles = alive
 
-	if _t >= TOTAL:
+	if _t >= total:
 		_spinning = false
 		_land = 0.0
 		_trail.clear()
@@ -144,6 +189,34 @@ func _process(dt: float) -> void:
 		queue_redraw()
 		return
 	queue_redraw()
+
+# Celebration velocity envelope (0..1): smoothly ramps rest->cruise over the spin-up,
+# holds at 1 through the cruise, then ramps cruise->rest over the settle. Drives both
+# sparkle density and the bloom, so effects fade in and out with the motion itself.
+func _cele_env(t: float) -> float:
+	if t < CELE_SPINUP:
+		return smoothstep(0.0, CELE_SPINUP, t)
+	if t > CELE_DUR - CELE_SETTLE:
+		return smoothstep(CELE_DUR, CELE_DUR - CELE_SETTLE, t)
+	return 1.0
+
+# Accumulated celebration angle (radians) at time t, in closed form so the ball lands
+# on an EXACT whole number of turns (== rest) with zero velocity. Velocity follows a
+# trapezoid: smoothstep ramp up (spin-up), flat CELE_OMEGA (cruise), smoothstep ramp
+# down (settle). Each smoothstep integrates to half its rectangle, giving an exact
+# total of CELE_LAPS turns; velocities match at both junctions, so there's no jerk.
+func _cele_ang(t: float) -> float:
+	t = clampf(t, 0.0, CELE_DUR)
+	var cruise_end := CELE_DUR - CELE_SETTLE
+	if t <= CELE_SPINUP:
+		var x := t / CELE_SPINUP
+		return CELE_OMEGA * CELE_SPINUP * (x * x * x - 0.5 * x * x * x * x)
+	var ang_su := 0.5 * CELE_OMEGA * CELE_SPINUP
+	if t <= cruise_end:
+		return ang_su + CELE_OMEGA * (t - CELE_SPINUP)
+	var ang_cr := ang_su + CELE_OMEGA * (cruise_end - CELE_SPINUP)
+	var w := 1.0 - (t - cruise_end) / CELE_SETTLE       # 1 -> 0 across the settle
+	return ang_cr + CELE_OMEGA * CELE_SETTLE * (0.5 - w * w * w + 0.5 * w * w * w * w)
 
 func _spawn_sparkle(pos: Vector2, tangent: Vector2) -> void:
 	# Drift slightly backward (opposite the ball's motion) plus a little scatter, so
@@ -169,6 +242,13 @@ func _ease_io(p: float) -> float:
 # bottom -> left -> top -> right -> bottom. offset(e=0)=offset(e=1)=(0,+radius)=rest,
 # so it returns to the EXACT starting position.
 func _ball_pos() -> Vector2:
+	# Stage-5 celebration: ride the continuous angle. At t=0 and t=CELE_DUR the angle
+	# is a whole multiple of TAU, so offset(-sin, cos) = (0, +radius) = exactly _rest.
+	if _mode == "celebrate":
+		if _t >= CELE_DUR:
+			return _rest
+		var ca := _cele_ang(_t)
+		return _orbit + Vector2(-sin(ca), cos(ca)) * _radius
 	if _t <= GLOW_DUR:
 		return _rest
 	var lp := (_t - GLOW_DUR) / LAP_DUR
@@ -181,6 +261,10 @@ func _ball_pos() -> Vector2:
 # Glow/bloom strength: ramps up over the pre-glow, holds through the lap, fades over
 # the settle. Drives the soft halo behind the ball — present during the animation only.
 func _glow_amount() -> float:
+	# Celebration: bloom swells in over the spin-up, holds through the cruise, and
+	# fades out over the settle (matching the motion envelope) so it's cleanly removed.
+	if _mode == "celebrate":
+		return _cele_env(_t)
 	if _t < GLOW_DUR:
 		return smoothstep(0.0, 1.0, _t / GLOW_DUR)
 	if _t < GLOW_DUR + LAP_DUR:

@@ -4,6 +4,7 @@ class_name SimonWheel
 const VolcanoCone = preload("res://volcano_cone.gd")
 const ElectricPulse = preload("res://electric_pulse.gd")
 const RouletteBall = preload("res://roulette_ball.gd")
+const LunaMarquee = preload("res://luna_marquee.gd")
 
 # A 3D Simon wheel rendered through a SubViewport and shown as a 2D widget.
 # Geometry is generated procedurally from the segment count, so it adapts to
@@ -127,6 +128,7 @@ var _num_glow: Label                 # the soft outer-glow layer (recoloured by 
 var _num_holder: Control             # holds the numeral layers (scaled for the shop preview)
 var _dot: Panel                      # status light below the numeral
 var _roulette: RouletteBall          # Jackpot skin's ivory roulette ball (replaces _dot)
+var _marquee: LunaMarquee            # Luna Park skin's ring of warm marquee bulbs
 
 # Equipped Simon customization (set via apply_skin). Each is a Color tint, a
 # pattern/motif Dictionary {"pattern": int, "a": Color, "b": Color} (shop styles,
@@ -394,6 +396,14 @@ func _build_center_overlay() -> void:
 	add_child(ball)
 	_roulette = ball
 
+	# Luna Park (lunapark) skin's ring of warm marquee bulbs, hung just outside the
+	# outer rim. Hidden off the skin; its bulb positions are computed + pushed in
+	# _layout_numeral (projected through the render camera so the ring fits the wheel).
+	var marquee := LunaMarquee.new()
+	marquee.visible = false
+	add_child(marquee)
+	_marquee = marquee
+
 	set_level(1)
 
 # Shop-preview overlay tweak: shrink the numeral and optionally hide the status
@@ -565,7 +575,7 @@ func _spawn_ejecta(origin: Vector3) -> void:
 	get_tree().create_timer(p.lifetime + 0.3).timeout.connect(p.queue_free)
 
 # Premium electric-charge pulse — the arcade "charging itself" flourish. Called by
-# game.gd every 3rd completed round, on ANY skin. Spawns a self-animating 2D lightning
+# game.gd every 3rd completed round, but only fires on the Arcade skin. Spawns a self-animating 2D lightning
 # overlay whose bolts are projected through this wheel's tilted camera so each one
 # starts exactly at the hub centre and ends exactly on the outer rim, following the
 # white divider lines between the colours. The overlay owns the visuals; at its
@@ -574,9 +584,11 @@ func _spawn_ejecta(origin: Vector3) -> void:
 func electric_pulse() -> void:
 	if _cam == null or _count <= 0:
 		return
-	# The Jackpot skin yields its every-3-rounds flourish to the roulette-ball lap
-	# (see roulette_spin), so the two premium moments — and their sounds — never clash.
-	if _skin_id == "casino":
+	# This charging flourish belongs to the Arcade skin alone — it's the arcade
+	# cabinet powering up. Every other look has its own every-3-rounds moment
+	# (Jackpot's roulette lap, Luna Park's marquee Light Chase) or none at all, so
+	# the wheel must never flash on any non-Arcade skin.
+	if _skin_id != "arcade":
 		return
 	if _electric != null and is_instance_valid(_electric):
 		return                                   # never stack two pulses
@@ -622,6 +634,33 @@ func roulette_spin() -> void:
 	if not _roulette.visible:
 		return
 	_roulette.spin()
+
+# Jackpot skin's Stage-5 Mega Jackpot celebration: the ivory ball rolls continuously
+# around the ring for ~5s (in sync with the background's JACKPOT-sign light show) then
+# smoothly settles back on its rest spot. No-op off the casino skin. Purely cosmetic —
+# never awaited, so player input is never delayed.
+func roulette_celebrate() -> void:
+	if _skin_id != "casino" or _roulette == null or not is_instance_valid(_roulette):
+		return
+	if not _roulette.visible:
+		return
+	_roulette.celebrate()
+
+# Luna Park skin's every-3-rounds Light Chase: a bright crest sweeps ~2 clockwise laps
+# around the marquee ring for ~2s. No-op off the skin. Never awaited, so input is never
+# delayed.
+func luna_light_chase() -> void:
+	if _skin_id != "lunapark" or _marquee == null or not is_instance_valid(_marquee):
+		return
+	_marquee.light_chase()
+
+# Luna Park skin's every-5-rounds Carnival Celebration: the whole marquee ring powers on
+# and an energetic crest races around it for ~4s (in sync with the background's park-wide
+# celebration), then eases back to the idle glow. No-op off the skin. Never awaited.
+func luna_celebrate() -> void:
+	if _skin_id != "lunapark" or _marquee == null or not is_instance_valid(_marquee):
+		return
+	_marquee.celebrate()
 
 # Project a wheel-space point to this Control's local pixel coords through the render
 # camera, accounting for any SubViewport/widget size mismatch so the overlay lines up.
@@ -676,6 +715,24 @@ func _layout_numeral() -> void:
 		var ring_center := size * 0.5 - Vector2(0.0, lift)
 		var rest := size * 0.5 + Vector2(0.0, DOT_GAP - lift)
 		_roulette.set_geometry(ring_center, float(DOT_GAP), rest)
+	if _marquee != null:
+		# Only the Luna Park skin shows the marquee ring. Project a circle of bulbs just
+		# outside the outer rim through the render camera (same trick electric_pulse uses
+		# for the divider endpoints), so the bulbs land on the wheel's tilted ellipse and
+		# stay fitted at any widget size. Off the skin (or before the camera exists) the
+		# ring is parked empty so it never draws or animates.
+		_marquee.visible = _skin_id == "lunapark"
+		if _skin_id == "lunapark" and _cam != null:
+			var yb := BASE_H * 0.5 + SEG_H * 0.5     # the visible wheel-top plane
+			var rb := OUTER_R * 1.15                  # bulbs ring just outside the rim
+			var nb := 24
+			var pts := PackedVector2Array()
+			for k in nb:
+				var th := TAU * float(k) / float(nb)
+				pts.append(_project(Vector3(cos(th) * rb, yb, sin(th) * rb)))
+			_marquee.set_bulbs(pts)
+		else:
+			_marquee.set_bulbs(PackedVector2Array())
 
 # ---------------- build ----------------
 
@@ -775,7 +832,7 @@ func _rebuild() -> void:
 		var frame := MeshInstance3D.new()
 		frame.mesh = _sector_mesh(a0, a1, INNER_R, OUTER_R, SEG_H)
 		frame.position.y = BASE_H * 0.5
-		frame.material_override = _ring_material(Color(0.08, 0.08, 0.095), 0.3, 0.45, 1.40)
+		frame.material_override = _frame_material(Color(0.08, 0.08, 0.095), 0.3, 0.45, 1.40)
 		_wheel_root.add_child(frame)
 		# Volcano: a wide raised sulfur-stone platform under the button (smaller
 		# margins than the button) so a broad rim of yellow volcanic rock frames it,
@@ -844,12 +901,24 @@ func _seg_material(col: Color, use_vcol: bool = false) -> StandardMaterial3D:
 	m.albedo_color = col
 	m.vertex_color_use_as_albedo = use_vcol  # darkens side/recessed faces only
 	m.metallic = 0.0                         # dielectric ABS plastic, not metal
-	m.roughness = 0.3                        # clean satin gloss (broad highlight)
-	m.specular = 0.65
-	m.clearcoat_enabled = true               # thin clear gloss coat
-	m.clearcoat = 0.3
-	m.clearcoat_roughness = 0.1
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.clearcoat_enabled = true               # thin clear gloss coat
+	if _skin_id == "lunapark":
+		# Luna Park: premium polished cast-acrylic instead of satin ABS. A near-mirror
+		# clearcoat over the rich colour reflects the studio-sky IBL sharply, so each
+		# quadrant reads as glossy glass/acrylic with real depth. The very smooth, low-
+		# roughness top lets the overhead key light lay a crisp soft highlight along the
+		# domed upper edge (the "specular near the top" the brief asks for). The emission
+		# path below is left untouched, so set_lit / the glow pulse drive exactly as before.
+		m.roughness = 0.13                   # glassy, sharp reflections (was satin 0.3)
+		m.specular = 0.9
+		m.clearcoat = 0.9                    # strong clear lacquer coat over the colour
+		m.clearcoat_roughness = 0.04         # tight, mirror-like coat highlight
+	else:
+		m.roughness = 0.3                    # clean satin gloss (broad highlight)
+		m.specular = 0.65
+		m.clearcoat = 0.3
+		m.clearcoat_roughness = 0.1
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = EMIT_OFF
@@ -974,6 +1043,13 @@ func _skin_num_pack(skin: String) -> Variant:
 			"glow": Color(0.15, 0.75, 0.35, 0.85), "glow_size": 18,
 			"outline": Color(0.05, 0.02, 0.08, 1.0), "outline_size": 4,
 		}
+	if skin == "lunapark":
+		# Warm incandescent marquee-bulb gold, like a lit carnival sign.
+		return {
+			"font": "", "color": Color(1.0, 0.85, 0.45),
+			"glow": Color(1.0, 0.62, 0.20, 0.85), "glow_size": 18,
+			"outline": Color(0.16, 0.06, 0.0, 1.0), "outline_size": 4,
+		}
 	return null
 
 # Burnt version of a button colour: same hue, dropped value + saturation so it
@@ -983,6 +1059,25 @@ func _burn_color(col: Color) -> Color:
 	var v := clampf(col.v * 0.60, 0.0, 1.0)
 	var s := clampf(col.s * 0.82, 0.0, 1.0)
 	return Color.from_hsv(col.h, s, v, col.a)
+
+# The dark divider plate that fills each button slot — the black separators BETWEEN
+# the colours. Luna Park lacquers them as glossy piano-black plastic: near-black, very
+# smooth, with a full clearcoat so they pick up soft studio reflections and read as a
+# premium moulded surface instead of the flat graphite the stock wheel uses. Every
+# other skin keeps the shared machined-metal treatment (routed through _ring_material).
+func _frame_material(stock: Color, metal: float, rough: float, heat: float) -> Material:
+	if _skin_id == "lunapark":
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.02, 0.02, 0.025)   # deep piano black (never pure 0)
+		m.metallic = 0.0                            # lacquered plastic, not metal
+		m.roughness = 0.12                          # glossy, tight reflections
+		m.specular = 0.8
+		m.clearcoat_enabled = true                  # piano-lacquer clear coat
+		m.clearcoat = 1.0
+		m.clearcoat_roughness = 0.04
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		return m
+	return _ring_material(stock, metal, rough, heat)
 
 # Pick the right material for a metallic ring/hub based on the active skin.
 # Inferno → a shared coal+lava ShaderMaterial parameterised by `heat` (lets the
@@ -1007,6 +1102,8 @@ func _ring_material(stock: Color, metal: float, rough: float, heat: float) -> Ma
 		return _casino_metal(stock, metal, rough)
 	if _skin_id == "phantom":
 		return _phantom_metal(stock, metal, rough)
+	if _skin_id == "lunapark":
+		return _lunapark_metal(stock, metal, rough)
 	# A patterned outer-ring style (Dictionary) paints the rim via the shared style
 	# shader; `shade` carries this ring's graphite value so grooves stay darker than
 	# the raised rim and the machined depth survives under the pattern.
@@ -1034,6 +1131,10 @@ func _hub_material(stock: Color) -> Material:
 		return _style_material(44, Color(0.05, 0.02, 0.02), Color(0.90, 0.70, 0.25), 1.0, HUB_R)
 	if _skin_id == "phantom":
 		return _style_material(45, Color(0.08, 0.09, 0.12), Color(0.55, 0.90, 0.65), 1.0, HUB_R)
+	if _skin_id == "lunapark":
+		# Classic red/white/gold mini Ferris wheel centrepiece (col_a is the dark
+		# night disc behind it; the motif's red/white/gold are set inside pat 46).
+		return _style_material(46, Color(0.05, 0.03, 0.06), Color(0.95, 0.72, 0.30), 1.0, HUB_R)
 	if _inner_tint is Dictionary:
 		var d: Dictionary = _inner_tint
 		return _style_material(int(d["pattern"]), d["a"], d["b"], 1.0, HUB_R)
@@ -1091,6 +1192,27 @@ func _phantom_metal(stock: Color, metal: float, rough: float) -> StandardMateria
 	m.emission_enabled = true
 	m.emission = Color(0.35, 0.85, 0.55)
 	m.emission_energy_multiplier = 0.04
+	return m
+
+# Warm polished brass for the Luna Park skin. Reuses each ring's own stock
+# brightness (already varying per call site) so the machined depth survives, then
+# pushes it warm-gold, shiny and smooth. A faint incandescent self-glow makes the
+# whole wheel read as if lit by the surrounding marquee bulbs — well under the
+# bloom threshold so the coloured quadrants stay crisp and readable.
+func _lunapark_metal(stock: Color, metal: float, rough: float) -> StandardMaterial3D:
+	var v := clampf(stock.v * 1.9 + 0.24, 0.0, 1.0)
+	var tinted := Color.from_hsv(0.10, 0.55, v)
+	# Highly metallic warm gold. A mid roughness keeps a satin brushed-metal grain
+	# (not a dead mirror), while a lacquer clearcoat floats a polished sheen on top so
+	# the rim gains reflective depth and reads as premium cast gold rather than paint.
+	var m := _metal_mat(tinted, maxf(metal, 0.88), clampf(rough, 0.18, 0.30))
+	m.specular = 0.75
+	m.clearcoat_enabled = true
+	m.clearcoat = 0.6
+	m.clearcoat_roughness = 0.08
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.72, 0.30)
+	m.emission_energy_multiplier = 0.05
 	return m
 
 # Shared style shader (rim patterns + hub motifs), compiled once like _coal_shader.
@@ -1666,6 +1788,63 @@ void fragment() {
 			float band = smoothstep(0.76, 0.80, r) * (1.0 - smoothstep(0.88, 0.92, r));
 			float ticks = step(0.85, ta) * band;
 			col = mix(col, b, ticks);
+		} else if (pat == 46) {
+			// Luna Park Ferris wheel: a handcrafted premium ornament viewed head-on — a
+			// polished-gold twin rim + gold spider spokes to a domed gold hub, with glossy
+			// alternating red/white passenger cabins hung around the rim. A soft top-left key
+			// light shades the gold and cabins so the whole piece reads three-dimensional;
+			// the gold hub medallion stays clear to back the level numeral drawn on top.
+			vec3 red    = vec3(0.88, 0.13, 0.15);
+			vec3 white  = vec3(0.98, 0.96, 0.92);
+			vec3 goldHi = vec3(1.00, 0.92, 0.58);      // lit gold (facing the key light)
+			vec3 goldLo = vec3(0.54, 0.37, 0.13);      // shadowed gold
+			vec2 keyL   = vec2(-0.55, -0.83);          // key light comes from the upper-left
+			col = a;                                   // dark disc (night behind the wheel)
+			col *= 0.80 + 0.34 * (1.0 - r);            // radial depth: centre lifts, edge falls into shadow
+			// twin polished-gold rims, shaded around the ring by the key light (metallic sheen)
+			float rimO = smoothstep(0.775, 0.795, r) * (1.0 - smoothstep(0.845, 0.865, r));
+			float rimI = smoothstep(0.690, 0.710, r) * (1.0 - smoothstep(0.740, 0.760, r));
+			float rimFace = clamp(dot(normalize(p + vec2(1e-4)), keyL), -1.0, 1.0);
+			vec3 rimCol = mix(goldLo, goldHi, 0.5 + 0.5 * rimFace);
+			col = mix(col, rimCol, max(rimO, rimI));
+			col = mix(col, vec3(1.0, 0.98, 0.86), max(rimO, rimI) * smoothstep(0.55, 1.0, rimFace) * 0.9);  // specular glint
+			// fine gold spokes from the hub out to the rim, with a bright polished core line
+			float spokes = 0.0;
+			float spokeCore = 0.0;
+			for (int i = 0; i < 12; i++) {
+				float sa = float(i) / 12.0 * TAU;
+				vec2 dir = vec2(cos(sa), sin(sa));
+				float perp = abs(p.x * dir.y - p.y * dir.x);
+				float gate = step(0.22, dot(p, dir)) * step(dot(p, dir), 0.74);
+				spokes = max(spokes, (1.0 - smoothstep(0.011, 0.019, perp)) * gate);
+				spokeCore = max(spokeCore, (1.0 - smoothstep(0.0, 0.006, perp)) * gate);
+			}
+			col = mix(col, mix(goldLo, goldHi, 0.55), spokes);
+			col = mix(col, goldHi, spokeCore * 0.85);
+			// glossy passenger cabins hung evenly around the rim (alternating red/white),
+			// tucked just inside the disc edge so the whole wheel fits the centre circle
+			float cabins = 0.0;
+			vec3 cabCol = white;
+			vec2 cabRel = vec2(0.0);
+			for (int i = 0; i < 12; i++) {
+				float ca = (float(i) + 0.5) / 12.0 * TAU;
+				vec2 cp = vec2(cos(ca), sin(ca)) * 0.88;
+				float body = 1.0 - smoothstep(0.056, 0.070, length((p - cp) * vec2(1.0, 0.82)));
+				if (body > cabins) { cabins = body; cabCol = mix(white, red, mod(float(i), 2.0)); cabRel = p - cp; }
+			}
+			// shade each cabin as a glossy painted bead: darker lower-right, hot highlight upper-left
+			vec3 cabShaded = cabCol * (0.74 + 0.34 * clamp(dot(normalize(cabRel + vec2(1e-4)), keyL), -1.0, 1.0));
+			col = mix(col, cabShaded, cabins);
+			float cabGloss = 1.0 - smoothstep(0.010, 0.020, length(cabRel - vec2(-0.018, -0.020)));
+			col = mix(col, vec3(1.0), cabins * cabGloss * 0.6);           // specular glint on the paint
+			// domed gold hub: a shaded medallion in a thin red ring, with a soft dome glint
+			float medal = 1.0 - smoothstep(0.230, 0.260, r);
+			vec3 hubCol = mix(goldLo, goldHi, 0.5 + 0.5 * clamp(dot(normalize(p + vec2(1e-4)), keyL), -1.0, 1.0));
+			col = mix(col, hubCol, medal);
+			float hubRing = smoothstep(0.240, 0.260, r) * (1.0 - smoothstep(0.285, 0.310, r));
+			col = mix(col, red, hubRing);
+			float glint = 1.0 - smoothstep(0.08, 0.16, length(p - vec2(-0.07, -0.07)));
+			col = mix(col, vec3(1.0, 0.98, 0.82), medal * glint * 0.7);
 		}
 	}
 
