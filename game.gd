@@ -545,8 +545,15 @@ func _player_pressed(idx: int) -> void:
 		# Every 3 rounds the Volcano skin's central hub volcano erupts and feeds a surge
 		# of fresh lava into the background river. Both calls are no-ops off the skin.
 		if level % 3 == 0:
+			_wheel.electric_pulse()   # premium electric charge flourish (non-casino skins)
+			_wheel.roulette_spin()    # Jackpot skin: ivory ball laps the gold ring
 			_wheel.erupt()
 			BackgroundManager.surge_river()
+		# Every 5 rounds the Arcade skin's cabinets all flash a giant glowing "OMG" for 4s.
+		# No-op off the Arcade skin. Independent of the every-3 pulse; on round 15/30 both
+		# fire together. Purely cosmetic — never awaited, so gameplay timing is untouched.
+		if level % 5 == 0:
+			BackgroundManager.arcade_omg()
 		await get_tree().create_timer(0.8).timeout
 		_next_round()
 

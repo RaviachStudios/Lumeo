@@ -2,6 +2,8 @@ extends Control
 class_name SimonWheel
 
 const VolcanoCone = preload("res://volcano_cone.gd")
+const ElectricPulse = preload("res://electric_pulse.gd")
+const RouletteBall = preload("res://roulette_ball.gd")
 
 # A 3D Simon wheel rendered through a SubViewport and shown as a 2D widget.
 # Geometry is generated procedurally from the segment count, so it adapts to
@@ -124,6 +126,7 @@ var _num_labels: Array[Label] = []   # stacked layers (glow / main / highlight)
 var _num_glow: Label                 # the soft outer-glow layer (recoloured by font packs)
 var _num_holder: Control             # holds the numeral layers (scaled for the shop preview)
 var _dot: Panel                      # status light below the numeral
+var _roulette: RouletteBall          # Jackpot skin's ivory roulette ball (replaces _dot)
 
 # Equipped Simon customization (set via apply_skin). Each is a Color tint, a
 # pattern/motif Dictionary {"pattern": int, "a": Color, "b": Color} (shop styles,
@@ -158,6 +161,19 @@ var _flow_tween: Tween
 # through the gaps then recedes. Invisible at rest (alpha keys off `erupt`).
 var _lava_tongues: Array[MeshInstance3D] = []
 var _lava_tongue_mat: ShaderMaterial
+
+# ---- Electric pulse (skin-agnostic, fires every 3 rounds) ----
+# The 2D lightning overlay (see electric_pulse.gd); non-null only while one is playing.
+# _electric_active keeps the SubViewport redrawing so the panel-glow pulse composites,
+# _flash_pulse is added to every button's emission for the ~0.2s discharge flare, and
+# _shake_time counts down a tiny 1-2px camera jitter during the discharge.
+const ELEC_PANEL_PULSE := 1.5    # emission added to every button at the discharge flash
+const ELEC_SHAKE_DUR := 0.22     # seconds of camera shake
+const ELEC_SHAKE_AMP := 0.012    # world-space jitter (~1-2px on screen); tune if needed
+var _electric: ElectricPulse
+var _electric_active := false
+var _flash_pulse := 0.0
+var _shake_time := 0.0
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -370,6 +386,14 @@ func _build_center_overlay() -> void:
 	add_child(dot)
 	_dot = dot
 
+	# Jackpot (casino) skin's status indicator: a polished ivory roulette ball that
+	# replaces the blue dot and, every 3rd round, laps the inner gold ring. Hidden off
+	# the casino skin (see _layout_numeral); positioned via set_geometry there too.
+	var ball := RouletteBall.new()
+	ball.visible = false
+	add_child(ball)
+	_roulette = ball
+
 	set_level(1)
 
 # Shop-preview overlay tweak: shrink the numeral and optionally hide the status
@@ -380,8 +404,12 @@ func set_overlay_compact(numeral_scale: float, show_dot: bool) -> void:
 		_num_holder.pivot_offset = _num_holder.size * 0.5
 		_num_holder.scale = Vector2(numeral_scale, numeral_scale)
 	if _dot != null:
-		# The Volcano skin drops the status dot entirely (it would sit on the crater).
-		_dot.visible = show_dot and _skin_id != "inferno"
+		# The Volcano skin drops the status dot entirely (it would sit on the crater);
+		# the Jackpot skin swaps it for the ivory ball, so keep the blue dot hidden.
+		_dot.visible = show_dot and _skin_id != "inferno" and _skin_id != "casino"
+	if _roulette != null:
+		# Show the resting ivory ball in the Jackpot shop preview (it never laps there).
+		_roulette.visible = show_dot and _skin_id == "casino"
 
 # One numeral layer: fills the holder and centers its glyph, so all layers align.
 func _num_label(fsize: int, col: Color) -> Label:
@@ -536,6 +564,73 @@ func _spawn_ejecta(origin: Vector3) -> void:
 	p.emitting = true
 	get_tree().create_timer(p.lifetime + 0.3).timeout.connect(p.queue_free)
 
+# Premium electric-charge pulse — the arcade "charging itself" flourish. Called by
+# game.gd every 3rd completed round, on ANY skin. Spawns a self-animating 2D lightning
+# overlay whose bolts are projected through this wheel's tilted camera so each one
+# starts exactly at the hub centre and ends exactly on the outer rim, following the
+# white divider lines between the colours. The overlay owns the visuals; at its
+# discharge moment it calls back into _on_electric_discharge for the panel-glow pulse,
+# the camera shake and the zap sound. Total effect ~0.8s; it never blocks input.
+func electric_pulse() -> void:
+	if _cam == null or _count <= 0:
+		return
+	# The Jackpot skin yields its every-3-rounds flourish to the roulette-ball lap
+	# (see roulette_spin), so the two premium moments — and their sounds — never clash.
+	if _skin_id == "casino":
+		return
+	if _electric != null and is_instance_valid(_electric):
+		return                                   # never stack two pulses
+	# Hub centre and one rim endpoint per divider (segment boundary), projected to
+	# this Control's local pixel space through the same camera that renders the wheel.
+	var y := BASE_H * 0.5 + SEG_H * 0.5          # the visible wheel-top plane
+	var center := _project(Vector3(0.0, 0.17, 0.0))
+	var step := TAU / _count
+	var ends: Array[Vector2] = []
+	for k in _count:
+		var th := _start_angle + float(k) * step
+		ends.append(_project(Vector3(cos(th) * OUTER_R, y, sin(th) * OUTER_R)))
+
+	var fx := ElectricPulse.new()
+	fx.setup(center, ends, Callable(self, "_on_electric_discharge"))
+	add_child(fx)
+	_electric = fx
+	_electric_active = true
+	_kick_render()
+	fx.tree_exited.connect(func() -> void:
+		_electric_active = false
+		_electric = null)
+
+# Fired once by the overlay the instant the bolts discharge: flare every button, kick
+# the camera shake and play the electric zap. The flare is added on top of each
+# button's normal emission by _process, so it blooms briefly then eases back.
+func _on_electric_discharge() -> void:
+	_flash_pulse = ELEC_PANEL_PULSE
+	var tw := create_tween()
+	tw.tween_method(func(v: float) -> void: _flash_pulse = v, ELEC_PANEL_PULSE, 0.0, ELEC_SHAKE_DUR) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_shake_time = ELEC_SHAKE_DUR
+	_kick_render()
+	AudioManager.play_electric_discharge()
+
+# Jackpot skin's every-3-rounds flourish: the ivory roulette ball laps the inner gold
+# ring once and settles back on its rest spot (glow -> eased lap -> land, ~1.4s, with
+# a golden trail, gold sparkles, a slight bloom and a soft rolling sound). No-op off
+# the casino skin. Purely cosmetic — never awaited, so player input is never delayed.
+func roulette_spin() -> void:
+	if _skin_id != "casino" or _roulette == null or not is_instance_valid(_roulette):
+		return
+	if not _roulette.visible:
+		return
+	_roulette.spin()
+
+# Project a wheel-space point to this Control's local pixel coords through the render
+# camera, accounting for any SubViewport/widget size mismatch so the overlay lines up.
+func _project(world: Vector3) -> Vector2:
+	var p := _cam.unproject_position(world)
+	if _vp != null and _vp.size.x > 0 and _vp.size.y > 0:
+		p *= size / Vector2(_vp.size)
+	return p
+
 func set_level(n: int) -> void:
 	var txt := str(n)
 	var fs := _fit_num_size(txt)
@@ -566,11 +661,21 @@ func _layout_numeral() -> void:
 	_num_holder.offset_top -= lift
 	_num_holder.offset_bottom -= lift
 	if _dot != null:
-		# The Volcano skin removes the status dot (it would land on the crater).
-		_dot.visible = _skin_id != "inferno"
+		# The Volcano skin removes the status dot (it would land on the crater); the
+		# Jackpot skin swaps it for the roulette ball, so hide the blue dot there too.
+		_dot.visible = _skin_id != "inferno" and _skin_id != "casino"
 		_dot.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_KEEP_SIZE)
 		_dot.offset_top += DOT_GAP - lift
 		_dot.offset_bottom += DOT_GAP - lift
+	if _roulette != null:
+		# Only the Jackpot skin shows the ivory ball. Pin it to the same spot the blue
+		# dot occupies (bottom of the inner gold ring), and set the lap to orbit the
+		# ring centre (the numeral/hub centre) at that same radius, so it rides a
+		# constant distance from the ring and returns to the exact rest position.
+		_roulette.visible = _skin_id == "casino"
+		var ring_center := size * 0.5 - Vector2(0.0, lift)
+		var rest := size * 0.5 + Vector2(0.0, DOT_GAP - lift)
+		_roulette.set_geometry(ring_center, float(DOT_GAP), rest)
 
 # ---------------- build ----------------
 
@@ -1151,10 +1256,14 @@ void fragment() {
 
 # Additive fireball shell for the eruption blast. White-hot toward the camera-facing
 # core, molten orange at the rim; `fade` (1 -> 0) drives it out. depth_draw_never so
-# it glows over the crater without punching the z-buffer.
+# it glows over the crater without punching the z-buffer. depth_test_disabled too:
+# the fireball's lower hemisphere sinks into the opaque crater cone and the flat-
+# topped button/frame sectors around it, and with depth testing on those opaque
+# faces clipped the additive glow into hard triangular/rectangular cutouts. Skipping
+# the depth test lets the dome composite cleanly over the crater as it bursts up.
 const _BLAST_SHADER := "
 shader_type spatial;
-render_mode blend_add, cull_disabled, unshaded, depth_draw_never, shadows_disabled;
+render_mode blend_add, cull_disabled, unshaded, depth_draw_never, depth_test_disabled, shadows_disabled;
 
 uniform float fade = 1.0;
 
@@ -1841,7 +1950,9 @@ func _process(dt: float) -> void:
 		else:
 			animating = true
 		var mat := _seg_mats[i]
-		mat.emission_energy_multiplier = _emit_cur[i]
+		# _flash_pulse is the electric-discharge flare: added on top of the button's
+		# normal glow so all panels bloom bright for ~0.2s, then eased back to 0.
+		mat.emission_energy_multiplier = _emit_cur[i] + _flash_pulse
 		var base: Color = _seg_base[i] if i < _seg_base.size() else Color.GRAY
 		# lit_amount is measured ABOVE the idle floor, so idle = 0 (no halo / no
 		# extra brightening) while the emission floor still keeps colors visible.
@@ -1853,13 +1964,29 @@ func _process(dt: float) -> void:
 		# fade the glow halo in/out
 		if i < _halo_mats.size():
 			var hc := _halo_mats[i].albedo_color
-			hc.a = lit_amount * HALO_ALPHA
+			# The discharge flare also blooms each panel's halo outward for the flash.
+			var flash_glow := clampf(_flash_pulse / ELEC_PANEL_PULSE, 0.0, 1.0) * HALO_ALPHA * 0.8
+			hc.a = clampf(lit_amount * HALO_ALPHA + flash_glow, 0.0, 1.0)
 			_halo_mats[i].albedo_color = hc
 		# press sink (Volcano keeps the button lifted on its sulfur stone)
 		var stone_lift := STONE_BTN_LIFT if _skin_id == "inferno" else 0.0
 		_segments[i].position.y = BASE_H * 0.5 + BTN_RAISE + stone_lift - _press[i] * PRESS_DROP
 		if _press[i] > 0.0001:
 			animating = true
+	# Electric discharge: a tiny 1-2px camera jitter that decays to nothing and snaps
+	# the camera back to its exact rest pose so the wheel never drifts.
+	if _shake_time > 0.0:
+		_shake_time -= dt
+		if _shake_time <= 0.0:
+			_shake_time = 0.0
+			_cam.look_at_from_position(CAM_POS, Vector3.ZERO, Vector3.UP)
+		else:
+			var m := _shake_time / ELEC_SHAKE_DUR
+			var off := Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0)) * ELEC_SHAKE_AMP * m
+			_cam.look_at_from_position(CAM_POS + off, Vector3.ZERO, Vector3.UP)
+	# Keep the viewport redrawing through the whole pulse (panel flare + shake).
+	if _electric_active or _flash_pulse > 0.001 or _shake_time > 0.0:
+		animating = true
 	_update_render_activity(animating)
 
 # Animated skins drive their look from shader TIME (the coal cracks / lava flow),

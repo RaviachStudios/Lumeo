@@ -18,37 +18,70 @@ static func draw_badge(c: CanvasItem, size: Vector2, art: String, accent: Color,
 	var acc := accent if earned else SLATE
 	var ink := Color(0.98, 0.98, 1.0) if earned else SLATE_INK
 
-	# Soft outer glow for earned badges (concentric fading rings).
+	# Soft coloured glow for earned badges — a wider, softer halo than before so the
+	# medallion reads as lit from within rather than outlined.
 	if earned:
-		for i in 6:
-			var t := float(i) / 5.0
-			c.draw_circle(center, R * (0.96 + 0.16 * t), Color(acc.r, acc.g, acc.b, 0.05 * (1.0 - t)))
+		for i in 9:
+			var t := float(i) / 8.0
+			c.draw_circle(center, R * (0.94 + 0.26 * t), Color(acc.r, acc.g, acc.b, 0.055 * (1.0 - t)))
 
-	# Beveled metal rim.
-	c.draw_circle(center, R, Color(0.04, 0.05, 0.10, 1.0))
+	# Contact shadow — grounds the medallion against the panel so it feels raised.
+	c.draw_circle(center + Vector2(0, R * 0.07), R * 1.0, Color(0.0, 0.0, 0.0, 0.30))
+
+	# ── Metallic medal frame ──
+	# A clean circular rim — no teeth or notches. A crisp dark outer edge, then a
+	# radial brushed-metal band (outer darker → inner brighter) reading as machined
+	# steel/titanium, finished with a thicker outer rim and a thinner inner rim.
+	c.draw_circle(center, R, Color(0.03, 0.04, 0.09, 1.0))
 	c.draw_circle(center, R * 0.965, acc.darkened(0.42))
-	c.draw_circle(center, R * 0.90, acc.lightened(0.18) if earned else acc.lightened(0.05))
-	# Coin-edge notches around the rim.
-	var notch_col := acc.darkened(0.55)
-	for k in 44:
-		var a := TAU * float(k) / 44.0
-		var d := Vector2(cos(a), sin(a))
-		c.draw_line(center + d * (R * 0.905), center + d * (R * 0.965), notch_col, 1.5)
+	# Radial metal gradient across the whole ring band (down to the inner disc).
+	var band_lo := acc.darkened(0.20) if earned else acc.lightened(0.00)
+	var band_hi := acc.lightened(0.34) if earned else acc.lightened(0.16)
+	for i in 9:
+		var t := float(i) / 8.0
+		c.draw_circle(center, lerpf(R * 0.960, R * 0.840, t), band_lo.lerp(band_hi, t))
+	# Two engraved concentric grooves in place of gear teeth: a fine recessed dark
+	# line with a hairline highlight just inside it, like a milled ring catching light.
+	c.draw_arc(center, R * 0.912, 0, TAU, 72, Color(0.0, 0.0, 0.0, 0.22), 1.5)
+	var g_lite := acc.lightened(0.52) if earned else acc.lightened(0.26)
+	c.draw_arc(center, R * 0.898, 0, TAU, 72, Color(g_lite.r, g_lite.g, g_lite.b, 0.30), 1.0)
+	# Soft directional bevel: a broad light arc top-left (lit from above-left) and a
+	# gentle shadow arc bottom-right, giving the rim rounded depth without hard edges.
+	var rw := R * 0.075
+	var hi := acc.lightened(0.66) if earned else acc.lightened(0.36)
+	c.draw_arc(center, R * 0.925, PI * 0.98, PI * 1.60, 32, Color(hi.r, hi.g, hi.b, 0.85), rw, true)
+	c.draw_arc(center, R * 0.925, -PI * 0.04, PI * 0.54, 32, Color(0.0, 0.0, 0.0, 0.28), rw, true)
+	# Small specular glints spaced around the rim, brightest near the light source.
+	var glints: Array[float] = [PI * 1.28, PI * 1.02, PI * 0.22]
+	var glint_a := [0.55, 0.34, 0.22] if earned else [0.30, 0.18, 0.12]
+	for gi in glints.size():
+		var ga: float = glints[gi]
+		var gd := Vector2(cos(ga), sin(ga))
+		c.draw_circle(center + gd * (R * 0.925), R * 0.042, Color(1, 1, 1, glint_a[gi]))
+	# Thin inner rim framing the disc well, a shade darker to seat the icon.
+	c.draw_circle(center, R * 0.845, acc.darkened(0.34) if earned else acc.lightened(0.03))
 
-	# Inner disc (dark, faintly accent-tinted) + top sheen.
-	var disc := Color(0.09, 0.10, 0.16).lerp(acc, 0.14)
-	c.draw_circle(center, R * 0.82, disc.darkened(0.10))
-	c.draw_circle(center, R * 0.82, disc)
-	c.draw_circle(center + Vector2(0, -R * 0.34), R * 0.52, Color(1, 1, 1, 0.06 if earned else 0.03))
+	# ── Inner disc ──
+	# A recessed well: dark rim ring, gradient face, a soft top sheen and a gentle
+	# shadow pooled beneath where the emblem sits, giving the icon real depth.
+	var disc := Color(0.09, 0.10, 0.16).lerp(acc, 0.15 if earned else 0.05)
+	c.draw_circle(center, R * 0.83, disc.darkened(0.35))
+	c.draw_circle(center, R * 0.80, disc)
+	# Radial face shading (brighter toward top).
+	c.draw_circle(center + Vector2(0, -R * 0.10), R * 0.72, disc.lightened(0.06))
+	c.draw_circle(center + Vector2(0, R * 0.28), R * 0.50, Color(0.0, 0.0, 0.0, 0.18))
+	c.draw_circle(center + Vector2(0, -R * 0.32), R * 0.50, Color(1, 1, 1, 0.075 if earned else 0.035))
 
 	# Emblem.
 	var er: float = R * 0.52
 	_emblem(c, art, center, er, ink, acc, earned, num)
 
-	# Locked: mute the (often intrinsically-coloured) emblem toward a silhouette,
-	# then stamp a padlock chip lower-right.
+	# Locked: mute the (often intrinsically-coloured) emblem toward a silhouette and
+	# add a recessed inner shadow so it reads as a sunken, not-yet-earned slot; then
+	# stamp a padlock chip lower-right. Kept readable, just lower contrast.
 	if not earned:
-		c.draw_circle(center, R * 0.82, Color(0.10, 0.11, 0.17, 0.62))
+		c.draw_circle(center, R * 0.80, Color(0.10, 0.11, 0.17, 0.58))
+		c.draw_arc(center, R * 0.70, PI * 0.94, PI * 1.62, 22, Color(0.0, 0.0, 0.0, 0.28), R * 0.10, true)
 		_lock(c, center + Vector2(R * 0.52, R * 0.52), R * 0.26)
 
 # ─── emblem dispatch ─────────────────────────────────────────────────────────

@@ -1066,9 +1066,9 @@ const SKIN_DEFS := [
 	{"id": "inferno", "label": "VOLCANO", "released": true},
 	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
 	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
-	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin."},
+	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin.", "released": true},
 	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
-	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets."},
+	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets.", "released": true},
 	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
 ]
 

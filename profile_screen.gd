@@ -93,6 +93,15 @@ func _build_backdrop() -> void:
 	_backdrop.color = Color(0.01, 0.02, 0.06, 0.66)
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
 	_backdrop.gui_input.connect(_on_backdrop_click)
+	# Faint ambient light pooled behind the dialog — lifts the scrim off dead-flat
+	# without introducing any texture or shifting the base colour.
+	_backdrop.draw.connect(func() -> void:
+		var ctr := _backdrop.size * 0.5
+		var rad := _backdrop.size.length() * 0.5
+		for i in 6:
+			var t := float(i) / 5.0
+			_backdrop.draw_circle(ctr, rad * (0.32 + 0.5 * t),
+				Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.02 * (1.0 - t))))
 	add_child(_backdrop)
 
 func _build_dialog() -> void:
@@ -106,6 +115,7 @@ func _build_dialog() -> void:
 	ds.set_border_width_all(2)
 	ds.shadow_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.35)
 	ds.shadow_size = 30
+	_polish(ds)
 	_dialog.add_theme_stylebox_override("panel", ds)
 	add_child(_dialog)
 
@@ -118,6 +128,15 @@ func _build_dialog() -> void:
 	bs.bg_color = Color(0.085, 0.10, 0.24, 0.92)
 	bs.corner_radius_top_left = 24
 	bs.corner_radius_top_right = 24
+	_polish(bs)
+	band.add_theme_stylebox_override("panel", bs)
+	# A crisp light line along the header's lower edge + a top sheen give the band a
+	# glassy, backlit feel that separates it from the body.
+	band.draw.connect(func() -> void:
+		_vgrad(band, Rect2(2, 1.5, _dw - 8, 26),
+			Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.0))
+		_vgrad(band, Rect2(14, 58, _dw - 32, 2),
+			Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.0), Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.28)))
 	_dialog.add_child(band)
 
 	var title := Label.new()
@@ -157,8 +176,11 @@ func _build_left_panel() -> void:
 	ps.set_corner_radius_all(20)
 	ps.border_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.28)
 	ps.set_border_width_all(1)
+	_polish(ps)
+	_elevate(ps, 0.32, 12, 5.0)
 	panel.add_theme_stylebox_override("panel", ps)
 	_dialog.add_child(panel)
+	_add_depth(panel, panel.size, 20, 0.05, 0.22)
 
 	var signed := FirebaseManager.is_signed_in() and FirebaseManager.has_display_name()
 	var uname := FirebaseManager.display_name if signed else "Guest"
@@ -199,12 +221,9 @@ func _build_left_panel() -> void:
 	panel.add_child(coins_chip)
 	panel.add_child(badge_chip)
 
-	# Divider.
-	var div := ColorRect.new()
-	div.color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.18)
+	# Divider — a hairline that fades out at both ends.
+	var div := _soft_divider(LW - 56, ACCENT)
 	div.position = Vector2(28, 186)
-	div.size = Vector2(LW - 56, 1)
-	div.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(div)
 
 	var sect := Label.new()
@@ -237,9 +256,13 @@ func _stat_row(d: Dictionary, sz: Vector2) -> Control:
 	sb.set_corner_radius_all(14)
 	sb.border_color = Color(accent.r, accent.g, accent.b, 0.45)
 	sb.set_border_width_all(1)
+	_polish(sb)
+	_elevate(sb, 0.28, 6, 3.0)
 	row.add_theme_stylebox_override("panel", sb)
+	_add_depth(row, sz, 14, 0.05, 0.16)
 
-	# Left accent bar.
+	# Left accent bar — a soft glow bleeds off its inner edge so the accent reads as
+	# a lit strip rather than a painted stripe.
 	var bar := Panel.new()
 	bar.position = Vector2(0, 0)
 	bar.size = Vector2(5, sz.y)
@@ -248,6 +271,9 @@ func _stat_row(d: Dictionary, sz: Vector2) -> Control:
 	bs.bg_color = accent
 	bs.corner_radius_top_left = 14
 	bs.corner_radius_bottom_left = 14
+	bs.shadow_color = Color(accent.r, accent.g, accent.b, 0.5)
+	bs.shadow_size = 5
+	_polish(bs)
 	bar.add_theme_stylebox_override("panel", bs)
 	row.add_child(bar)
 
@@ -305,8 +331,14 @@ func _chip(text: String, accent: Color, coin: bool) -> Control:
 	sb.set_corner_radius_all(20)
 	sb.border_color = Color(accent.r, accent.g, accent.b, 0.65)
 	sb.set_border_width_all(1)
+	_polish(sb)
+	_elevate(sb, 0.30, 6, 3.0)
 	p.add_theme_stylebox_override("panel", sb)
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Embossed pill: a bright sheen along the top curve, a subtle shadow below.
+	p.draw.connect(func() -> void:
+		_vgrad(p, Rect2(14, 1.5, w - 28, 18), Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.0))
+		_vgrad(p, Rect2(14, 24, w - 28, 15), Color(0, 0, 0, 0.0), Color(0, 0, 0, 0.16)))
 	var dot := _dot(accent, coin)
 	dot.position = Vector2(12, 8)
 	p.add_child(dot)
@@ -327,11 +359,19 @@ func _dot(accent: Color, coin: bool) -> Control:
 	c.size = Vector2(24, 24)
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	c.draw.connect(func() -> void:
+		var ctr := Vector2(12, 12)
+		# Soft contact shadow under the disc for a raised, minted look.
+		c.draw_circle(ctr + Vector2(0, 1.5), 11, Color(0.0, 0.0, 0.0, 0.28))
 		if coin:
-			c.draw_circle(Vector2(12, 12), 11, Color(0.95, 0.78, 0.20))
-			c.draw_circle(Vector2(12, 12), 8, Color(1.0, 0.88, 0.36))
+			c.draw_circle(ctr, 11, Color(0.72, 0.52, 0.10))
+			c.draw_circle(ctr, 10, Color(0.95, 0.78, 0.20))
+			c.draw_circle(ctr, 8, Color(1.0, 0.88, 0.36))
+			# Top-left specular highlight.
+			c.draw_circle(ctr + Vector2(-2.6, -2.8), 3.0, Color(1.0, 0.96, 0.72, 0.7))
 		else:
-			c.draw_circle(Vector2(12, 12), 10, accent))
+			c.draw_circle(ctr, 10, accent.darkened(0.25))
+			c.draw_circle(ctr, 9, accent)
+			c.draw_circle(ctr + Vector2(-2.4, -2.6), 2.8, Color(1, 1, 1, 0.4)))
 	return c
 
 # ─── right badge gallery ─────────────────────────────────────────────────────
@@ -345,6 +385,11 @@ func _build_right_panel() -> void:
 	header.text = "BADGES"
 	header.add_theme_font_size_override("font_size", 24)
 	header.add_theme_color_override("font_color", Color.WHITE)
+	# Subtle glow — reserved for major headings only.
+	header.add_theme_color_override("font_shadow_color", Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.55))
+	header.add_theme_constant_override("shadow_offset_x", 0)
+	header.add_theme_constant_override("shadow_offset_y", 1)
+	header.add_theme_constant_override("shadow_outline_size", 5)
 	header.position = Vector2(right_x, CONTENT_TOP)
 	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dialog.add_child(header)
@@ -399,6 +444,9 @@ func _section_header(text: String, accent: Color) -> Control:
 	var bs := StyleBoxFlat.new()
 	bs.bg_color = accent
 	bs.set_corner_radius_all(3)
+	bs.shadow_color = Color(accent.r, accent.g, accent.b, 0.45)
+	bs.shadow_size = 4
+	_polish(bs)
 	bar.add_theme_stylebox_override("panel", bs)
 	h.add_child(bar)
 	var lbl := Label.new()
@@ -494,10 +542,13 @@ func _show_detail(b: Dictionary, earned: bool) -> void:
 	cs.set_corner_radius_all(24)
 	cs.border_color = accent if earned else Color(0.35, 0.38, 0.48)
 	cs.set_border_width_all(2)
-	cs.shadow_color = Color(accent.r, accent.g, accent.b, 0.4 if earned else 0.0)
+	cs.shadow_color = Color(accent.r, accent.g, accent.b, 0.4 if earned else 0.18)
 	cs.shadow_size = 24
+	cs.shadow_offset = Vector2(0, 8)
+	_polish(cs)
 	card.add_theme_stylebox_override("panel", cs)
 	overlay.add_child(card)
+	_add_depth(card, card.size, 24, 0.055, 0.20)
 
 	# Explicit ✕ so there's always an obvious way out (tapping the dim area works
 	# too, but a visible close affordance is clearer, especially on a phone).
@@ -607,6 +658,65 @@ func _recenter() -> void:
 
 func _exit_tree() -> void:
 	_rank_token += 1
+
+# ─── premium-polish helpers ──────────────────────────────────────────────────
+# Small, layout-neutral touches that lift the flat panels toward a modern-game
+# look: smoother anti-aliased corners, softly blended borders, and drawn-in light
+# (a top sheen + a bottom inner shadow) that no flat StyleBox can express.
+
+func _polish(sb: StyleBoxFlat) -> void:
+	sb.anti_aliasing = true
+	sb.anti_aliasing_size = 1.0
+	sb.corner_detail = 12
+	sb.border_blend = true
+
+func _elevate(sb: StyleBoxFlat, strength := 0.34, size := 10, offset := 4.0) -> void:
+	# Cast a soft ambient shadow so the panel appears to float above its backing.
+	sb.shadow_color = Color(0.0, 0.0, 0.0, strength)
+	sb.shadow_size = size
+	sb.shadow_offset = Vector2(0, offset)
+
+# A vertical gradient quad (draw_polygon carries per-vertex colours — the one way
+# to get a true gradient out of Godot's immediate draw API).
+func _vgrad(c: CanvasItem, r: Rect2, top: Color, bot: Color) -> void:
+	var pts := PackedVector2Array([
+		r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)])
+	c.draw_polygon(pts, PackedColorArray([top, top, bot, bot]))
+
+# Overlay a panel with a top highlight sheen and a pooled bottom inner-shadow.
+# Inset horizontally by the corner radius so the straight gradient never pokes
+# past the rounded corners. Added before a panel's content so text stays crisp.
+func _add_depth(panel: Control, sz: Vector2, corner: float, top_hi := 0.06, bot_sh := 0.20) -> void:
+	var ov := Control.new()
+	ov.position = Vector2.ZERO
+	ov.size = sz
+	ov.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var inset := corner * 0.6
+	ov.draw.connect(func() -> void:
+		var hh := minf(sz.y * 0.5, 54.0)
+		_vgrad(ov, Rect2(inset, 1.5, sz.x - 2.0 * inset, hh),
+			Color(1, 1, 1, top_hi), Color(1, 1, 1, 0.0))
+		var sh := minf(sz.y * 0.5, 46.0)
+		_vgrad(ov, Rect2(inset, sz.y - sh - 1.5, sz.x - 2.0 * inset, sh),
+			Color(0, 0, 0, 0.0), Color(0, 0, 0, bot_sh)))
+	panel.add_child(ov)
+
+# A hairline divider that fades to nothing at both ends — more elegant than a
+# hard 1px rule.
+func _soft_divider(width: float, col: Color) -> Control:
+	var d := Control.new()
+	d.custom_minimum_size = Vector2(width, 2)
+	d.size = Vector2(width, 2)
+	d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	d.draw.connect(func() -> void:
+		var mid := Color(col.r, col.g, col.b, 0.34)
+		var edge := Color(col.r, col.g, col.b, 0.0)
+		var h := width * 0.5
+		d.draw_polygon(PackedVector2Array([Vector2(0, 0), Vector2(h, 0), Vector2(h, 1), Vector2(0, 1)]),
+			PackedColorArray([edge, mid, mid, edge]))
+		d.draw_polygon(PackedVector2Array([Vector2(h, 0), Vector2(width, 0), Vector2(width, 1), Vector2(h, 1)]),
+			PackedColorArray([mid, edge, edge, mid])))
+	return d
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 

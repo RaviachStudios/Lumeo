@@ -3966,7 +3966,8 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 	const float ERUPT   = 4.5;                           // violent summit eruption duration
 	const float DESCEND = 9.0;                           // the lava front creeps DOWN to the river slowly, over 9s
 	const float TICK    = 10.0;                          // ONE fresh eruption every 10 seconds
-	const float riverY = 0.885;                          // where flows pour into the river
+	// where each stream ends is no longer a fixed line — it descends to the actual winding river
+	// channel (riverCenter/riverHalf) at its own column, so it always merges into the flow.
 	// fixed no-adjacent-repeat firing order (wrap-safe over its length), indexed by tick number
 	const int VSEQ[61] = int[61](2, 1, 2, 3, 2, 3, 1, 2, 0, 3, 0, 2, 3, 2, 0, 2, 0, 3, 1, 2,
 								 3, 2, 1, 0, 3, 0, 1, 0, 2, 1, 3, 2, 0, 2, 3, 1, 0, 2, 1, 0,
@@ -4109,7 +4110,9 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		// --- the molten stream running down the flank and across the plain to the river ---
 		// It EMERGES from the vent mouth (organic, turbulent, breathing width) and widens as it
 		// descends — never a thin ribbon pinned to a flat summit edge.
-		float yy = clamp((a.y - v.y) / (riverY - v.y), 0.0, 1.0);   // 0 crater .. 1 river
+		float rCen = riverCenter(a.x);                              // the winding channel's y at THIS column
+		float rHlf = riverHalf(a.x);
+		float yy = clamp((a.y - v.y) / (rCen - v.y), 0.0, 1.0);   // 0 crater .. 1 the actual river centre (this column)
 		float cx = vent.x
 				 + dir * v.z * 0.42 * smoothstep(0.03, 0.9, yy)     // veer strongly onto ONE flank (down the side, not the front face)
 				 + v.z * 0.06 * sin(yy * 7.0 + cid) * yy            // meander downhill
@@ -4121,22 +4124,60 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		float topEdge = v.y + 0.018 + (fbm(vec2(a.x * 55.0 + v.w, cid)) - 0.5) * 0.012;    // ragged start (no flat edge), tucked under the mouth
 		float below = smoothstep(topEdge - 0.008, topEdge + 0.018, a.y);
 		float lead  = smoothstep(front + 0.05, front - 0.05, yy);   // lava has reached the front
-		// the stream must FINISH INSIDE the river — it can NEVER cross to the far bank. Fade the
-		// flow out across the near half of the channel so it dissipates into the molten river.
-		float riverCut = smoothstep(riverY + 0.028, riverY - 0.004, a.y);
-		// far-right cone (i==1) spilling down its LEFT flank runs INTO the big right cone (i==2).
-		// Stop the molten stream at their connection/saddle line instead of drawing lava over the
-		// neighbour: cut it wherever the big right cone's body would occlude this spot.
-		float ncut = 1.0;
-		if (i == 1 && dir < 0.0) {
-			vec4 vR = volc(2);
-			float dxR; float fracR;
-			float topR = coneTop(vR, a.x, dxR, fracR);
-			float coveredY = smoothstep(topR - 0.006, topR + 0.012, a.y);        // below the big-right silhouette
-			float inBase   = smoothstep(vR.z + 0.006, vR.z - 0.006, abs(dxR));   // within the big-right base
-			ncut = 1.0 - coveredY * inBase;
+		// the stream must FINISH INSIDE the river — it can NEVER cross to the far bank. It runs down
+		// to the ACTUAL winding channel at this column (rCen/rHlf, not a fixed line) so it never stops
+		// short beside the river nor overshoots it, fading out across the near half so it dissipates
+		// seamlessly into the molten flow.
+		float riverCut = smoothstep(rCen + 0.006, rCen - rHlf - 0.004, a.y);
+		// OCCLUSION — a stream may only paint its OWN cone's flank or the open plain; it must never
+		// render across the surface of any OTHER volcano. Treat it as a visibility test: at each
+		// fragment work out which cone is the front-most one covering it (cones draw short -> tall,
+		// so a higher index = nearer = drawn on top). The flow survives only where that front cone
+		// is cone i itself (its own flank) or where NO cone covers the fragment (sky gap / plain);
+		// anywhere another cone is the visible surface the flow is cut, so the lit stream ends
+		// EXACTLY at that cone's silhouette and reads as continuing hidden behind it.
+		//   • a NEARER cone (k > i) stands in front -> it always occludes, even over cone i's flank.
+		//   • a FARTHER cone (k < i) only shows where cone i's OWN body is absent -> cut only there,
+		//     so the stream can't float across a distant peak while still hugging its own flank.
+		// Gated to the SLOPES: below the crest the plain is drawn over every cone foot, so down
+		// there the flow runs freely into the river and occludes nothing. The soft smoothstep on
+		// each cone's silhouette gives a clean, natural edge into the hidden zone (no hard clip).
+		float onSlopes = smoothstep(groundTop(a.x) + 0.010, groundTop(a.x) - 0.010, a.y);  // 1 above the crest, 0 on the plain
+		float ownCover = 0.0, nearerCover = 0.0, fartherCover = 0.0;
+		for (int k = 0; k < 4; k++) {
+			vec4 vk = volc(k);
+			float dxk; float frack;
+			float topk = coneTop(vk, a.x, dxk, frack);
+			float coverk = smoothstep(topk - 0.006, topk + 0.012, a.y)          // below cone-k's silhouette
+						 * smoothstep(vk.z + 0.006, vk.z - 0.006, abs(dxk));     // within cone-k's base
+			if      (k == i) ownCover     = coverk;
+			else if (k >  i) nearerCover  = max(nearerCover,  coverk);
+			else             fartherCover = max(fartherCover, coverk);
 		}
-		float trail = sc * below * lead * riverCut * ncut;
+		float ncut = 1.0 - max(nearerCover, fartherCover * (1.0 - ownCover)) * onSlopes;
+		// CONE 3 (the big volcano beside the board) is SACRED: a NEIGHBOUR's stream may NEVER
+		// render on it. Only cone 3's own eruption (i == 3) is allowed to draw lava on cone 3.
+		// The generic occlusion above fades out over a soft band that bleeds a hair onto the rock
+		// and can slip through where the ground crest dips into the saddle; this is a hard, explicit
+		// cut that kills any non-cone-3 stream the instant it reaches cone 3's silhouette. The band
+		// completes a touch ABOVE the silhouette (in the sky/gap) so the flow ends cleanly at the
+		// mountain edge with zero spill onto its face.
+		if (i != 3) {
+			vec4 v3 = volc(3);
+			float dx3; float frac3;
+			float top3 = coneTop(v3, a.x, dx3, frac3);
+			float onBody3 = smoothstep(top3 - 0.014, top3 - 0.002, a.y)        // 1 at/below the silhouette, ramping up just ABOVE it
+						  * smoothstep(v3.z + 0.002, v3.z - 0.008, abs(dx3));   // within cone 3's base (cut a hair inside its edge)
+			ncut *= (1.0 - onBody3 * onSlopes);                                // only where cone 3 is the DRAWN surface (not buried by the plain)
+		}
+		// The volcanoes LEFT of the board (far-left cone 0 and the big cone 3) sit right up against
+		// the wheel; their streams must STOP at the CONNECTION POINT — the base of the flank where it
+		// meets the plain — and never cross onto the plain or into the river. onSlopes is exactly that
+		// line (1 on the flank, 0 on the plain), so it caps the flow at the foot. The right-side cones
+		// still run all the way down into the river (riverCut).
+		bool  leftCone  = (i == 0 || i == 3);
+		float bottomCut = leftCone ? onSlopes : riverCut;
+		float trail = sc * below * lead * bottomCut * ncut;
 		if (trail > 0.001) {
 			float shim = fbm(vec2((a.x - cx) * 40.0, a.y * 30.0 - t * 2.0));
 			vec3 hot = mix(vec3(1.0, 0.28, 0.04), vec3(1.0, 0.85, 0.42), 0.4 + 0.5 * shim);
@@ -4145,11 +4186,12 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 			col = mix(col, sccol, trail * fade);
 			col += vec3(1.0, 0.42, 0.12) * trail * glow * fade * 0.5;     // glow spilling off, only while hot
 			// bright advancing tongue at the creeping lava front — glows the whole slow descent
-			float tongue = smoothstep(0.045, 0.0, abs(yy - front)) * sc * glow * riverCut * ncut;
+			float tongue = smoothstep(0.045, 0.0, abs(yy - front)) * sc * glow * bottomCut * ncut;
 			col += vec3(1.0, 0.8, 0.4) * tongue * 0.7;
 		}
 		// bright splash where the stream finally pours into the river as the front arrives
-		if (front > 0.9) {
+		// (only the right cones reach the river — the left ones stop at the connection point)
+		if (front > 0.9 && !leftCone) {
 			col += vec3(1.0, 0.55, 0.18) * smoothstep(0.075, 0.0, distance(a, vec2(cx, riverCenter(cx)))) * glow * 0.6 * ncut;
 		}
 	}
@@ -4664,100 +4706,498 @@ void fragment() {
 # scanline shimmer, per-cabinet marquee flicker and a slow floor light sweep.
 # ---------------------------------------------------------------------------
 const _ARCADE_FUNCS := "
-vec3 marqueeColor(float fi) {
-	float m = mod(fi, 3.0);
-	if (m < 1.0) { return vec3(1.0, 0.15, 0.55); }
-	if (m < 2.0) { return vec3(0.15, 0.85, 1.0); }
-	return vec3(0.65, 0.25, 1.0);
+// ===== Premium neon arcade hall ===================================================
+// Two SYMMETRIC rows of vintage upright cabinets recede down the left and right
+// walls toward a vanishing point behind the (centre) Simon wheel; the middle is
+// left wide open so nothing sits behind the wheel. A synthwave neon grid floor,
+// converging ceiling light strips and a hazy back wall frame the play area and pull
+// the eye inward. arcadeScene() bakes every solid form (bodies, marquees, panels,
+// joysticks, buttons, speaker grills, dark CRT bezels, floor, walls, ceiling);
+// arcadeMotion() lights the CRTs with animated stylised games, flickers the
+// marquees, shimmers scanlines, floats dust through the neon, reflects the cabinet
+// glow on the floor and drifts a soft light sweep across the grid.
+
+// Classic arcade neon palette: cyan / hot-pink / violet / electric-blue / pink.
+vec3 neonPal(float i) {
+	float m = mod(i, 5.0);
+	if (m < 1.0) { return vec3(0.16, 0.92, 1.0); }
+	if (m < 2.0) { return vec3(1.0, 0.22, 0.62); }
+	if (m < 3.0) { return vec3(0.62, 0.32, 1.0); }
+	if (m < 4.0) { return vec3(0.30, 0.52, 1.0); }
+	return vec3(1.0, 0.42, 0.82);
 }
-// Per-cabinet placement, shared by scene + motion so the glow lines up exactly.
-// out cc = cabinet centre, out cw/ch = half-extents, returns marquee colour.
-vec3 cabinet(float fi, out vec2 cc, out float cw, out float ch, out float dscale) {
+// Perspective-aware neon grid line: bright, thin near the viewer, fading + widening
+// with distance (fwidth) so it never aliases toward the horizon.
+float gline(float v) { float f = abs(fract(v) - 0.5); float w = fwidth(v) * 1.3 + 0.012; return smoothstep(0.5 - w, 0.5, f); }
+
+// Rounded box + capsule segment — extra primitives the cabinet anatomy leans on.
+float sdRBox(vec2 p, vec2 b, float r) { vec2 d = abs(p) - b + r; return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - r; }
+float sdSeg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a; vec2 ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+
+// ----- Cabinet DESIGNS ------------------------------------------------------------
+// Five distinct machines, 'collected over the years': 0 blue (wide flat marquee),
+// 1 purple (curved crown + rounded sides), 2 red (sharp angular edges), 3 cyan
+// (swept Sega-style futuristic), 4 black (near-black body, hot neon trim). Each id
+// drives a body colour, an accent-neon colour, a corner-rounding amount and a set
+// of small shape tweaks branched inline in drawCabBody / arcadeMotion.
+vec3 arcAccent(int st) {
+	if (st == 0) { return vec3(0.28, 0.55, 1.0); }   // electric blue
+	if (st == 1) { return vec3(0.72, 0.34, 1.0); }   // violet
+	if (st == 2) { return vec3(1.0, 0.30, 0.34); }   // red
+	if (st == 3) { return vec3(0.20, 0.95, 1.0); }   // cyan
+	return vec3(0.34, 1.0, 0.60);                    // neon green (black cab)
+}
+vec3 arcBody(int st) {
+	if (st == 0) { return vec3(0.06, 0.10, 0.20); }
+	if (st == 1) { return vec3(0.12, 0.06, 0.18); }
+	if (st == 2) { return vec3(0.17, 0.05, 0.07); }
+	if (st == 3) { return vec3(0.05, 0.11, 0.13); }
+	return vec3(0.035, 0.035, 0.05);
+}
+float arcRound(int st) {                             // body corner rounding (frac of cw)
+	if (st == 1) { return 0.45; }                    // purple: soft rounded sides
+	if (st == 3) { return 0.30; }                    // cyan: gently rounded
+	if (st == 2) { return 0.03; }                    // red: hard angular
+	if (st == 4) { return 0.12; }
+	return 0.09;                                     // blue
+}
+int arcStyleOf(float fi) {                           // deliberate spread so all 5 appear
+	int i = int(fi);
+	if (i == 0) { return 0; } if (i == 1) { return 3; }
+	if (i == 2) { return 2; } if (i == 3) { return 1; }
+	if (i == 4) { return 4; } if (i == 5) { return 3; }
+	if (i == 6) { return 0; } return 2;
+}
+
+// Shared per-cabinet placement — scene + motion MUST agree exactly. fi in 0..7:
+// even = left wall, odd = right wall; depth = fi/2 (0 nearest .. 3 farthest). Farther
+// cabinets are smaller (dscale), higher on the floor and closer to centre — but never
+// behind the wheel. Per-cabinet hash jitter (offset, height, tilt) keeps the row from
+// reading as a perfect grid so the hall feels lived-in. out: cc centre, cw/ch
+// half-extents, dscale, depthN, game type, cabinet style id, tilt (radians).
+vec3 arcCab(float fi, out vec2 cc, out float cw, out float ch, out float dscale, out float depthN, out int game, out int style, out float tilt) {
 	float side = (mod(fi, 2.0) < 0.5) ? -1.0 : 1.0;
-	float depth = floor(fi / 2.0);
-	float depthN = depth / 2.0;
-	dscale = 1.0 - depth * 0.26;
-	float horizon = 0.56;
-	float cy_base = mix(0.94, horizon + 0.03, depthN);
-	ch = 0.52 * dscale;
-	cw = 0.15 * dscale;
-	float cx = aspect * 0.5 + side * mix(0.80, 0.42, depthN);
-	cc = vec2(cx, cy_base - ch * 0.5);
-	return marqueeColor(fi);
+	float depth = floor(fi * 0.5);
+	depthN = depth / 3.0;
+	dscale = mix(1.0, 0.34, depthN);
+	float bottomY = mix(1.04, 0.625, depthN) + (hash11(fi * 5.1) - 0.5) * 0.02;
+	ch = 0.335 * dscale;
+	cw = 0.145 * dscale;
+	// pull every other near cabinet a touch closer to its neighbour -> loose pairs
+	float pairPull = (depth < 1.5) ? (hash11(fi * 9.3) - 0.5) * 0.10 : 0.0;
+	float off = mix(0.87, 0.44, depthN) + (hash11(fi * 1.7) - 0.5) * 0.055 + pairPull;
+	cc = vec2(aspect * 0.5 + side * off, bottomY - ch);
+	style = arcStyleOf(fi);
+	game = int(floor(hash11(fi * 2.7 + 0.5) * 8.999));
+	tilt = -side * 0.04 + (hash11(fi * 3.1) - 0.5) * 0.05;   // slight turn toward centre + wobble
+	return arcAccent(style);
 }
+
+// Opaque silhouette coverage (0..1) of one cabinet at sample point `a` — the union of
+// every SOLID form drawCabBody bakes (body tower, kick base, forward control panel,
+// overhanging marquee). A nearer cabinet's silhouette is used to MASK the lit screen of
+// a farther same-side cabinet in arcadeMotion, so a machine's CRT can never paint over
+// the body of the machine standing in front of it. Mirrors drawCabBody's geometry.
+float arcCabMask(vec2 a, vec2 cc, float cw, float ch, int st, float tilt) {
+	vec2 al = cc + (a - cc) * rot(tilt);             // into that cabinet's leaned frame
+	vec2 q = al - cc;
+	float mround = (st == 1) ? ch * 0.1 : ((st == 2) ? 0.0 : ch * 0.04);
+	float d = sdRBox(q, vec2(cw * 0.9, ch * 0.965), arcRound(st) * cw);                              // body tower
+	d = min(d, sdBox(q - vec2(0.0, ch * 0.92), vec2(cw * 1.02, ch * 0.11)));                         // kick base
+	d = min(d, sdRBox(al - (cc + vec2(0.0, ch * 0.06)), vec2(cw * 1.08, ch * 0.145), ch * 0.03));    // control panel
+	d = min(d, sdRBox(al - (cc + vec2(0.0, -ch * 0.99)), vec2(cw * 1.06, ch * 0.135), mround));      // marquee
+	return aafill(d);
+}
+
+// One powered-on CRT: stylised, deliberately UN-readable pixel game. s in [0,1]
+// (y down), g selects the title, mc tints the tube. Bright colours + scanlines only.
+vec3 arcGame(vec2 s, int g, float t, vec3 mc) {
+	vec3 c = vec3(0.015, 0.02, 0.05);
+	float R = 20.0;                                   // coarse pixel-grid feel
+	if (g == 0) {                                     // retro space shooter
+		c = vec3(0.01, 0.02, 0.09);
+		float sc = floor((s.y + t * 0.6) * R);
+		c += vec3(0.7, 0.85, 1.0) * step(0.9, hash21(vec2(floor(s.x * R), sc))) * 0.9;   // starfield
+		c = mix(c, vec3(0.2, 1.0, 0.5), step(abs(s.x - 0.5), 0.09) * step(0.78, s.y) * step(s.y, 0.9));  // ship
+		float bx = fract(s.x * 5.0); float by = fract(s.y * 2.0 - t * 1.6);
+		c += vec3(1.0, 0.9, 0.35) * step(abs(bx - 0.5), 0.08) * step(by, 0.12);          // bullets
+		float en = step(0.35, fract(s.x * 4.0 + t * 0.25)) * step(fract(s.x * 4.0 + t * 0.25), 0.65);
+		c = mix(c, vec3(1.0, 0.3, 0.45), step(abs(s.y - (0.22 + 0.04 * sin(t * 2.0))), 0.05) * en);  // enemies
+	} else if (g == 1) {                              // pixel racing
+		c = mix(vec3(0.28, 0.1, 0.38), vec3(0.05, 0.03, 0.12), smoothstep(0.0, 0.5, s.y));   // sky
+		float hz = 0.42;
+		if (s.y > hz) {
+			float ty = (s.y - hz) / (1.0 - hz);
+			float rw = mix(0.03, 0.5, ty);            // road widens toward the viewer
+			float road = step(abs(s.x - 0.5), rw);
+			c = mix(c, vec3(0.12, 0.12, 0.16), road);
+			c = mix(c, vec3(1.0, 0.9, 0.3), road * step(abs(s.x - 0.5), rw * 0.07) * step(0.5, fract(ty * 6.0 - t * 3.0)));  // centre dashes
+			c = mix(c, mc, road * step(rw - mix(0.02, 0.05, ty), abs(s.x - 0.5)));    // glowing verge
+		} else {
+			c += vec3(1.0, 0.5, 0.2) * smoothstep(hz, 0.0, s.y) * 0.3;                // sunset
+		}
+	} else if (g == 2) {                              // platform adventure
+		c = vec3(0.04, 0.06, 0.13);
+		for (int k = 0; k < 3; k++) {
+			float fk = float(k);
+			float py = 0.35 + fk * 0.22;
+			float sx = fract(s.x + t * 0.1 * (fk + 1.0));
+			c = mix(c, vec3(0.3, 0.72, 0.36), step(abs(s.y - py), 0.03) * step(0.15, fract(sx * 3.0)));   // scrolling platforms
+		}
+		c = mix(c, vec3(1.0, 0.85, 0.2), step(abs(s.x - 0.3), 0.05) * step(abs(s.y - (0.62 - 0.12 * abs(sin(t * 3.0)))), 0.06));  // hopping hero
+	} else if (g == 3) {                              // fighting game
+		c = mix(vec3(0.38, 0.1, 0.22), vec3(0.08, 0.03, 0.1), s.y);
+		c = mix(c, vec3(0.15, 0.1, 0.18), step(0.82, s.y));           // arena floor
+		c = mix(c, vec3(0.3, 0.6, 1.0), step(abs(s.x - (0.36 + 0.03 * sin(t * 2.0))), 0.06) * step(0.5, s.y) * step(s.y, 0.82));
+		c = mix(c, vec3(1.0, 0.4, 0.3), step(abs(s.x - (0.64 - 0.03 * sin(t * 2.0))), 0.06) * step(0.5, s.y) * step(s.y, 0.82));
+		c = mix(c, vec3(0.2, 1.0, 0.3), step(s.y, 0.08) * step(s.x, 0.44));   // health bars
+		c = mix(c, vec3(1.0, 0.8, 0.2), step(s.y, 0.08) * step(0.56, s.x));
+	} else if (g == 4) {                              // pinball
+		c = vec3(0.05, 0.02, 0.13);
+		for (int k = 0; k < 3; k++) {
+			float fk = float(k);
+			vec2 bp = vec2(0.3 + 0.2 * fk, 0.25 + 0.12 * mod(fk, 2.0));
+			c += neonPal(fk + 1.0) * smoothstep(0.09, 0.05, distance(s, bp));    // bumpers
+		}
+		c += vec3(1.0) * smoothstep(0.05, 0.0, distance(s, vec2(0.5 + 0.3 * sin(t * 1.7), 0.55 + 0.28 * cos(t * 2.3))));  // ball
+		c = mix(c, mc, step(0.9, s.y) * step(0.25, abs(s.x - 0.5)));             // flipper hints
+	} else if (g == 5) {                              // puzzle (falling blocks)
+		c = vec3(0.03, 0.03, 0.06);
+		vec2 cell = floor(s * vec2(6.0, 8.0));
+		float stacked = step(cell.y, 4.0 + 2.0 * hash11(cell.x)) * step(0.5, hash21(cell));
+		float falling = step(abs(cell.y - floor(fract(t * 0.4 + hash11(cell.x * 2.0)) * 8.0)), 0.5) * step(hash11(cell.x * 3.0), 0.45);
+		c = mix(c, neonPal(cell.x + cell.y), max(stacked, falling) * 0.9);
+		c *= 1.0 - 0.3 * step(0.86, fract(s.x * 6.0)) - 0.3 * step(0.86, fract(s.y * 8.0));    // grid gaps
+	} else if (g == 6) {                              // alien invasion
+		c = vec3(0.01, 0.03, 0.06);
+		float march = 0.06 * sin(t * 1.5);
+		vec2 cell = floor(vec2(s.x + march, s.y) * vec2(6.0, 8.0));
+		float en = step(cell.y, 3.0) * step(0.5, hash21(cell * 1.3)) * step(0.2, fract((s.x + march) * 6.0)) * step(fract((s.x + march) * 6.0), 0.8);
+		c = mix(c, vec3(0.4, 1.0, 0.35), en);                                    // marching aliens
+		c = mix(c, vec3(0.2, 0.8, 1.0), step(abs(s.x - 0.5), 0.08) * step(0.85, s.y));   // cannon
+	} else if (g == 7) {                              // pixel dungeon
+		c = vec3(0.03, 0.025, 0.04);
+		vec2 cell = floor(s * 7.0);
+		c = mix(c, vec3(0.12, 0.1, 0.14), step(0.55, hash21(cell)));             // maze walls
+		for (int k = 0; k < 2; k++) {
+			vec2 tp = vec2(0.2 + 0.55 * float(k), 0.3);
+			c += vec3(1.0, 0.55, 0.2) * smoothstep(0.14, 0.0, distance(s, tp)) * (0.7 + 0.3 * sin(t * 8.0 + float(k)));  // torches
+		}
+		c += vec3(0.9, 0.8, 0.3) * smoothstep(0.05, 0.0, distance(s, vec2(0.5 + 0.1 * sin(t), 0.6)));   // hero
+	} else {                                          // neon rhythm game
+		c = vec3(0.04, 0.02, 0.08);
+		for (int k = 0; k < 4; k++) {
+			float fk = float(k);
+			float lane = 0.2 + fk * 0.2;
+			c += neonPal(fk) * step(abs(s.x - lane), 0.015) * 0.5;               // lane lines
+			c += neonPal(fk) * step(abs(s.x - lane), 0.05) * smoothstep(0.06, 0.0, abs(s.y - fract(t * 0.7 + hash11(fk * 5.0))));   // notes
+		}
+		c += vec3(1.0) * step(abs(s.y - 0.86), 0.02);                            // hit line
+	}
+	c *= 0.75 + 0.25 * sin(s.y * R * 6.2831);         // CRT scanlines
+	c += mc * 0.05;                                   // faint tube tint
+	return c;
+}
+
+// One vintage upright cabinet, fully baked (dark screen; the CRT is lit in motion).
+// Built zone-by-zone with the classic recognisable silhouette: a wide illuminated
+// marquee that overhangs the top, a recessed angled CRT, a control panel that juts
+// forward wider than the body (joystick + colourful buttons), a coin door, thick
+// glowing side panels and a wide sturdy base. `st` selects the cabinet design.
+vec3 drawCabBody(vec3 col, vec2 al, vec2 cc, float cw, float ch, float dscale, float depthN, vec3 mc, int st) {
+	vec2 q = al - cc;                                 // cabinet-local, y down
+	float fog = depthN * 0.55;                        // recede into the haze
+	vec3 bodyBase = mix(arcBody(st), vec3(0.03, 0.02, 0.05), fog);
+	// ---- soft contact shadow pooled under the cabinet ----
+	col = mix(col, col * 0.45, aafill(ellip(al, cc + vec2(0.0, ch * 1.02), vec2(cw * 1.7, 0.055 * dscale), 0.0)) * 0.6);
+	// ---- wide sturdy base / kick plinth (sits widest at the floor) ----
+	float baseA = aafill(sdBox(q - vec2(0.0, ch * 0.92), vec2(cw * 1.02, ch * 0.11)));
+	col = mix(col, bodyBase * 0.55, baseA);
+	// ---- main body tower (rounded per style, worn paint) ----
+	float body = sdRBox(q, vec2(cw * 0.9, ch * 0.965), arcRound(st) * cw);
+	float bodyA = aafill(body);
+	vec3 bodyCol = bodyBase * (0.82 + 0.32 * fbm(q * 24.0 / dscale + cc * 3.0));   // worn paint
+	bodyCol *= 0.78 + 0.4 * smoothstep(cw * 0.9, -cw * 0.9, q.x);                  // left-lit form shading
+	col = mix(col, bodyCol, bodyA);
+	// thick side panels: dark inner recess + bright accent trim down both edges
+	float edge = smoothstep(0.05 * dscale, 0.0, abs(abs(q.x) - cw * 0.83)) * step(abs(q.y), ch * 0.92);
+	col = mix(col, bodyBase * 0.4, edge * 0.6);
+	float trim = smoothstep(0.02 * dscale, 0.0, abs(abs(q.x) - cw * 0.9)) * step(abs(q.y), ch * 0.9);
+	col += mc * trim * ((st == 4) ? 0.85 : 0.5) * (1.0 - fog);                     // neon side strips
+	// ---- speaker grills flanking the screen top ----
+	for (int sgi = 0; sgi < 2; sgi++) {
+		vec2 sgc = cc + vec2(float(sgi * 2 - 1) * cw * 0.6, -ch * 0.63);
+		float sg = sdRBox(al - sgc, vec2(cw * 0.2, ch * 0.1), cw * 0.05);
+		col = mix(col, vec3(0.02, 0.02, 0.03), aafill(sg));
+		col += vec3(0.18) * step(0.5, fract((al.y - sgc.y) * 70.0 / dscale)) * aafill(sg) * 0.5;   // grill slats
+	}
+	// ---- recessed CRT: dark angled bezel + dark tube (lit in motion) ----
+	vec2 scc = cc + vec2(0.0, -ch * 0.40);
+	col = mix(col, vec3(0.015, 0.015, 0.025), aafill(sdRBox(al - scc, vec2(cw * 0.72, ch * 0.27), cw * 0.06)));   // bezel
+	// subtle top-narrowing to read as a screen tilted back
+	float scrTilt = sdBox(al - scc, vec2(cw * (0.6 - 0.06 * smoothstep(scc.y + ch * 0.2, scc.y - ch * 0.2, al.y)), ch * 0.2));
+	col = mix(col, vec3(0.01, 0.01, 0.02), aafill(scrTilt));                       // dark glass
+	col += mc * aaline(scrTilt, 0.006 * dscale) * 0.3 * (1.0 - fog);
+	col += vec3(0.9) * aaline(al.y - (scc.y - ch * 0.2), 0.006 * dscale) * aafill(sdBox(al - scc, vec2(cw * 0.6, ch * 0.2))) * 0.15;   // glass glare
+	// ---- illuminated marquee: overhangs the top, juts slightly forward ----
+	vec2 mqc = cc + vec2(0.0, -ch * 0.99);
+	vec2 mqh = vec2(cw * 1.06, ch * 0.135);
+	float mround = (st == 1) ? ch * 0.1 : ((st == 2) ? 0.0 : ch * 0.04);
+	vec2 mp = al - mqc;
+	if (st == 3) { mp.x += mp.y * 0.4; }              // cyan: swept parallelogram
+	// hood under the marquee (the forward brow)
+	col = mix(col, bodyBase * 0.6, aafill(sdBox(al - (mqc + vec2(0.0, mqh.y + ch * 0.02)), vec2(mqh.x * 0.82, ch * 0.03))));
+	float mq = sdRBox(mp, mqh, mround);
+	float mqA = aafill(mq);
+	col = mix(col, mc * mix(1.15, 0.55, depthN), mqA);                             // lit panel
+	// brighter title strip with faux back-lit lettering
+	float tstrip = aafill(sdRBox(mp, vec2(mqh.x * 0.82, mqh.y * 0.5), mround * 0.5));
+	col = mix(col, mix(mc, vec3(1.0), 0.55), tstrip * 0.7);
+	col *= 1.0 - 0.28 * tstrip * step(0.5, fract((al.x - mqc.x) * 55.0 / dscale));  // lettering
+	col += mc * aaline(mq, 0.008 * dscale) * 0.7 * (1.0 - fog);                    // bright rim tube
+	if (st == 1) { col = mix(col, mc * 1.1, aafill(ellip(al, mqc + vec2(0.0, -mqh.y * 0.65), vec2(mqh.x * 0.55, ch * 0.07), 0.0))); }   // purple crown
+	if (st == 2) { col = mix(col, mc * 1.05, aafill(sdTri((al - mqc - vec2(0.0, -mqh.y)) * vec2(1.0, -1.0) * (7.0 / ch), 1.2))); }     // red angular topper
+	// ---- control panel: juts FORWARD wider than the body, slanted ----
+	vec2 cpc = cc + vec2(0.0, ch * 0.06);
+	vec2 cph = vec2(cw * 1.08, ch * 0.145);
+	float cp = sdRBox(al - cpc, cph, ch * 0.03);
+	float cpA = aafill(cp);
+	vec3 cpCol = mix(bodyBase * 1.4, mc * 0.4, 0.22);
+	cpCol *= 0.65 + 0.5 * smoothstep(cpc.y + cph.y, cpc.y - cph.y, al.y);          // slope: brighter toward front
+	col = mix(col, cpCol, cpA);
+	col += mc * aaline(al.y - (cpc.y - cph.y), 0.009 * dscale) * cpA * 0.5 * (1.0 - fog);   // lit front lip
+	// joystick (left): dish, shaft, ball top
+	vec2 jc = cpc + vec2(-cw * 0.56, -ch * 0.01);
+	col = mix(col, vec3(0.04, 0.04, 0.06), aafill(sdCircle(al - jc, cw * 0.16)));
+	col += vec3(0.4) * aaline(sdCircle(al - jc, cw * 0.12), cw * 0.02) * 0.4;      // dust washer
+	vec2 jtop = jc + vec2(cw * 0.07, -ch * 0.055);
+	col = mix(col, vec3(0.15), aaline(sdSeg(al, jc, jtop), cw * 0.035));           // shaft
+	col = mix(col, vec3(0.92, 0.14, 0.22), aafill(sdCircle(al - jtop, cw * 0.075)));
+	col += vec3(1.0, 0.6, 0.6) * aafill(sdCircle(al - (jtop - cw * 0.03), cw * 0.03)) * 0.5;   // ball highlight
+	// button cluster (right): two rows of colourful buttons
+	for (int bi = 0; bi < 6; bi++) {
+		float fb = float(bi);
+		vec2 bpc = cpc + vec2((0.16 + mod(fb, 3.0) * 0.26) * cw, (floor(fb / 3.0) - 0.5) * ch * 0.11);
+		vec3 bcol = neonPal(fb + float(st));
+		float bd = sdCircle(al - bpc, cw * 0.085);
+		col = mix(col, vec3(0.03), aafill(sdCircle(al - bpc, cw * 0.1)));          // socket ring
+		col = mix(col, bcol * 0.9, aafill(bd));
+		col += bcol * aaline(bd, cw * 0.02) * 0.6 * (1.0 - fog);
+		col += vec3(1.0) * aafill(sdCircle(al - (bpc - cw * 0.03), cw * 0.02)) * 0.4;   // gloss
+	}
+	// ---- coin door + slot on the lower body ----
+	vec2 coc = cc + vec2(0.0, ch * 0.56);
+	col = mix(col, bodyBase * 1.7, aafill(sdRBox(al - coc, vec2(cw * 0.44, ch * 0.12), ch * 0.02)));   // coin plate
+	col += mc * aaline(sdRBox(al - coc, vec2(cw * 0.44, ch * 0.12), ch * 0.02), 0.004 * dscale) * 0.25 * (1.0 - fog);
+	col = mix(col, vec3(0.02), aafill(sdBox(al - (coc + vec2(0.0, -ch * 0.02)), vec2(cw * 0.08, ch * 0.028))));   // slot
+	col = mix(col, vec3(0.85, 0.72, 0.3), aafill(sdBox(al - (coc + vec2(0.0, -ch * 0.02)), vec2(cw * 0.06, ch * 0.012))) * 0.7);   // brass
+	col = mix(col, vec3(0.02), aafill(sdCircle(al - (coc + vec2(0.0, ch * 0.05)), cw * 0.05)) * 0.8);   // coin return
+	return col;
+}
+
+// A small round arcade stool: cushioned seat on a chrome post with splayed legs.
+vec3 drawStool(vec3 col, vec2 a, vec2 pc, float s, vec3 mc) {
+	col = mix(col, col * 0.5, aafill(ellip(a, pc + vec2(0.0, s * 0.62), vec2(s * 1.0, s * 0.16), 0.0)) * 0.55);   // shadow
+	for (int l = 0; l < 2; l++) {
+		float sgn = float(l * 2 - 1);
+		col = mix(col, vec3(0.22, 0.22, 0.27), aaline(sdSeg(a, pc + vec2(sgn * s * 0.06, -s * 0.05), pc + vec2(sgn * s * 0.5, s * 0.55)), s * 0.05));   // legs
+	}
+	col = mix(col, vec3(0.16, 0.16, 0.2), aaline(sdSeg(a, pc + vec2(0.0, -s * 0.12), pc + vec2(0.0, s * 0.3)), s * 0.055));   // centre post
+	float seat = ellip(a, pc + vec2(0.0, -s * 0.18), vec2(s * 0.58, s * 0.24), 0.0);
+	col = mix(col, vec3(0.16, 0.05, 0.09), aafill(seat));                          // vinyl cushion
+	col += mc * aaline(seat, s * 0.045) * 0.4;                                     // rim glow
+	col += vec3(0.5, 0.2, 0.25) * aafill(ellip(a, pc + vec2(-s * 0.12, -s * 0.24), vec2(s * 0.2, s * 0.08), 0.0)) * 0.4;   // highlight
+	return col;
+}
+
+// A big, deliberately OUT-OF-FOCUS background neon sign — a soft glowing bar with
+// blurred letter-like striations. Reads as arcade signage without ever being legible.
+float arcSign(vec2 uv, vec2 c, vec2 h, float seed) {
+	vec2 d = (uv - c) / h;
+	float bar = (1.0 - smoothstep(0.55, 1.15, length(vec2(d.x * 0.62, d.y)))) * smoothstep(1.15, 0.35, abs(d.y));
+	float letters = 0.5 + 0.5 * sin(d.x * 5.2 + seed);        // coarse strokes
+	letters *= 0.6 + 0.4 * sin(d.x * 13.0 + seed * 2.0);      // finer breakup
+	return bar * (0.45 + 0.55 * clamp(letters, 0.0, 1.0));
+}
+
 vec3 arcadeScene(vec2 a, vec2 uv) {
 	float cx0 = aspect * 0.5;
-	float horizon = 0.56;
-	vec3 col = mix(vec3(0.07, 0.03, 0.13), vec3(0.02, 0.01, 0.05), smoothstep(0.0, 0.6, uv.y));
-	col += vec3(0.28, 0.05, 0.4) * smoothstep(0.45, 0.0, distance(vec2(uv.x, uv.y), vec2(0.5, 0.30))) * 0.18;  // back-wall haze
-	// ---- perspective checker floor with neon sheen ----
-	if (uv.y > horizon) {
-		float ty = max((uv.y - horizon) / (1.0 - horizon), 0.04);
-		vec2 fp = vec2((uv.x - 0.5) / ty, 1.0 / ty);
-		vec2 g = floor(fp * 3.0);
-		float chk = mod(g.x + g.y, 2.0);
-		col = mix(vec3(0.05, 0.02, 0.09), vec3(0.12, 0.05, 0.19), chk);
-		col *= 0.35 + 0.75 * ty;
-		col += vec3(0.4, 0.1, 0.5) * smoothstep(0.32, 0.0, abs(uv.x - 0.5)) * ty * 0.18;   // centre sheen
+	float horizon = 0.58;
+	// ---- back wall + ceiling gradient, with a hazy neon glow drawing the eye inward ----
+	vec3 col = mix(vec3(0.05, 0.02, 0.11), vec3(0.02, 0.01, 0.05), smoothstep(0.0, 0.55, uv.y));
+	col += vec3(0.30, 0.08, 0.45) * smoothstep(0.4, 0.0, distance(vec2(uv.x, uv.y), vec2(0.5, horizon - 0.05))) * 0.35;
+	// ---- ceiling neon strips radiating from the vanishing point above the wheel ----
+	if (a.y < horizon) {
+		float ang = atan(a.y - horizon, a.x - cx0);
+		float strips = 0.5 + 0.5 * sin(ang * 10.0);
+		col += neonPal(floor(ang * 3.0)) * smoothstep(0.78, 1.0, strips) * smoothstep(horizon, horizon - 0.22, uv.y) * 0.12;
 	}
-	col += vec3(0.6, 0.2, 0.75) * smoothstep(0.018, 0.0, abs(uv.y - horizon)) * 0.45;      // horizon glow
-	// ---- overhead neon arch ----
-	vec2 arcc = vec2(cx0, 0.66);
-	float archR = distance(a, arcc);
-	float archTop = step(a.y, 0.30);
-	col += vec3(1.0, 0.2, 0.7) * aaline(archR - 0.52, 0.008) * archTop;
-	col += vec3(0.2, 0.9, 1.0) * aaline(archR - 0.495, 0.005) * archTop;
-	col += vec3(0.8, 0.2, 0.9) * smoothstep(0.06, 0.0, abs(archR - 0.51)) * archTop * 0.2;
-	// ---- cabinets receding down both walls ----
-	for (int i = 0; i < 6; i++) {
+	// ---- synthwave neon grid floor ----
+	if (uv.y > horizon) {
+		float ty = max((uv.y - horizon) / (1.0 - horizon), 0.02);
+		float persp = 1.0 / ty;
+		float gx = (uv.x - 0.5) * aspect * persp * 2.2;
+		float gz = persp * 0.9;
+		col = mix(vec3(0.05, 0.02, 0.10), vec3(0.02, 0.01, 0.05), ty);
+		vec3 grid = mix(vec3(0.2, 0.85, 1.0), vec3(1.0, 0.28, 0.72), 0.5 + 0.5 * sin(gx * 0.5));
+		col += grid * (gline(gx) + gline(gz)) * ty * 0.7;
+		col += vec3(0.5, 0.15, 0.6) * smoothstep(0.3, 0.0, abs(uv.x - 0.5)) * ty * 0.15;   // centre sheen
+	}
+	col += vec3(0.7, 0.25, 0.85) * smoothstep(0.02, 0.0, abs(uv.y - horizon)) * 0.5;        // horizon glow line
+	// ---- far-background blurred neon signs on the back wall (subtle, out of focus) ----
+	col += vec3(0.2, 0.9, 1.0) * arcSign(uv, vec2(0.235, 0.15), vec2(0.15, 0.05), 1.0) * 0.34;   // ARCADE (cyan)
+	col += vec3(1.0, 0.32, 0.62) * arcSign(uv, vec2(0.775, 0.205), vec2(0.13, 0.042), 4.0) * 0.30;  // HIGH SCORE (pink)
+	col += vec3(0.5, 1.0, 0.55) * arcSign(uv, vec2(0.5, 0.09), vec2(0.1, 0.03), 8.0) * 0.2;      // GAME ON (green, high + small)
+	// ---- cabinets down both walls, drawn far -> near so near ones overlap correctly ----
+	for (int i = 7; i >= 0; i--) {
 		float fi = float(i);
-		vec2 cc; float cw; float ch; float dscale;
-		vec3 mc = cabinet(fi, cc, cw, ch, dscale);
-		float body = aafill(sdBox(a - cc, vec2(cw * 0.5, ch * 0.5)));
-		col = mix(col, vec3(0.03, 0.02, 0.05), body);
-		col += mc * smoothstep(0.02, 0.0, abs(abs(a.x - cc.x) - cw * 0.5))
-			* aafill(sdBox(a - cc, vec2(cw * 0.5 + 0.02, ch * 0.5))) * 0.35;               // side light strips
-		vec2 mq = vec2(cc.x, cc.y - ch * 0.5 + 0.03 * dscale);                             // marquee bar
-		float md = sdBox(a - mq, vec2(cw * 0.44, 0.03 * dscale));
-		col += mc * aafill(md);
-		col += mc * smoothstep(0.08, 0.0, abs(md)) * 0.3;
-		vec2 scc = cc - vec2(0.0, ch * 0.12);                                              // glowing screen
-		float sdd = sdBox(a - scc, vec2(cw * 0.36, ch * 0.22));
-		col = mix(col, vec3(0.01, 0.01, 0.02), aafill(sdd + 0.008));
-		col += mix(vec3(0.1, 0.45, 0.75), mc, 0.4) * aafill(sdd) * 0.6;
-		col = mix(col, vec3(0.06, 0.05, 0.08), aafill(sdBox(a - (cc + vec2(0.0, ch * 0.24)), vec2(cw * 0.42, ch * 0.05))));  // control panel
-		float refl = smoothstep(0.13 * dscale, 0.0, abs(a.x - cc.x)) * smoothstep(cc.y + ch * 0.5, cc.y + ch * 0.5 + 0.12, a.y);
-		col += mc * refl * 0.12 * step(a.y, cc.y + ch * 0.5 + 0.14);                       // floor reflection
+		vec2 cc; float cw; float ch; float dscale; float depthN; float tilt; int game; int style;
+		vec3 mc = arcCab(fi, cc, cw, ch, dscale, depthN, game, style, tilt);
+		vec2 al = cc + (a - cc) * rot(tilt);           // rotate sample into cabinet space (slight lean)
+		col = drawCabBody(col, al, cc, cw, ch, dscale, depthN, mc, style);
+		// an arcade stool parked in front of some of the nearer cabinets
+		if (depthN < 0.4 && hash11(fi * 7.3 + 1.0) > 0.5) {
+			float side = (mod(fi, 2.0) < 0.5) ? -1.0 : 1.0;
+			vec2 pc = vec2(cc.x - side * cw * 0.4, cc.y + ch * 1.18);
+			col = drawStool(col, a, pc, cw * 0.75, mc);
+		}
 	}
 	return col;
 }
-vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
-	float cx0 = aspect * 0.5;
-	// CRT scanline shimmer
-	col *= mix(0.93, 1.0, 0.5 + 0.5 * sin((uv.y * 260.0) - t * 6.0));
-	// per-cabinet marquee flicker + screen content pulse
-	for (int i = 0; i < 6; i++) {
-		float fi = float(i);
-		vec2 cc; float cw; float ch; float dscale;
-		vec3 mc = cabinet(fi, cc, cw, ch, dscale);
-		float flick = step(0.14, hash11(fi * 3.0 + floor(t * 3.0 + fi * 7.0)));
-		vec2 mq = vec2(cc.x, cc.y - ch * 0.5 + 0.03 * dscale);
-		col += mc * aafill(sdBox(a - mq, vec2(cw * 0.44, 0.03 * dscale))) * 0.5 * flick;
-		vec2 scc = cc - vec2(0.0, ch * 0.12);
-		float sdd = sdBox(a - scc, vec2(cw * 0.36, ch * 0.22));
-		float px = floor((a.x - scc.x) * 40.0) + fi * 5.0;
-		float shimmer = 0.5 + 0.5 * sin(t * 4.0 + px * 1.3);
-		col += mc * aafill(sdd) * shimmer * 0.25;
+
+// Global arcade \"OMG\" event: 0 = normal, 1 = every CRT shows OMG. Driven from
+// GDScript (BackgroundManager.arcade_omg, fired every 5th completed round) so all
+// cabinets switch and return in perfect sync. Cross-faded over the tube game.
+uniform float omg_active = 0.0;
+
+// 5-row bitmap font for the three letters (rows top->bottom, y down). Each returns
+// the lit-pixel bitmask for that row; O/G are 4 wide, M is 5 wide.
+int omgRow(int letter, int row) {
+	if (letter == 0) {                                // O
+		if (row == 0 || row == 4) { return 15; }      // 1111
+		return 9;                                     // 1001
+	} else if (letter == 1) {                         // M
+		if (row == 0) { return 17; }                  // 10001
+		if (row == 1) { return 27; }                  // 11011
+		if (row == 2) { return 21; }                  // 10101
+		return 17;                                    // 10001
 	}
-	// chasing bulbs racing around the neon arch
-	vec2 arcc = vec2(cx0, 0.66);
-	float archR = distance(a, arcc);
-	float ang = atan(a.y - arcc.y, a.x - arcc.x);
-	float chase = 0.5 + 0.5 * sin(ang * 14.0 - t * 5.0);
-	col += vec3(1.0, 0.9, 0.5) * smoothstep(0.02, 0.0, abs(archR - 0.51)) * step(a.y, 0.30) * chase;
-	// light sweep drifting across the floor
-	float sweep = fract(t * 0.09);
-	col += vec3(0.35, 0.2, 0.45) * smoothstep(0.035, 0.0, abs(uv.x - sweep)) * step(0.56, uv.y) * 0.3;
+	if (row == 0 || row == 4) { return 7; }           // G  0111
+	if (row == 1) { return 8; }                       //    1000
+	if (row == 2) { return 11; }                      //    1011
+	return 9;                                         //    1001
+}
+// 1.0 on a lit \"OMG\" pixel for screen-space s (tube-local, 0..1, y down). Layout is
+// O(4) gap(1) M(5) gap(1) G(4) = 15 columns x 5 rows, centred in the tube.
+float omgPixel(vec2 s) {
+	vec2 p = (s - vec2(0.13, 0.32)) / vec2(0.74, 0.36);
+	if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) { return 0.0; }
+	int col = int(floor(p.x * 15.0));
+	int row = int(floor(p.y * 5.0));
+	if (row > 4) { row = 4; }
+	if (col > 14) { return 0.0; }                     // right edge (p.x == 1.0)
+	int letter = 0; int w = 4; int lc = 0;
+	if (col < 4) { letter = 0; w = 4; lc = col; }
+	else if (col < 5) { return 0.0; }                 // gap between O and M
+	else if (col < 10) { letter = 1; w = 5; lc = col - 5; }
+	else if (col < 11) { return 0.0; }                // gap between M and G
+	else { letter = 2; w = 4; lc = col - 11; }
+	int bits = omgRow(letter, row);
+	return float((bits >> (w - 1 - lc)) & 1);
+}
+// The powered-on \"OMG\" tube: dark screen, a bright neon-glowing OMG that flickers
+// and shifts hue, plus CRT scanlines — matching the arcade style. fi de-syncs the
+// per-cabinet flicker so the hall shimmers rather than strobing in lockstep.
+vec3 arcOMG(vec2 s, float t, float fi) {
+	float flick = 0.78 + 0.22 * sin(t * 13.0 + fi * 2.1);
+	flick *= 1.0 - 0.45 * step(0.93, hash11(fi + floor(t * 9.0)));    // occasional hard blink
+	vec3 neon = mix(vec3(1.0, 0.22, 0.62), vec3(0.3, 0.92, 1.0), 0.5 + 0.5 * sin(t * 2.0 + fi));
+	vec3 c = vec3(0.02, 0.0, 0.05);
+	float core = omgPixel(s);
+	float e = 0.014;                                                  // soft neon halo (4-tap spread)
+	float glow = (omgPixel(s + vec2(e, 0.0)) + omgPixel(s - vec2(e, 0.0))
+		+ omgPixel(s + vec2(0.0, e)) + omgPixel(s - vec2(0.0, e))) * 0.25;
+	c += neon * glow * 0.6 * flick;
+	c += mix(neon, vec3(1.0), 0.45) * core * flick;                  // white-hot letter core
+	c *= 0.72 + 0.28 * sin(s.y * 20.0 * 6.2831);                     // CRT scanlines
+	return c;
+}
+
+vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	float horizon = 0.58;
+	// gentle global CRT scanline shimmer
+	col *= mix(0.95, 1.0, 0.5 + 0.5 * sin(uv.y * 240.0 - t * 5.0));
+	// ---- per-cabinet: light the CRT, flicker the marquee, reflect glow on the floor ----
+	for (int i = 7; i >= 0; i--) {
+		float fi = float(i);
+		vec2 cc; float cw; float ch; float dscale; float depthN; float tilt; int game; int style;
+		vec3 mc = arcCab(fi, cc, cw, ch, dscale, depthN, game, style, tilt);
+		vec2 al = cc + (a - cc) * rot(tilt);           // match the scene's cabinet lean
+		float bright = 1.0 - depthN * 0.4;
+		// Occlusion: this cabinet's lit screen (and its glow) must be hidden wherever a
+		// NEARER same-side cabinet stands in front of it — otherwise the CRT paints across
+		// the neighbour's body. Same side = same parity; nearer = lower index (i-2, i-4,
+		// i-6). Opposite walls never overlap (the centre is left open), so only same-side
+		// occluders matter. `occ` = 1 in the clear, 0 behind a nearer body.
+		float occ = 1.0;
+		for (int k = 0; k < 3; k++) {
+			int j = i - 2 * (k + 1);
+			if (j < 0) { break; }
+			vec2 jcc; float jcw; float jch; float jds; float jdn; float jtilt; int jgame; int jstyle;
+			arcCab(float(j), jcc, jcw, jch, jds, jdn, jgame, jstyle, jtilt);
+			occ *= 1.0 - arcCabMask(a, jcc, jcw, jch, jstyle, jtilt);
+		}
+		// animated game on the tube
+		vec2 scc = cc + vec2(0.0, -ch * 0.40);
+		vec2 hs = vec2(cw * 0.6, ch * 0.2);
+		if (sdBox(al - scc, hs) < 0.0) {
+			vec2 s = (al - scc) / hs * 0.5 + 0.5;
+			vec3 g = arcGame(s, game, t + fi * 1.3, mc);
+			if (omg_active > 0.001) {                                // OMG event: crossfade over the game
+				g = mix(g, arcOMG(s, t, fi), omg_active);
+			}
+			float vig = smoothstep(1.05, 0.4, length((s - 0.5) * 2.0));
+			float m = win1(s.x, 0.03, 0.97, 0.05) * win1(s.y, 0.03, 0.97, 0.05);
+			col = mix(col, g * bright * (0.55 + 0.45 * vig), m * occ);
+		}
+		col += mc * smoothstep(ch * 0.55, 0.0, distance(al, scc)) * bright * 0.06 * occ;   // screen glow bleed
+		// marquee flicker + halo (matches drawCabBody geometry)
+		vec2 mqc = cc + vec2(0.0, -ch * 0.99);
+		vec2 mp = al - mqc;
+		if (style == 3) { mp.x += mp.y * 0.4; }
+		float mround = (style == 1) ? ch * 0.1 : ((style == 2) ? 0.0 : ch * 0.04);
+		float mq = sdRBox(mp, vec2(cw * 1.06, ch * 0.135), mround);
+		float flick = 0.85 + 0.15 * sin(t * 3.0 + fi) - 0.35 * step(0.97, hash11(fi + floor(t * 7.0)));
+		col += mc * smoothstep(0.12 * dscale, 0.0, abs(mq)) * flick * 0.15 * bright;
+		col += mc * aafill(mq) * max(flick - 0.75, 0.0) * 0.5;
+		// soft, slightly-blurred floor reflection of the cabinet glow
+		float baseY = cc.y + ch;
+		float rd = a.y - baseY;
+		if (rd > 0.0) {
+			float refl = smoothstep(0.18 * dscale, 0.0, rd) * smoothstep(cw * 1.3, 0.0, abs(a.x - cc.x));
+			col += mc * refl * (0.6 + 0.4 * sin(t * 3.0 - rd * 40.0 + fi)) * 0.11 * bright;
+		}
+	}
+	// ---- background neon signs breathe / gently flicker ----
+	col += vec3(0.2, 0.9, 1.0) * arcSign(uv, vec2(0.235, 0.15), vec2(0.15, 0.05), 1.0) * 0.14 * (0.7 + 0.3 * sin(t * 1.7));
+	col += vec3(1.0, 0.32, 0.62) * arcSign(uv, vec2(0.775, 0.205), vec2(0.13, 0.042), 4.0) * 0.13 * (0.6 + 0.4 * step(0.15, hash11(floor(t * 6.0) * 0.7)));
+	col += vec3(0.5, 1.0, 0.55) * arcSign(uv, vec2(0.5, 0.09), vec2(0.1, 0.03), 8.0) * 0.09 * (0.7 + 0.3 * sin(t * 2.3 + 1.0));
+	// ---- floating dust motes drifting up through the neon light ----
+	float dust = 0.0;
+	for (int k = 0; k < 3; k++) {
+		float fk = float(k);
+		vec2 duv = a * (5.0 + fk * 3.0) + vec2(0.0, -t * (0.05 + 0.02 * fk));
+		vec2 cell = floor(duv);
+		float h = hash21(cell + fk * 17.0);
+		vec2 f = fract(duv) - 0.5 + 0.3 * vec2(sin(t + h * 6.28), cos(t * 0.7 + h * 6.28));
+		dust += smoothstep(0.07, 0.0, length(f)) * step(0.84, h);
+	}
+	col += vec3(0.7, 0.85, 1.0) * dust * 0.22 * smoothstep(0.95, 0.3, uv.y);
+	// ---- slow neon light sweep across the grid floor ----
+	col += vec3(0.4, 0.2, 0.6) * smoothstep(0.04, 0.0, abs(uv.x - fract(t * 0.06))) * step(horizon, uv.y) * 0.22;
+	// ---- subtle atmospheric haze band + breathing vanishing-point glow (behind wheel) ----
+	col += vec3(0.2, 0.1, 0.35) * smoothstep(0.12, 0.0, abs(uv.y - horizon)) * 0.15;
+	col += vec3(0.45, 0.2, 0.7) * smoothstep(0.22, 0.0, distance(uv, vec2(0.5, horizon))) * (0.12 + 0.05 * sin(t * 1.5)) * step(uv.y, horizon + 0.06);
 	return col;
 }
 "
@@ -4926,99 +5366,317 @@ void fragment() {
 "
 
 # ---------------------------------------------------------------------------
-# Jackpot skin (id "casino") — a moody neon casino floor. casinoScene() bakes
-# the carpet, pendant lights, felt table and neon sign frames; casinoMotion()
-# adds neon pulse, an orbiting sparkle and drifting felt-table glints.
+# Jackpot skin (id "casino") — a luxurious high-end VIP casino. casinoScene()
+# bakes the warm hall backdrop, distant blurred gaming floor, gold fluted
+# columns, red-velvet valance, crystal chandeliers and — foreground — a real
+# high-stakes poker table: deep emerald casino felt (worn + napped) ringed in
+# polished mahogany with gold trim, an ACTIVE game around the Simon machine.
+# Six asymmetric player seats each get two face-up cards angled toward centre
+# plus jittered chip stacks (red/black/white/green/gold); a dealer button and a
+# central pot sit low, and five community cards fan across the centre so the
+# machine naturally overlaps them. Helpers drawCard/chipDisc/drawChips/
+# drawFlatChip/drawDealer render each prop with its own contact shadow.
+# casinoMotion() adds chandelier twinkle, a warm spotlight sweep across the
+# felt, a circling roulette ball on the JACKPOT marquee and gold sparkles.
+# All poker props sit under/around the machine so gameplay + "Your Turn" stay
+# clear — the machine (drawn on top) is what covers the centre.
 # ---------------------------------------------------------------------------
 const _CASINO_FUNCS := "
+// perspective damask carpet colour at a floor pixel (deep burgundy + gold motif)
+vec3 casinoCarpet(vec2 uv) {
+	float ty = max(uv.y - 0.50, 0.03);
+	vec2 fp = vec2((uv.x - 0.5) / ty, 0.35 / ty);
+	vec2 f = fract(fp * 5.0) - 0.5;
+	float dman = abs(f.x) + abs(f.y);
+	vec3 c = mix(vec3(0.16, 0.02, 0.05), vec3(0.09, 0.015, 0.035), step(dman, 0.32));
+	c = mix(c, vec3(0.34, 0.24, 0.09), step(dman, 0.13) * 0.7);   // gold motif
+	c *= 0.30 + 0.85 * ty;                                        // depth shading
+	return c;
+}
+// ---- luxury poker-table props (each draws itself + its own contact shadow) ----
+// One face-up playing card: ivory stock, rounded corners, a central suit pip and
+// two corner index marks. `ang` orients it (top toward table centre), `red` picks
+// heart/diamond red vs spade/club black.
+void drawCard(inout vec3 col, vec2 a, vec2 p, float ang, vec2 sz, float red) {
+	mat2 R = rot(ang);
+	float rc = 0.010;
+	// soft drop shadow, thrown down-right toward the viewer
+	float ds = sdBox((a - p - vec2(0.011, 0.016)) * R, sz - vec2(rc)) - rc;
+	float d  = sdBox((a - p) * R, sz - vec2(rc)) - rc;
+	col = mix(col, col * 0.42, smoothstep(0.020, 0.0, ds) * (1.0 - aafill(d)));
+	vec2 q = (a - p) * R;
+	float body = aafill(d);
+	vec3 face = mix(vec3(0.985, 0.980, 0.965), vec3(0.85, 0.845, 0.82), smoothstep(-sz.y, sz.y * 1.3, q.y));  // top-lit stock
+	col = mix(col, face, body);
+	vec3 ink = red > 0.5 ? vec3(0.74, 0.05, 0.08) : vec3(0.05, 0.05, 0.09);
+	float pip = red > 0.5 ? sdCircle(q, sz.x * 0.30) : (sdBox(q, vec2(sz.x * 0.24)) - 0.004);      // pip
+	col = mix(col, ink, aafill(pip) * body);
+	col = mix(col, ink, aafill(sdBox(q - vec2(-sz.x * 0.58, -sz.y * 0.66), vec2(sz.x * 0.17, sz.y * 0.11))) * body);  // index (TL)
+	col = mix(col, ink, aafill(sdBox(q - vec2( sz.x * 0.58,  sz.y * 0.66), vec2(sz.x * 0.17, sz.y * 0.11))) * body);  // index (BR)
+	col = mix(col, vec3(0.995), aaline(d + 0.006, 0.0022) * body);        // white inner border
+	col += vec3(0.28, 0.27, 0.25) * aaline(d, 0.0015) * body;             // glossy edge
+}
+// A cylinder chip: dark side band + lighter top face + casino edge dashes.
+void chipDisc(inout vec3 col, vec2 a, vec2 cp, vec2 e, vec3 cc) {
+	col = mix(col, cc * 0.48, aafill((length((a - cp - vec2(0.0, 0.007)) / e) - 1.0) * e.y));   // side (thickness)
+	vec2 pr = a - cp;
+	float d = (length(pr / e) - 1.0) * e.y;
+	float body = aafill(d);
+	col = mix(col, cc * 1.12, body);                                      // top face
+	float ea = atan(pr.y / e.y, pr.x / e.x);
+	col = mix(col, vec3(0.95, 0.94, 0.91), aaline(d, 0.0016) * step(0.5, 0.5 + 0.5 * sin(ea * 8.0)) * body);  // edge spots
+	col += vec3(0.34) * aaline(d + 0.0015, 0.0011) * body;               // rim highlight
+}
+// A stack of `n` chips, gently jittered so it never looks machine-aligned.
+void drawChips(inout vec3 col, vec2 a, vec2 base, float n, vec3 cc, float seed) {
+	vec2 e = vec2(0.030, 0.0125);
+	col = mix(col, col * 0.5, smoothstep(0.014, 0.0, (length((a - base - vec2(0.016, 0.013)) / (e * 1.25)) - 1.0) * e.y));  // ground shadow
+	for (int k = 0; k < 16; k++) {
+		if (float(k) >= n) break;
+		float fk = float(k);
+		vec2 cp = base + vec2((hash11(seed + fk * 1.7) - 0.5) * 0.006, -fk * 0.0102);
+		chipDisc(col, a, cp, e, cc);
+	}
+}
+// A single chip lying flat on the felt (casually scattered beside a hand).
+void drawFlatChip(inout vec3 col, vec2 a, vec2 p, vec3 cc) {
+	vec2 e = vec2(0.028, 0.0115);
+	col = mix(col, col * 0.55, smoothstep(0.012, 0.0, (length((a - p - vec2(0.013, 0.011)) / e) - 1.0) * e.y));  // shadow
+	chipDisc(col, a, p, e, cc);
+}
+// Dealer button: white puck with a blue ring and centre dot.
+void drawDealer(inout vec3 col, vec2 a, vec2 p) {
+	vec2 e = vec2(0.026, 0.012);
+	col = mix(col, col * 0.55, smoothstep(0.012, 0.0, (length((a - p - vec2(0.012, 0.010)) / e) - 1.0) * e.y));
+	float d = (length((a - p) / e) - 1.0) * e.y;
+	float body = aafill(d);
+	col = mix(col, vec3(0.96, 0.95, 0.92), body);
+	col = mix(col, vec3(0.13, 0.15, 0.42), aaline(d + 0.005, 0.0026) * body);   // blue ring
+	col = mix(col, vec3(0.13, 0.15, 0.42), aafill(sdCircle((a - p) / vec2(e.x / e.y, 1.0), e.y * 0.34)));  // centre dot
+	col += vec3(0.4) * aaline(d, 0.0012) * body;
+}
 vec3 casinoScene(vec2 a, vec2 uv) {
-	float cx0 = aspect * 0.5;
-	float horizon = 0.58;
-	vec3 col = mix(vec3(0.13, 0.02, 0.05), vec3(0.03, 0.005, 0.02), smoothstep(0.0, 0.6, uv.y));
-	// ---- perspective damask carpet with gold motif ----
-	if (uv.y > horizon) {
-		float ty = max((uv.y - horizon) / (1.0 - horizon), 0.05);
-		vec2 fp = vec2((uv.x - 0.5) / ty, 1.0 / ty);
-		vec2 f = fract(fp * 4.0) - 0.5;
-		float dman = abs(f.x) + abs(f.y);
-		col = mix(vec3(0.12, 0.02, 0.04), vec3(0.21, 0.04, 0.07), step(dman, 0.34));
-		col = mix(col, vec3(0.45, 0.32, 0.10), step(dman, 0.15) * 0.6);            // gold centres
-		col *= 0.35 + 0.72 * ty;
-	}
-	col += vec3(0.6, 0.15, 0.2) * smoothstep(0.02, 0.0, abs(uv.y - horizon)) * 0.4;
-	// ---- felt gaming table across the bottom ----
-	if (uv.y > 0.80) {
-		float ty = (uv.y - 0.80) / 0.20;
-		col = mix(vec3(0.05, 0.23, 0.12), vec3(0.02, 0.11, 0.06), ty);
-		col += vec3(0.8, 0.72, 0.3) * aaline(distance(a, vec2(cx0, 1.15)) - 0.30, 0.004) * 0.6;   // betting arcs
-		col += vec3(0.8, 0.72, 0.3) * aaline(distance(a, vec2(cx0, 1.15)) - 0.22, 0.004) * 0.6;
-		for (int i = 0; i < 3; i++) {                                             // chip stacks
-			float fi = float(i);
-			vec2 cp = vec2(cx0 + (fi - 1.0) * 0.30, 0.90);
-			vec3 chipc = (mod(fi, 2.0) < 0.5) ? vec3(0.8, 0.12, 0.12) : vec3(0.12, 0.14, 0.8);
-			for (int k = 0; k < 4; k++) {
-				float fk = float(k);
-				col = mix(col, chipc, aafill(sdBox(a - (cp - vec2(0.0, fk * 0.016)), vec2(0.03, 0.009))));
-				col += vec3(0.9) * aaline(a.y - (cp.y - fk * 0.016 - 0.009), 0.0018) * 0.2;
-			}
-		}
-		col = mix(col, vec3(0.95, 0.95, 0.92), aafill(sdBox((a - vec2(cx0 - 0.42, 0.92)) * rot(-0.2), vec2(0.05, 0.075))));  // cards
-		col = mix(col, vec3(0.95, 0.95, 0.92), aafill(sdBox((a - vec2(cx0 - 0.35, 0.93)) * rot(0.1), vec2(0.05, 0.075))));
-	}
-	// ---- pendant lights ----
-	for (int i = 0; i < 3; i++) {
+	float cx = aspect * 0.5;
+	// ---------- WALL / HALL BACKDROP (warm amber-brown, darker toward top) ----------
+	vec3 col = mix(vec3(0.085, 0.050, 0.034), vec3(0.020, 0.011, 0.014), smoothstep(0.0, 0.58, uv.y));
+	col += vec3(0.34, 0.20, 0.08) * smoothstep(0.60, 0.0, distance(a, vec2(cx, -0.02))) * 0.45;  // warm ceiling bloom
+	// distant recessed ceiling lights — a soft warm row across the hall
+	for (int i = 0; i < 5; i++) {
 		float fi = float(i);
-		vec2 lp = vec2((fi + 0.5) * aspect / 3.0, 0.12);
-		col = mix(col, vec3(0.02, 0.02, 0.03), aaline(a.x - lp.x, 0.003) * step(a.y, lp.y));  // cord
-		col = mix(col, vec3(0.35, 0.28, 0.12), aafill(distance(a, lp) - 0.04));               // brass shade
-		col += vec3(1.0, 0.78, 0.4) * smoothstep(0.16, 0.0, distance(a, lp)) * 0.45;          // warm pool
+		vec2 lp = vec2((fi + 0.5) * aspect / 5.0, 0.10);
+		col += vec3(0.9, 0.62, 0.28) * smoothstep(0.09, 0.0, distance(a, lp)) * 0.28;
 	}
-	// ---- neon side signs ----
+	// hints of far gaming tables near the horizon — blurred emerald ovals, low contrast (depth of field)
+	for (int i = 0; i < 4; i++) {
+		float fi = float(i);
+		float fx = (0.18 + 0.64 * hash11(fi * 2.3 + 1.0)) * aspect;
+		if (abs(fx - cx) < 0.34) fx += sign(fx - cx + 0.001) * 0.34;             // keep clear of centre
+		vec2 tp = vec2(fx, 0.46 + 0.03 * hash11(fi * 5.1));
+		float fd = length((a - tp) / vec2(0.09, 0.035));
+		col = mix(col, vec3(0.06, 0.20, 0.12), smoothstep(1.0, 0.4, fd) * 0.5);
+		col += vec3(0.7, 0.55, 0.22) * smoothstep(0.02, 0.0, abs(fd - 0.7)) * 0.15;   // rim glint
+	}
+	// warm atmospheric haze along the room horizon
+	col += vec3(0.35, 0.22, 0.10) * smoothstep(0.09, 0.0, abs(uv.y - 0.50)) * 0.15;
+	// ---------- CARPET FLOOR ----------
+	col = mix(col, casinoCarpet(uv), smoothstep(0.50, 0.58, uv.y));
+	// ---------- GOLD FLUTED COLUMNS (both sides, standing behind the table) ----------
 	for (int i = 0; i < 2; i++) {
 		float fi = float(i);
-		float side = (fi < 0.5) ? 0.07 : (aspect - 0.07);
-		vec3 nc = (fi < 0.5) ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
-		float d = sdBox(a - vec2(side, 0.34), vec2(0.05, 0.30));
-		col = mix(col, vec3(0.02, 0.02, 0.03), aafill(d));
-		col += nc * aaline(d, 0.010) * 0.9;
-		col += nc * smoothstep(0.10, 0.0, abs(d)) * 0.12;
+		float colx = (fi < 0.5) ? 0.17 : (aspect - 0.17);
+		vec2 q = a - vec2(colx, 0.34);
+		float shaft = sdBox(q, vec2(0.045, 0.27));
+		float sa = aafill(shaft);
+		float flute = 0.5 + 0.5 * cos((a.x - colx) * 150.0);                     // vertical grooves
+		vec3 gold = mix(vec3(0.30, 0.20, 0.06), vec3(0.86, 0.66, 0.30), flute);
+		gold *= 0.7 + 0.5 * smoothstep(0.64, 0.20, uv.y);
+		col = mix(col, gold, sa);
+		col = mix(col, vec3(0.78, 0.60, 0.28), aafill(sdBox(a - vec2(colx, 0.055), vec2(0.065, 0.028))));   // capital
+		col = mix(col, vec3(0.55, 0.40, 0.16), aafill(sdBox(a - vec2(colx, 0.615), vec2(0.062, 0.026))));   // base
+		col += vec3(1.0, 0.80, 0.42) * smoothstep(0.055, 0.0, abs(q.x) - 0.045) * step(abs(q.y), 0.27) * 0.12;  // edge light
 	}
-	// ---- central neon diamond sign ----
-	vec2 sc = vec2(cx0, 0.30);
-	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.10;
-	col += vec3(1.0, 0.85, 0.3) * aaline(dsign, 0.006) * 0.9;
-	col += vec3(1.0, 0.85, 0.3) * smoothstep(0.05, 0.0, abs(dsign)) * 0.1;
+	// ---------- POKER TABLE (oval emerald felt + mahogany rail, foreground) ----------
+	vec2 tc = vec2(cx, 1.36);
+	vec2 rel = a - tc;
+	rel.x *= 0.72;
+	float td = length(rel);
+	if (td < 0.87) {
+		if (td > 0.735) {
+			vec3 wood = mix(vec3(0.34, 0.12, 0.05), vec3(0.17, 0.05, 0.025), 0.5 + 0.5 * fbm(a * vec2(8.0, 26.0)));  // mahogany grain
+			col = wood;
+			col += vec3(0.6, 0.30, 0.14) * smoothstep(0.86, 0.735, td);          // polished wood sheen
+			// soft rolling reflections streaking along the padded leather rail
+			col += vec3(0.5, 0.30, 0.16) * smoothstep(0.05, 0.0, abs(fract((a.x - cx) * 2.2) - 0.5) - 0.16) * smoothstep(0.86, 0.75, td) * 0.5;
+			col += vec3(1.0, 0.82, 0.42) * aaline(td - 0.735, 0.006) * 0.9;      // gold trim (inner)
+			col += vec3(1.0, 0.90, 0.55) * aaline(td - 0.735, 0.0018) * 0.7;     // bright gold specular line
+			col += vec3(0.8, 0.62, 0.30) * aaline(td - 0.86, 0.004) * 0.5;       // outer edge highlight
+		} else {
+			vec3 felt = mix(vec3(0.055, 0.29, 0.155), vec3(0.018, 0.115, 0.078), smoothstep(0.0, 0.73, td));
+			felt += vec3(0.05, 0.14, 0.07) * smoothstep(0.5, 0.0, td) * 0.6;     // centre sheen
+			felt *= 1.0 - 0.14 * fbm(a * 5.5) * smoothstep(0.30, 0.70, td);      // worn felt patches toward the rail
+			felt += vec3(0.02, 0.05, 0.03) * fbm(a * 40.0);                      // fine napped texture
+			col = felt;
+			col += vec3(0.85, 0.68, 0.32) * aaline(td - 0.62, 0.0035) * 0.45;    // gold betting arc
+			col += vec3(0.85, 0.68, 0.32) * aaline(td - 0.505, 0.003) * 0.30;    // inner arc
+		}
+		// ============ ACTIVE POKER GAME (hands + chips around the machine) ============
+		// Chip colours: red / black / white / green / gold.
+		vec3 CH_R = vec3(0.78, 0.10, 0.12);
+		vec3 CH_K = vec3(0.09, 0.09, 0.13);
+		vec3 CH_W = vec3(0.90, 0.90, 0.87);
+		vec3 CH_G = vec3(0.07, 0.42, 0.21);
+		vec3 CH_Y = vec3(0.82, 0.63, 0.18);
+		vec2 csz = vec2(0.030, 0.045);        // player card half-extents
+		// Six seats around the visible arc, each pointing its cards toward the felt
+		// centre. Positions/chip piles are deliberately asymmetric — every seat is
+		// unique (big stack, few chips, tilted cards, casual scatter, ...).
+		// -- Seat A : left, near the viewer (a few chips, one card askew) --
+		{
+			vec2 p = tc + 0.70 * vec2(-0.766, -0.643);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawFlatChip(col, a, p + wd * 0.11 + vec2(0.02, 0.015), CH_G);
+			drawChips(col, a, p + wd * 0.085 + vec2(0.0, 0.01), 3.0, CH_R, 3.1);
+			drawCard(col, a, p - wd * 0.019, ag - 0.05, csz, 1.0);
+			drawCard(col, a, p + wd * 0.019, ag + 0.22, csz, 0.0);
+		}
+		// -- Seat B : left-upper (the chip leader — a big tower + a green stack) --
+		{
+			vec2 p = tc + 0.63 * vec2(-0.588, -0.809);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawChips(col, a, p - wd * 0.10 + vec2(0.0, 0.01), 11.0, CH_R, 1.3);
+			drawChips(col, a, p - wd * 0.145 + vec2(0.0, 0.025), 6.0, CH_G, 4.7);
+			drawChips(col, a, p - wd * 0.062 + vec2(0.0, 0.03), 4.0, CH_K, 8.2);
+			drawCard(col, a, p - wd * 0.018, ag - 0.03, csz, 0.0);
+			drawCard(col, a, p + wd * 0.020, ag + 0.05, csz, 1.0);
+		}
+		// -- Seat C : left, seated further back (small white stack, tilted cards) --
+		{
+			vec2 p = tc + 0.72 * vec2(-0.375, -0.927);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawChips(col, a, p - wd * 0.075 + vec2(0.0, 0.01), 4.0, CH_W, 2.6);
+			drawCard(col, a, p - wd * 0.017, ag + 0.16, csz, 1.0);
+			drawCard(col, a, p + wd * 0.021, ag - 0.10, csz, 1.0);
+		}
+		// -- Seat D : right, seated further back (black stack + scattered gold) --
+		{
+			vec2 p = tc + 0.72 * vec2(0.375, -0.927);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawFlatChip(col, a, p + wd * 0.095 + vec2(0.0, 0.02), CH_Y);
+			drawFlatChip(col, a, p + wd * 0.125 + vec2(-0.01, 0.03), CH_Y);
+			drawChips(col, a, p + wd * 0.07 + vec2(0.0, 0.0), 5.0, CH_K, 5.9);
+			drawCard(col, a, p - wd * 0.020, ag + 0.08, csz, 0.0);
+			drawCard(col, a, p + wd * 0.018, ag - 0.04, csz, 1.0);
+		}
+		// -- Seat E : right-upper (tall gold tower + a casual green scatter) --
+		{
+			vec2 p = tc + 0.63 * vec2(0.588, -0.809);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawChips(col, a, p + wd * 0.10 + vec2(0.0, 0.01), 9.0, CH_Y, 7.4);
+			drawFlatChip(col, a, p + wd * 0.135 + vec2(0.0, 0.03), CH_G);
+			drawFlatChip(col, a, p + wd * 0.16 + vec2(0.012, 0.018), CH_G);
+			drawCard(col, a, p - wd * 0.020, ag - 0.12, csz, 1.0);
+			drawCard(col, a, p + wd * 0.019, ag + 0.02, csz, 0.0);
+		}
+		// -- Seat F : right, near the viewer (two mixed stacks + the dealer button) --
+		{
+			vec2 p = tc + 0.70 * vec2(0.766, -0.643);
+			float ag = atan(tc.x - p.x, tc.y - p.y);
+			vec2 wd = vec2(cos(ag), -sin(ag));
+			drawChips(col, a, p + wd * 0.095 + vec2(0.0, 0.01), 6.0, CH_K, 6.3);
+			drawChips(col, a, p + wd * 0.135 + vec2(0.0, 0.02), 4.0, CH_R, 9.1);
+			drawDealer(col, a, p + wd * 0.055 + vec2(0.0, 0.055));
+			drawCard(col, a, p - wd * 0.019, ag + 0.03, csz, 0.0);
+			drawCard(col, a, p + wd * 0.019, ag - 0.06, csz, 0.0);
+		}
+		// -- The pot: a mixed pile of chips in the centre, mostly under the machine --
+		drawChips(col, a, vec2(cx - 0.05, 0.965), 6.0, CH_R, 2.2);
+		drawChips(col, a, vec2(cx + 0.03, 0.975), 8.0, CH_K, 5.5);
+		drawChips(col, a, vec2(cx + 0.10, 0.960), 5.0, CH_Y, 8.8);
+		drawFlatChip(col, a, vec2(cx - 0.11, 0.985), CH_G);
+		// -- Five community cards fanned across the centre (the machine overlaps them) --
+		vec2 ccsz = vec2(0.029, 0.043);
+		for (int i = 0; i < 5; i++) {
+			float fi = float(i) - 2.0;
+			vec2 ccp = vec2(cx + fi * 0.061, 0.905 - abs(fi) * 0.006);
+			float redc = (mod(float(i), 2.0) < 0.5) ? 1.0 : 0.0;
+			drawCard(col, a, ccp, fi * 0.035, ccsz, redc);
+		}
+	}
+	// ---------- RED VELVET VALANCE (swagged top drape with gold fringe) ----------
+	{
+		float scallop = 0.085 + 0.028 * (0.5 + 0.5 * cos(a.x * 20.0));
+		float vm = smoothstep(scallop + 0.008, scallop - 0.008, uv.y);
+		vec3 velvet = mix(vec3(0.10, 0.01, 0.03), vec3(0.34, 0.04, 0.09), 0.5 + 0.5 * sin(a.x * 22.0));
+		velvet *= 0.6 + 0.5 * fbm(a * vec2(30.0, 8.0));                          // plush fold shading
+		col = mix(col, velvet, vm);
+		col += vec3(1.0, 0.82, 0.42) * aaline(uv.y - scallop, 0.004) * smoothstep(0.14, 0.0, uv.y);   // gold fringe hem
+	}
+	// ---------- CRYSTAL CHANDELIERS (hanging from the valance, off dead-centre) ----------
+	for (int i = 0; i < 2; i++) {
+		float fi = float(i);
+		vec2 ch = vec2(cx + (fi < 0.5 ? -0.46 : 0.46), 0.20);
+		col = mix(col, vec3(0.20, 0.15, 0.06), aaline(a.x - ch.x, 0.003) * step(a.y, ch.y) * step(0.08, a.y));  // cord
+		for (int r = 0; r < 3; r++) {
+			float fr = float(r);
+			float ry = ch.y - 0.02 + fr * 0.03;
+			float rw = 0.03 + fr * 0.025;
+			for (int c = 0; c < 6; c++) {
+				float fc = float(c);
+				vec2 pp = vec2(ch.x - rw + fc * (2.0 * rw / 5.0), ry);
+				col += vec3(1.0, 0.88, 0.55) * smoothstep(0.010, 0.0, distance(a, pp)) * 0.7;   // crystal drops
+			}
+		}
+		col += vec3(1.0, 0.72, 0.34) * smoothstep(0.20, 0.0, distance(a, ch)) * 0.30;           // warm bloom
+	}
+	// ---------- JACKPOT MARQUEE (soft gold diamond behind the machine top) ----------
+	{
+		vec2 sc = vec2(cx, 0.16);
+		float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.075;
+		col += vec3(1.0, 0.85, 0.34) * aaline(dsign, 0.006) * 0.7;
+		col += vec3(1.0, 0.78, 0.30) * smoothstep(0.05, 0.0, abs(dsign)) * 0.12;
+		col += vec3(1.0, 0.86, 0.45) * smoothstep(0.16, 0.0, distance(a, sc)) * 0.10;           // soft halo
+	}
+	// gentle vignette to seat the frame
+	vec2 vp = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+	col *= mix(0.72, 1.0, smoothstep(1.25, 0.25, length(vp)));
 	return col;
 }
 vec3 casinoMotion(vec3 col, vec2 a, vec2 uv, float t) {
-	float cx0 = aspect * 0.5;
+	float cx = aspect * 0.5;
+	// chandelier crystal twinkle + breathing bloom
 	for (int i = 0; i < 2; i++) {
 		float fi = float(i);
-		float side = (fi < 0.5) ? 0.07 : (aspect - 0.07);
-		vec3 nc = (fi < 0.5) ? vec3(1.0, 0.15, 0.55) : vec3(0.15, 0.85, 1.0);
-		float d = sdBox(a - vec2(side, 0.34), vec2(0.05, 0.30));
-		float pulse = 0.6 + 0.4 * sin(t * 2.0 + fi * 3.0);
-		col += nc * aaline(d, 0.010) * 0.5 * pulse;
-		col += nc * smoothstep(0.12, 0.0, abs(d)) * 0.1 * pulse;
+		vec2 ch = vec2(cx + (fi < 0.5 ? -0.46 : 0.46), 0.20);
+		col += vec3(1.0, 0.80, 0.42) * smoothstep(0.20, 0.0, distance(a, ch)) * 0.10 * (0.5 + 0.5 * sin(t * 1.2 + fi * 2.0));
+		for (int k = 0; k < 3; k++) {
+			float fk = float(k);
+			vec2 sp = ch + vec2(cos(fk * 2.1 + t) * 0.05, 0.01 + fk * 0.02);
+			col += vec3(1.0, 0.95, 0.7) * smoothstep(0.006, 0.0, distance(a, sp)) * (0.5 + 0.5 * sin(t * 3.0 + fk * 4.0));
+		}
 	}
-	// diamond sign chase + circling ball
-	vec2 sc = vec2(cx0, 0.30);
-	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.10;
+	// JACKPOT marquee chase + circling roulette ball
+	vec2 sc = vec2(cx, 0.16);
+	float dsign = abs(a.x - sc.x) + abs(a.y - sc.y) - 0.075;
 	float ang = atan(a.y - sc.y, a.x - sc.x);
-	col += vec3(1.0, 0.9, 0.4) * smoothstep(0.02, 0.0, abs(dsign)) * (0.5 + 0.5 * sin(ang * 8.0 - t * 4.0));
-	vec2 bp = sc + vec2(cos(t * 1.6), sin(t * 1.6)) * 0.13;
-	col += vec3(1.0, 1.0, 0.92) * smoothstep(0.014, 0.0, distance(a, bp)) * 0.9;
-	// gold sparkles across felt + carpet
-	for (int i = 0; i < 8; i++) {
+	col += vec3(1.0, 0.9, 0.4) * smoothstep(0.02, 0.0, abs(dsign)) * (0.4 + 0.4 * sin(ang * 8.0 - t * 4.0));
+	vec2 bp = sc + vec2(cos(t * 1.6), sin(t * 1.6)) * 0.10;
+	col += vec3(1.0, 1.0, 0.9) * smoothstep(0.012, 0.0, distance(a, bp)) * 0.8;
+	// warm spotlight slowly sweeping across the felt
+	float sweep = 0.5 + 0.4 * sin(t * 0.45);
+	col += vec3(0.5, 0.30, 0.10) * smoothstep(0.14, 0.0, abs(uv.x - sweep)) * step(0.55, uv.y) * 0.15;
+	// gold sparkles glinting across the felt
+	for (int i = 0; i < 7; i++) {
 		float fi = float(i);
-		float gx = hash11(fi * 3.3) * aspect;
-		float gy = 0.82 + 0.16 * hash11(fi * 5.5);
+		float gx = cx + (hash11(fi * 3.3) - 0.5) * 1.3;
+		float gy = 0.82 + 0.15 * hash11(fi * 5.5);
 		float tw = 0.5 + 0.5 * sin(t * (2.0 + fi) + fi * 10.0);
-		col += vec3(1.0, 0.92, 0.55) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.6;
+		col += vec3(1.0, 0.9, 0.5) * smoothstep(0.006, 0.0, distance(a, vec2(gx, gy))) * tw * 0.5;
 	}
-	// slow spotlight sweeping the carpet
-	float sweep = 0.5 + 0.5 * sin(t * 0.5);
-	col += vec3(0.5, 0.15, 0.2) * smoothstep(0.12, 0.0, abs(uv.x - sweep)) * step(0.58, uv.y) * 0.22;
 	return col;
 }
 "
@@ -5377,6 +6035,8 @@ var _props_key := ""                # theme the current _props_node was built fo
 var _active := false
 # Active tween decaying the Volcano river's surge (river_boost 1 -> 0) after an eruption.
 var _river_surge_tween: Tween
+# Active tween driving the Arcade skin's global "OMG" event (omg_active 0 -> 1, hold, -> 0).
+var _omg_tween: Tween
 
 # DEBUG: set false to hide the on-screen FPS readout before shipping. While true
 # it shows live FPS in the top-left on every screen, so we can compare the cost of
@@ -5890,6 +6550,26 @@ func surge_river(strength := 1.0) -> void:
 func _set_river_boost(v: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("river_boost", v)
+
+# Global arcade "OMG" event — called every 5th completed round. Every visible arcade
+# cabinet drops its game and lights up a big glowing OMG at the same instant, holds for
+# 4s, then all snap back together. A single shader uniform drives every tube, so switch
+# and return are perfectly synced. No-op unless the live background is the Arcade skin.
+func arcade_omg() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:arcade":
+		return
+	if _omg_tween and _omg_tween.is_valid():
+		_omg_tween.kill()
+	_omg_tween = create_tween()
+	_omg_tween.tween_method(_set_omg, 0.0, 1.0, 0.3) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)   # snap in
+	_omg_tween.tween_interval(4.0)                              # hold OMG for exactly 4s
+	_omg_tween.tween_method(_set_omg, 1.0, 0.0, 0.5) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)    # ease back to the games
+
+func _set_omg(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("omg_active", v)
 
 # Build Deep Space's dynamic shader with each moving prop's random constants baked
 # in as GLSL literals (no per-pixel hash11) and every prop wrapped in a cheap
