@@ -449,8 +449,10 @@ func _build_header() -> void:
 	diamond.position = Vector2(210, 7)
 	_underline.add_child(diamond)
 
-# Bigger version of the in-game HUD coin: gold disc + bright ring + "$" glyph,
-# with a soft golden halo for the header.
+# Bigger version of the in-game HUD coin. Uses the exact same 3D-shaded minted
+# coin (PackIcons.draw_coin_3d) as the game HUD and home-screen pill so the
+# currency reads identically everywhere, wrapped in a soft golden halo for the
+# header. The "$" is stamped on top.
 func _make_big_coin(d: float) -> Node2D:
 	var n := Node2D.new()
 	var halo := Sprite2D.new()
@@ -461,20 +463,21 @@ func _make_big_coin(d: float) -> Node2D:
 	add_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	halo.material = add_mat
 	n.add_child(halo)
-	# Outer light rim first (drawn beneath), then the gold disc on top — the
-	# difference between the two radii reads as the metallic rim.
-	var rim := Polygon2D.new()
-	rim.polygon = _circle_poly(d * 0.92, 28)
-	rim.color = Color(1.0, 0.92, 0.55, 0.85)
-	n.add_child(rim)
-	var disc := Polygon2D.new()
-	disc.polygon = _circle_poly(d * 0.78, 28)
-	disc.color = Color(1.0, 0.78, 0.20)
+	# Minted coin drawn centered on this Node2D's origin (r ≈ old rim radius so
+	# the on-screen size is unchanged from the previous flat disc).
+	var r := d * 0.9
+	var disc := Node2D.new()
+	disc.draw.connect(func() -> void:
+		PackIcons.draw_coin_3d(disc, Vector2.ZERO, r))
 	n.add_child(disc)
 	var glyph := Label.new()
 	glyph.text = "$"
-	glyph.add_theme_font_size_override("font_size", int(d * 1.15))
-	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	glyph.add_theme_font_size_override("font_size", int(d * 1.2))
+	# Dark stamped glyph with a pale lower-right shadow → reads as raised metal.
+	glyph.add_theme_color_override("font_color", Color(0.34, 0.19, 0.02))
+	glyph.add_theme_color_override("font_shadow_color", Color(1.0, 0.94, 0.66, 0.7))
+	glyph.add_theme_constant_override("shadow_offset_x", 1)
+	glyph.add_theme_constant_override("shadow_offset_y", 2)
 	glyph.position = Vector2(-d, -d)
 	glyph.size = Vector2(d * 2.0, d * 2.0)
 	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -500,13 +503,6 @@ func _make_diamond(s: float, col: Color) -> Node2D:
 	d.color = col
 	n.add_child(d)
 	return n
-
-func _circle_poly(r: float, n: int) -> PackedVector2Array:
-	var p := PackedVector2Array()
-	for i in n:
-		var a: float = TAU * float(i) / n
-		p.append(Vector2(cos(a), sin(a)) * r)
-	return p
 
 # ---------------- coin balance pill ----------------
 
@@ -552,28 +548,60 @@ func _build_coin_plus_button(pill_h: float) -> void:
 	_coin_plus_btn = Button.new()
 	_coin_plus_btn.text = "+"
 	_coin_plus_btn.size = Vector2(d, d)
+	_coin_plus_btn.pivot_offset = Vector2(d, d) * 0.5
 	_coin_plus_btn.add_theme_font_size_override("font_size", 34)
 	_coin_plus_btn.focus_mode = Control.FOCUS_NONE
+	# Raised 3D disc matching the home-screen "+": warm bevel (bright gold rim,
+	# dark base) on a drop shadow so it reads as a button popping OFF the pill.
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(1.0, 0.78, 0.20)
+	s.bg_color = Color(0.30, 0.17, 0.05)                     # rich brown inner
 	s.set_corner_radius_all(int(d * 0.5))
-	s.border_color = Color(1.0, 0.92, 0.55)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(1.0, 0.78, 0.22, 0.55)
-	s.shadow_size = 12
+	s.border_color = Color(1.0, 0.80, 0.28)                  # gold outer ring
+	s.set_border_width_all(3)
+	s.shadow_color = Color(0.0, 0.0, 0.0, 0.55)              # cast shadow = raised
+	s.shadow_size = 6
+	s.shadow_offset = Vector2(0, 4)
 	_coin_plus_btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(1.0, 0.88, 0.35)
+	sh.bg_color = Color(0.38, 0.22, 0.07)                    # brighter on hover (lifts more)
+	sh.shadow_size = 8
+	sh.shadow_offset = Vector2(0, 5)
 	_coin_plus_btn.add_theme_stylebox_override("hover", sh)
 	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.85, 0.62, 0.10)
+	sp.bg_color = Color(0.16, 0.08, 0.02)                    # darker + shadow shrinks = pressed IN
+	sp.shadow_size = 2
+	sp.shadow_offset = Vector2(0, 1)
 	_coin_plus_btn.add_theme_stylebox_override("pressed", sp)
-	_coin_plus_btn.add_theme_color_override("font_color", Color(0.30, 0.18, 0.0))
-	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(0.18, 0.10, 0.0))
+	_coin_plus_btn.add_theme_color_override("font_color", Color(1.0, 0.82, 0.30))  # gold plus
+	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.88, 0.45))
 	_coin_plus_btn.pressed.connect(_open_coins_popup)
 	# Y position is shared with the pill (centered vertically); X is set in _layout.
 	_coin_plus_btn.position = Vector2(0, (pill_h - d) * 0.5)
 	add_child(_coin_plus_btn)
+
+	# Glossy top sheen — a soft warm-white highlight on the upper half so the
+	# disc reads as a rounded dome catching light from above. Purely decorative.
+	var sheen := Panel.new()
+	var shw := d * 0.60
+	var shh := d * 0.34
+	sheen.size = Vector2(shw, shh)
+	sheen.position = Vector2((d - shw) * 0.5, d * 0.13)
+	sheen.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sheen_st := StyleBoxFlat.new()
+	sheen_st.bg_color = Color(1.0, 0.96, 0.78, 0.30)
+	sheen_st.set_corner_radius_all(int(shh * 0.5))
+	sheen.add_theme_stylebox_override("panel", sheen_st)
+	_coin_plus_btn.add_child(sheen)
+	# The sheen dims while the button is held so the disc reads as pressing in.
+	_coin_plus_btn.button_down.connect(func() -> void: sheen.modulate.a = 0.4)
+	_coin_plus_btn.button_up.connect(func() -> void: sheen.modulate.a = 1.0)
+
+	# Gentle pulse so the "+" reads as an actionable affordance.
+	var pulse := create_tween().set_loops()
+	pulse.tween_property(_coin_plus_btn, "scale", Vector2.ONE * 1.06, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pulse.tween_property(_coin_plus_btn, "scale", Vector2.ONE, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 func _open_coins_popup() -> void:
 	var popup := CoinsPurchasePopup.new()
@@ -1102,7 +1130,17 @@ func _build_simon_panel() -> void:
 # Each card hosts a live SimonWheel preview with the skin's bespoke palette and
 # overlay (e.g. the inferno flames) actually rendering, so what you see in the
 # shop is exactly what you get on the gameplay screen.
-const SKIN_ACCENT := Color(0.92, 0.45, 0.78)
+const SKIN_ACCENT := Color(0.92, 0.45, 0.78)   # generic fallback for any skin without a bespoke pair
+# Per-skin frame palette: [primary (border), secondary (glow)]. Each card's frame wears
+# its own skin's colours instead of one shared pink, so the border reads as part of the
+# world it previews. Requested pairs: Volcano red→orange, Arcade blue→purple, Jackpot
+# white→black, Luna Park white→red. See _skin_frame / _make_skin_card.
+const SKIN_FRAME_COLORS := {
+	"inferno":  [Color(1.00, 0.32, 0.08), Color(1.00, 0.64, 0.18)],   # molten red-orange
+	"arcade":   [Color(0.36, 0.48, 1.00), Color(0.70, 0.30, 1.00)],   # electric blue-purple
+	"casino":   [Color(0.96, 0.96, 0.98), Color(0.06, 0.06, 0.09)],   # ivory white / black
+	"lunapark": [Color(1.00, 0.96, 0.94), Color(1.00, 0.26, 0.30)],   # carnival white / red
+}
 const SKIN_CARD_W := 360.0
 const SKIN_CARD_H := 470.0
 const SKIN_PREVIEW := 260.0
@@ -1115,6 +1153,10 @@ const SKIN_CARD_GAP := 32.0
 # skins than fit on screen wrap onto extra rows instead of running off the side.
 const SKIN_GRID_COLS := 3
 const SKIN_GRID_SCROLLBAR_W := 14.0
+# Padding inside the skins scroll so each card's coloured frame glow (drop shadow, incl.
+# the rounded corners) isn't clipped by the scroll bounds. Slightly larger than the card
+# shadow_size (20). See _build_skins_panel / _layout.
+const SKIN_FRAME_PAD := 26
 
 # Most of the skin set isn't ready to ship, so the SPECIAL SKINS tab shows only the
 # skins flagged `released` below. When NONE are released the whole tab is DETACHED —
@@ -1173,11 +1215,25 @@ func _build_skins_panel(incremental := false) -> void:
 	# As the list scrolls, idle the live preview wheels that scroll out of view.
 	scroll.get_v_scroll_bar().value_changed.connect(
 		func(_v: float) -> void: _update_skin_preview_visibility())
+	# Inset the grid from the scroll edges with a MarginContainer, so each card's coloured
+	# frame GLOW (a StyleBoxFlat drop shadow that extends beyond the card, incl. its rounded
+	# corners) has room to render instead of being clipped hard against the scroll bounds —
+	# most visibly at the top. The top margin also nudges the first row down a little.
+	var pad := MarginContainer.new()
+	pad.add_theme_constant_override("margin_top", SKIN_FRAME_PAD)
+	pad.add_theme_constant_override("margin_bottom", SKIN_FRAME_PAD)
+	pad.add_theme_constant_override("margin_left", SKIN_FRAME_PAD)
+	pad.add_theme_constant_override("margin_right", SKIN_FRAME_PAD)
+	pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_skins_root.add_child(pad)
 	_skins_grid = GridContainer.new()
 	_skins_grid.columns = SKIN_GRID_COLS
+	# Keep the fixed-width grid centred inside the (wider) padded scroll rather than
+	# stretched/left-aligned, so the cards stay centred with the glow room on both sides.
+	_skins_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_skins_grid.add_theme_constant_override("h_separation", int(SKIN_CARD_GAP))
 	_skins_grid.add_theme_constant_override("v_separation", int(SKIN_CARD_GAP))
-	_skins_root.add_child(_skins_grid)
+	pad.add_child(_skins_grid)
 	_skins_by_id.clear()
 	var live_defs := _live_skin_defs()
 	for i in live_defs.size():
@@ -1289,13 +1345,18 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	# PASS (not STOP) so a drag starting on the card body still reaches the
 	# ScrollContainer as a scroll; the buy/equip button keeps its default STOP.
 	root.mouse_filter = Control.MOUSE_FILTER_PASS
+	# Per-skin two-tone frame: a bold PRIMARY border in the skin's colour with a soft
+	# SECONDARY outer glow, so each card's frame reads as part of the world it previews.
+	var frame: Array = _skin_frame(skin_id)
+	var primary: Color = frame[0]
+	var secondary: Color = frame[1]
 	var cs := StyleBoxFlat.new()
 	cs.bg_color = Color(0.06, 0.08, 0.20, 0.94)
 	cs.set_corner_radius_all(24)
-	cs.border_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.75)
-	cs.set_border_width_all(2)
-	cs.shadow_color = Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.35)
-	cs.shadow_size = 18
+	cs.border_color = Color(primary.r, primary.g, primary.b, 0.90)
+	cs.set_border_width_all(3)
+	cs.shadow_color = Color(secondary.r, secondary.g, secondary.b, 0.45)
+	cs.shadow_size = 20
 	root.add_theme_stylebox_override("panel", cs)
 
 	# Live wheel preview hosted in a rounded inset, so the flame overlay can spill
@@ -1310,7 +1371,8 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	# the skin's own world (below) paints over it for skins that ship one.
 	clip_st.bg_color = Color(0.018, 0.008, 0.025)
 	clip_st.set_corner_radius_all(16)
-	clip_st.border_color = Color(1, 1, 1, 0.07)
+	# Faint inner rim tinted with the skin's primary so the inset echoes the outer frame.
+	clip_st.border_color = Color(primary.r, primary.g, primary.b, 0.22)
 	clip_st.set_border_width_all(1)
 	clip.add_theme_stylebox_override("panel", clip_st)
 	root.add_child(clip)
@@ -1341,7 +1403,7 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	name_lbl.text = String(def["label"])
 	name_lbl.add_theme_font_size_override("font_size", 26)
 	name_lbl.add_theme_color_override("font_color", Color.WHITE)
-	name_lbl.add_theme_color_override("font_shadow_color", Color(1.0, 0.40, 0.10, 0.55))
+	name_lbl.add_theme_color_override("font_shadow_color", Color(secondary.r, secondary.g, secondary.b, 0.55))
 	name_lbl.add_theme_constant_override("shadow_offset_x", 0)
 	name_lbl.add_theme_constant_override("shadow_offset_y", 2)
 	name_lbl.add_theme_constant_override("shadow_outline_size", 8)
@@ -1377,8 +1439,13 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	btn.pressed.connect(func() -> void: _on_skin_action(skin_id))
 	return {
 		"root": root, "btn": btn, "price_box": price["box"],
-		"price_label": price["label"], "accent": SKIN_ACCENT, "preview": wheel,
+		"price_label": price["label"], "accent": primary, "preview": wheel,
 	}
+
+# The [primary border, secondary glow] frame colours for a skin's shop card, or the
+# shared pink fallback for any skin without a bespoke pair. See SKIN_FRAME_COLORS.
+func _skin_frame(skin_id: String) -> Array:
+	return SKIN_FRAME_COLORS.get(skin_id, [SKIN_ACCENT, SKIN_ACCENT])
 
 func _refresh_skin_cards() -> void:
 	for skin_id in _skins_by_id:
@@ -1847,8 +1914,9 @@ func _layout() -> void:
 		_simon_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
 	if _skins_root:
 		var sgrid_w := SKIN_GRID_COLS * SKIN_CARD_W + (SKIN_GRID_COLS - 1) * SKIN_CARD_GAP
-		# Reserve scrollbar width so the cards themselves stay visually centred.
-		var sscroll_w := sgrid_w + SKIN_GRID_SCROLLBAR_W
+		# Reserve scrollbar width + the frame-glow padding (both sides) so the cards stay
+		# visually centred and their side glow has room.
+		var sscroll_w := sgrid_w + SKIN_GRID_SCROLLBAR_W + 2.0 * SKIN_FRAME_PAD
 		_skins_root.position = Vector2(cx - sscroll_w * 0.5, content_y)
 		_skins_root.size = Vector2(sscroll_w,
 			maxf(0.0, sz.y - content_y - GRID_BOTTOM_MARGIN))

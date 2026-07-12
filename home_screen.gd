@@ -381,7 +381,7 @@ func _glow_dot(d: float, col: Color, center: Vector2) -> Panel:
 # layout stays symmetric.
 func _build_cards() -> void:
 	_shop_card = _build_card("SHOP", _draw_shop_card, "Go to Shop", _draw_cart, _on_shop)
-	_ranks_card = _build_card("LEADERBOARD", _draw_ranks_card, "View Leaderboard", _draw_chart, _on_leaderboards)
+	_ranks_card = _build_card("LEADERBOARD", _draw_ranks_card, "View Leaderboard", _draw_chart, _on_leaderboards, false)
 	# Podium rank numerals, overlaid on the leaderboard illustration.
 	_card_numeral(_ranks_card, "1", 22, Color(0.34, 0.24, 0.05), Vector2(98, 159), 40)
 	_card_numeral(_ranks_card, "2", 18, Color(0.30, 0.31, 0.36), Vector2(29, 175), 36)
@@ -391,7 +391,7 @@ func _build_cards() -> void:
 # A premium navigation card: rounded translucent-purple panel with a title, a
 # procedural illustration, and a bottom call-to-action pill (icon + label). The
 # whole card is tappable (transparent Button overlay) and scales gently on hover.
-func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callable, action: Callable) -> Dictionary:
+func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callable, action: Callable, show_title := true) -> Dictionary:
 	var wrap := Control.new()
 	wrap.size = CARD_SIZE
 	wrap.custom_minimum_size = CARD_SIZE
@@ -409,8 +409,9 @@ func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callabl
 	var panel := _card_panel(CARD_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
 	floater.add_child(panel)
 
-	var t := _card_title(title, Vector2(0, 16), CARD_SIZE.x)
-	panel.add_child(t)
+	if show_title:
+		var t := _card_title(title, Vector2(0, 16), CARD_SIZE.x)
+		panel.add_child(t)
 
 	var art := Control.new()
 	art.size = CARD_SIZE
@@ -836,22 +837,35 @@ func _draw_trophy(c: Control, bc: Vector2) -> void:
 
 	var cup_top := bc.y - 78.0
 	var cup_bot := bc.y - 34.0
+	# Bowl body — tapered goblet shaded vertically only (top-lit) so both sides read
+	# identically; a rounded 3D barrel that stays left/right symmetric.
 	var cup := PackedVector2Array([
 		Vector2(bc.x - 30, cup_top), Vector2(bc.x + 30, cup_top),
 		Vector2(bc.x + 26, cup_top + 18), Vector2(bc.x + 12, cup_bot),
 		Vector2(bc.x - 12, cup_bot), Vector2(bc.x - 26, cup_top + 18)])
 	var ccol := PackedColorArray()
 	for pt in cup:
-		var t: float = clampf((pt.y - cup_top) / (cup_bot - cup_top), 0.0, 1.0)
-		ccol.append(g_lt.lerp(g_dk, t))
+		var tv: float = clampf((pt.y - cup_top) / (cup_bot - cup_top), 0.0, 1.0)
+		ccol.append(g_lt.lerp(g_dk, tv))
 	c.draw_polygon(cup, ccol)
 
-	c.draw_arc(Vector2(bc.x - 26, cup_top + 16), 16.0, PI * 0.5, PI * 1.5, 16, g_md, 6.0, true)
-	c.draw_arc(Vector2(bc.x + 26, cup_top + 16), 16.0, -PI * 0.5, PI * 0.5, 16, g_md, 6.0, true)
-	c.draw_line(Vector2(bc.x - 26, cup_top + 3), Vector2(bc.x + 26, cup_top + 3), g_lt, 3.0, true)
-	c.draw_colored_polygon(PackedVector2Array([
-		Vector2(bc.x - 15, cup_top + 6), Vector2(bc.x - 7, cup_top + 6),
-		Vector2(bc.x - 10, cup_bot - 6), Vector2(bc.x - 17, cup_bot - 8)]), Color(1, 1, 1, 0.22))
+	# Elliptical rim: raised gold lip + darker hollow interior, seen at a slight angle
+	# so you look down into the bowl. Built as concentric ellipses for a rounded lip.
+	var rim_lip := PackedVector2Array()
+	var rim_in := PackedVector2Array()
+	for i in 28:
+		var a := TAU * float(i) / 28.0
+		var cx := cos(a)
+		rim_lip.append(Vector2(bc.x + cx * 31.0, cup_top + sin(a) * 8.5))
+		rim_in.append(Vector2(bc.x + cx * 23.0, cup_top + 2.0 + sin(a) * 6.0))
+	c.draw_colored_polygon(rim_lip, g_lt)                           # bright gold lip
+	c.draw_colored_polygon(rim_in, g_dk.darkened(0.32))            # hollow interior
+	# inner-wall shading crescent: the far (top) inside wall stays lit, the near dips dark
+	c.draw_arc(Vector2(bc.x, cup_top + 1.0), 26.0, PI, TAU, 18, g_md, 3.0, true)
+
+	# Handles — identical on both sides so the trophy stays symmetric.
+	c.draw_arc(Vector2(bc.x - 26, cup_top + 18), 16.0, PI * 0.5, PI * 1.5, 18, g_dk, 6.0, true)
+	c.draw_arc(Vector2(bc.x + 26, cup_top + 18), 16.0, -PI * 0.5, PI * 0.5, 18, g_dk, 6.0, true)
 	var gy := cup_top + 22.0                                     # little gem on the cup
 	c.draw_colored_polygon(PackedVector2Array([
 		Vector2(bc.x, gy - 8), Vector2(bc.x + 6, gy),
@@ -1230,34 +1244,23 @@ func _build_coin_pill() -> void:
 	glow.add_theme_stylebox_override("panel", gs)
 	_coin_pill.add_child(glow)
 
-	var disc := Panel.new()
+	# 3D-shaded minted coin (gradient face, visible edge, specular). Drawn in
+	# code so it stays crisp at any DPI; the "$" is overlaid on top.
+	var disc := Control.new()
 	disc.size = Vector2(d, d)
 	disc.position = Vector2(disc_x, disc_y)
 	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ds := StyleBoxFlat.new()
-	ds.bg_color = Color(1.0, 0.80, 0.22)
-	ds.set_corner_radius_all(int(d * 0.5))
-	ds.border_color = Color(1.0, 0.95, 0.62)
-	ds.set_border_width_all(2)
-	disc.add_theme_stylebox_override("panel", ds)
+	disc.draw.connect(func() -> void:
+		PackIcons.draw_coin_3d(disc, Vector2(d, d) * 0.5, d * 0.5))
 	_coin_pill.add_child(disc)
-	# Highlight crescent: tiny lighter disc nudged to the top-left for gloss.
-	var hl := Panel.new()
-	var hd := d * 0.38
-	hl.size = Vector2(hd, hd)
-	hl.position = Vector2(d * 0.18, d * 0.14)
-	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var hs := StyleBoxFlat.new()
-	hs.bg_color = Color(1.0, 1.0, 0.85, 0.55)
-	hs.set_corner_radius_all(int(hd * 0.5))
-	hl.add_theme_stylebox_override("panel", hs)
-	disc.add_child(hl)
 	var glyph := Label.new()
 	glyph.text = "$"
 	glyph.add_theme_font_size_override("font_size", 24)
-	glyph.add_theme_color_override("font_color", Color(0.40, 0.24, 0.02))
-	glyph.add_theme_color_override("font_outline_color", Color(0.40, 0.24, 0.02))
-	glyph.add_theme_constant_override("outline_size", 2)
+	# Dark stamped glyph with a pale lower-right shadow → reads as raised metal.
+	glyph.add_theme_color_override("font_color", Color(0.34, 0.19, 0.02))
+	glyph.add_theme_color_override("font_shadow_color", Color(1.0, 0.94, 0.66, 0.7))
+	glyph.add_theme_constant_override("shadow_offset_x", 1)
+	glyph.add_theme_constant_override("shadow_offset_y", 2)
 	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
 	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -1323,22 +1326,49 @@ func _build_coin_plus_button(d: float, x_in_pill: float) -> void:
 	_coin_plus_btn.pivot_offset = Vector2(d, d) * 0.5
 	_coin_plus_btn.add_theme_font_size_override("font_size", 24)
 	_coin_plus_btn.focus_mode = Control.FOCUS_NONE
+	# Raised 3D disc: a warm bevel (bright gold rim, dark base) sitting on a drop shadow so
+	# it reads as a button popping OFF the pill, not a flat circle.
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.24, 0.13, 0.04)                     # dark brown inner
+	s.bg_color = Color(0.30, 0.17, 0.05)                     # rich brown inner
 	s.set_corner_radius_all(int(d * 0.5))
-	s.border_color = Color(1.0, 0.78, 0.22)                  # gold outer ring
+	s.border_color = Color(1.0, 0.80, 0.28)                  # gold outer ring
 	s.set_border_width_all(3)
+	s.shadow_color = Color(0.0, 0.0, 0.0, 0.55)              # cast shadow = raised
+	s.shadow_size = 6
+	s.shadow_offset = Vector2(0, 4)
 	_coin_plus_btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.34, 0.19, 0.06)
+	sh.bg_color = Color(0.38, 0.22, 0.07)                    # brighter on hover (lifts more)
+	sh.shadow_size = 8
+	sh.shadow_offset = Vector2(0, 5)
 	_coin_plus_btn.add_theme_stylebox_override("hover", sh)
 	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.16, 0.08, 0.02)
+	sp.bg_color = Color(0.16, 0.08, 0.02)                    # darker + shadow shrinks = pressed IN
+	sp.shadow_size = 2
+	sp.shadow_offset = Vector2(0, 1)
 	_coin_plus_btn.add_theme_stylebox_override("pressed", sp)
 	_coin_plus_btn.add_theme_color_override("font_color", Color(1.0, 0.82, 0.30))  # gold plus
 	_coin_plus_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.88, 0.45))
 	_coin_plus_btn.pressed.connect(_open_coins_popup)
 	add_child(_coin_plus_btn)
+
+	# Glossy top sheen — a soft warm-white highlight on the upper half so the disc reads as
+	# a rounded dome catching light from above (the key "3D" cue). Purely decorative.
+	var sheen := Panel.new()
+	var shw := d * 0.60
+	var shh := d * 0.34
+	sheen.size = Vector2(shw, shh)
+	sheen.position = Vector2((d - shw) * 0.5, d * 0.13)
+	sheen.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sheen_st := StyleBoxFlat.new()
+	sheen_st.bg_color = Color(1.0, 0.96, 0.78, 0.30)
+	sheen_st.set_corner_radius_all(int(shh * 0.5))
+	sheen.add_theme_stylebox_override("panel", sheen_st)
+	_coin_plus_btn.add_child(sheen)
+	# The sheen dims while the button is held so the disc reads as pressing in (paired with
+	# the pressed style's shrunk shadow, which does the "sink").
+	_coin_plus_btn.button_down.connect(func() -> void: sheen.modulate.a = 0.4)
+	_coin_plus_btn.button_up.connect(func() -> void: sheen.modulate.a = 1.0)
 
 	# Gentle pulse so the "+" reads as an actionable affordance.
 	var pulse := create_tween().set_loops()

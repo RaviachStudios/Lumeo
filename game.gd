@@ -310,22 +310,22 @@ func _make_coin_icon(d: float) -> Control:
 	var c := Control.new()
 	c.size = Vector2(d, d)
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var disc := Panel.new()
+	# 3D-shaded minted coin (gradient face, visible edge, specular), drawn in
+	# code and matched to the home-screen pill. The "$" is overlaid on top.
+	var disc := Control.new()
 	disc.size = Vector2(d, d)
 	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ds := StyleBoxFlat.new()
-	ds.bg_color = Color(1.0, 0.78, 0.16)
-	ds.set_corner_radius_all(int(d * 0.5))
-	ds.border_color = Color(1.0, 0.92, 0.55)
-	ds.set_border_width_all(2)
-	ds.shadow_color = Color(1.0, 0.6, 0.0, 0.55)
-	ds.shadow_size = 5
-	disc.add_theme_stylebox_override("panel", ds)
+	disc.draw.connect(func() -> void:
+		PackIcons.draw_coin_3d(disc, Vector2(d, d) * 0.5, d * 0.5))
 	c.add_child(disc)
 	var glyph := Label.new()
 	glyph.text = "$"
 	glyph.add_theme_font_size_override("font_size", int(d * 0.7))
-	glyph.add_theme_color_override("font_color", Color(0.45, 0.30, 0.05))
+	# Dark stamped glyph with a pale lower-right shadow → reads as raised metal.
+	glyph.add_theme_color_override("font_color", Color(0.34, 0.19, 0.02))
+	glyph.add_theme_color_override("font_shadow_color", Color(1.0, 0.94, 0.66, 0.7))
+	glyph.add_theme_constant_override("shadow_offset_x", 1)
+	glyph.add_theme_constant_override("shadow_offset_y", 1)
 	glyph.set_anchors_preset(Control.PRESET_FULL_RECT)
 	glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -417,10 +417,18 @@ func _next_round() -> void:
 	flash_time = maxf(0.18, GameState.flash_time - (level - 1) * speed_inc)
 	flash_gap = maxf(0.08, GameState.flash_gap - (level - 1) * speed_inc * 0.5)
 	_update_hud()
-	# Volcano skin only: hitting level 8 flashes a "you are on fire!" banner. The
-	# round waits for it to fade before the sequence starts, then Simon continues.
+	# Level-8 signature moments (each fires once, on the two special skins that have one).
+	# The round FREEZES on the banner — it's awaited before the sequence starts, so
+	# gameplay is paused for the ~3s show, then Simon continues.
+	#   • Volcano: the sky cracks into a thunderstorm behind a "YOU ARE ON FIRE!" banner.
+	#   • Arcade: the hall goes dark, every cabinet screen catches fire, and a big
+	#     "SIMON KING" banner lights up.
 	if level == 8 and _is_volcano_skin():
+		BackgroundManager.volcano_thunderstorm()   # storm runs concurrently with the banner
 		await _show_fire_text()
+	elif level == 8 and _is_arcade_skin():
+		BackgroundManager.arcade_king()            # dark room + fire screens, concurrent
+		await _show_simon_king_text()
 	_set_status("Watch carefully...")
 	_state = "showing"
 	await get_tree().create_timer(0.6).timeout
@@ -445,6 +453,12 @@ func _is_casino_skin() -> bool:
 func _is_lunapark_skin() -> bool:
 	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "lunapark"
 
+# True when the equipped look is the Arcade ("arcade") special skin — used for the
+# level-8 "SIMON KING" blackout (its cabinet hall is the live background, so the shader
+# effect lands on it). A manual per-part look never counts.
+func _is_arcade_skin() -> bool:
+	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "arcade"
+
 # Flash a big "YOU'RE ON FIRE!" banner across the screen, hold it, then fade it out
 # — ~3.3s total. Awaited by _next_round so the sequence only resumes once it fades.
 # Built from stacked layers (soft outer glow behind a molten-gradient-feel main
@@ -465,8 +479,10 @@ func _show_fire_text() -> void:
 
 	# Font size scales with the screen so it reads huge on phones and desktop alike,
 	# but stays within the width (with margins) so the line never clips.
-	var fs := int(clampf(screen.x * 0.16, 72.0, 168.0))
-	var txt := "YOU'RE ON FIRE!"
+	# "YOU ARE ON FIRE!" is a long line, so keep it a bit smaller than a short banner
+	# would be, and cap it so it never runs off the sides on wide screens.
+	var fs := int(clampf(screen.x * 0.115, 56.0, 124.0))
+	var txt := "YOU ARE ON FIRE!"
 
 	# Layer 1 — soft orange glow bloom behind the letters (thick outline, no fill punch).
 	var glow := _fire_label(txt, fs)
@@ -513,6 +529,64 @@ func _fire_label(txt: String, fs: int) -> Label:
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lbl.add_theme_font_size_override("font_size", fs)
 	return lbl
+
+# Big "SIMON KING" banner for the Arcade skin's level-8 blackout — regal gold letters
+# ringed by an electric neon glow (cyan→magenta), so it reads like a lit marquee sign
+# over the darkened hall. Pops in, holds with a gentle breath, fades out — ~3.3s total.
+# Awaited by _next_round so the round stays frozen until it clears.
+func _show_simon_king_text() -> void:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	var screen := get_viewport_rect().size
+	holder.position = Vector2.ZERO
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
+
+	var fs := int(clampf(screen.x * 0.155, 70.0, 164.0))
+	var txt := "SIMON KING"
+
+	# Layer 1 — wide neon halo (electric blue), a thick soft outline with no fill punch.
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(0.40, 0.85, 1.0, 0.85))
+	glow.add_theme_color_override("font_outline_color", Color(0.30, 0.55, 1.0, 0.7))
+	glow.add_theme_constant_override("outline_size", 44)
+	holder.add_child(glow)
+
+	# Layer 2 — magenta inner glow, a touch tighter, so the halo reads as arcade neon.
+	var glow2 := _fire_label(txt, fs)
+	glow2.add_theme_color_override("font_color", Color(1.0, 0.30, 0.85, 0.0))
+	glow2.add_theme_color_override("font_shadow_color", Color(1.0, 0.25, 0.80, 0.6))
+	glow2.add_theme_constant_override("shadow_offset_x", 0)
+	glow2.add_theme_constant_override("shadow_offset_y", 0)
+	glow2.add_theme_constant_override("shadow_outline_size", 22)
+	holder.add_child(glow2)
+
+	# Layer 3 — the crisp regal-gold face: bright gold core, deep outline, warm shadow.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(1.0, 0.86, 0.35))          # regal gold
+	main.add_theme_color_override("font_outline_color", Color(0.16, 0.06, 0.0))
+	main.add_theme_constant_override("outline_size", 16)
+	main.add_theme_color_override("font_shadow_color", Color(1.0, 0.62, 0.10, 0.55))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 6)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Pop in with an overshoot + fade, hold with a gentle breath, then fade out. ~3.3s.
+	holder.scale = Vector2(0.72, 0.72)
+	var tw := create_tween()
+	tw.tween_property(holder, "modulate:a", 1.0, 0.35)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.45) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.04, 1.04), 1.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "scale", Vector2.ONE, 1.0) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.9)
+	await tw.finished
+	holder.queue_free()
 
 # Big bold gold "JACKPOT!" banner that pops over the Simon during the Mega Jackpot
 # party, holds, then fades out and is freed exactly as the ~3s show ends. Built from a

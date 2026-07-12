@@ -4347,13 +4347,42 @@ void fragment() {
 "
 # Volcano dynamic: sample the plate, add the cheap animated overlay (crater lakes,
 # flowing flank lava, foot glow, embers), then grade + night vignette.
-const _LAVA_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\n" + _LAVA_FUNCS + "
+const _LAVA_DYN := _HEAD + "uniform sampler2D static_tex : filter_linear;\nuniform float storm = 0.0;\n" + _LAVA_FUNCS + "
 void fragment() {
 	vec2 uv = UV;
 	vec2 a = vec2(uv.x * aspect, uv.y);
 	float t = TIME;
 	vec3 col = texture(static_tex, uv).rgb;
 	col = volcanoAnim(col, a, uv, t);
+	// Level-8 THUNDERSTORM (driven by `storm`, 0 at rest): a HEAVY storm rolls in — the
+	// night sky turns deep and cold, rain slants across it, and it cracks with frequent
+	// lightning + jagged bolts, while the crater glow keeps burning underneath.
+	if (storm > 0.001) {
+		col = mix(col, col * vec3(0.24, 0.28, 0.42), storm * 0.85);         // deep overcast dim + cool
+		float sky = smoothstep(0.78, 0.04, uv.y);                          // 1 across the top sky
+		// Three out-of-phase flash trains → frequent, irregular strikes.
+		float f1 = fract(t * 1.70);
+		float s1 = smoothstep(0.0, 0.05, f1) * smoothstep(0.30, 0.05, f1) * step(0.35, hash11(floor(t * 1.70)));
+		float f2 = fract(t * 1.10 + 0.37);
+		float s2 = smoothstep(0.0, 0.04, f2) * smoothstep(0.24, 0.04, f2) * step(0.45, hash11(floor(t * 1.10) + 7.0));
+		float f3 = fract(t * 0.70 + 0.71);
+		float s3 = smoothstep(0.0, 0.05, f3) * smoothstep(0.36, 0.05, f3) * step(0.55, hash11(floor(t * 0.70) + 19.0));
+		float flash = clamp(s1 + s2 + s3, 0.0, 1.0);
+		col += vec3(0.85, 0.90, 1.0) * flash * storm * (0.45 + 1.05 * sky);  // brighter full-sky flash
+		// A jagged lightning BOLT down the sky during the strongest strikes (s1). Its column
+		// is randomised per strike and wiggles with noise as it descends.
+		float seed = floor(t * 1.70);
+		float bx = 0.18 + 0.64 * hash11(seed * 1.37);
+		float jag = (fbm(vec2(uv.y * 9.0, seed * 3.1)) - 0.5) * 0.16;
+		float bolt = smoothstep(0.012, 0.0, abs(uv.x - (bx + jag))) * smoothstep(0.60, 0.0, uv.y) * s1;
+		col += vec3(0.90, 0.95, 1.0) * bolt * storm * 2.6;
+		// Slanted rain: quantise the frame into thin sheared columns; each scrolls a bright
+		// dash downward, so it reads as streaking rain rather than static noise.
+		float rc = floor((uv.x * aspect + uv.y * 0.18) * 110.0);
+		float rd = fract(uv.y * 3.0 + t * 2.2 + hash11(rc) * 9.0);
+		float rain = smoothstep(0.0, 0.04, rd) * smoothstep(0.30, 0.04, rd) * step(0.6, hash11(rc + 3.0));
+		col += vec3(0.55, 0.64, 0.85) * rain * storm * 0.40;
+	}
 	col = mix(col, col * vec3(1.12, 0.99, 0.86), 0.18);
 	vec2 vg = (uv - 0.5) * vec2(aspect, 1.0);
 	col *= mix(0.50, 1.0, smoothstep(1.5, 0.30, length(vg)));
@@ -5110,6 +5139,9 @@ vec3 arcadeScene(vec2 a, vec2 uv) {
 // GDScript (BackgroundManager.arcade_omg, fired every 5th completed round) so all
 // cabinets switch and return in perfect sync. Cross-faded over the tube game.
 uniform float omg_active = 0.0;
+// Level-8 SIMON KING blackout (0 at rest): the hall falls dark and every cabinet CRT
+// catches fire (see arcadeMotion + arcFire). Driven by BackgroundManager.arcade_king().
+uniform float king = 0.0;
 
 // 5-row bitmap font for the three letters (rows top->bottom, y down). Each returns
 // the lit-pixel bitmask for that row; O/G are 4 wide, M is 5 wide.
@@ -5164,7 +5196,29 @@ vec3 arcOMG(vec2 s, float t, float fi) {
 	return c;
 }
 
+// A licking flame fill for a cabinet CRT during the SIMON KING blackout. s in 0..1
+// (y down: s.y ~ 1 is the bottom of the tube). Flames climb from the base with the
+// shared value-noise scrolling upward — deep orange-red body, hot yellow core, plus CRT
+// scanlines so it matches the other screens. fi de-syncs each cabinet's fire.
+vec3 arcFire(vec2 s, float t) {
+	float n = fbm(vec2(s.x * 3.5, s.y * 4.5 - t * 2.4));
+	float m = fbm(vec2(s.x * 7.0 + 5.0, s.y * 7.0 - t * 3.6));
+	float heat = clamp(s.y * 1.15 + (n - 0.5) * 1.1 - 0.12, 0.0, 1.0);   // hot at the base, ragged top
+	heat = clamp(heat * (0.7 + 0.6 * m), 0.0, 1.0);
+	vec3 c = vec3(0.05, 0.015, 0.0);
+	c = mix(c, vec3(0.85, 0.16, 0.02), smoothstep(0.15, 0.55, heat));    // orange-red body
+	c = mix(c, vec3(1.0, 0.60, 0.12), smoothstep(0.45, 0.80, heat));     // orange
+	c = mix(c, vec3(1.0, 0.92, 0.55), smoothstep(0.80, 1.0, heat));      // hot core
+	c *= 0.74 + 0.26 * sin(s.y * 20.0 * 6.2831);                         // CRT scanlines
+	return c;
+}
+
 vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
+	// SIMON KING blackout: the baked hall falls to near-black so only the lit CRTs (which
+	// are painted at full brightness below, and catch fire) shine. The room's own live
+	// lights (marquees, signs, dust, floor sweep, haze) are faded out by `roomLit` too.
+	col = mix(col, col * vec3(0.055, 0.05, 0.09), king);
+	float roomLit = 1.0 - king;
 	float horizon = 0.58;
 	// gentle global CRT scanline shimmer
 	col *= mix(0.95, 1.0, 0.5 + 0.5 * sin(uv.y * 240.0 - t * 5.0));
@@ -5211,6 +5265,9 @@ vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			if (omg_active > 0.001) {                                // OMG event: crossfade over the game
 				g = mix(g, arcOMG(s, t, fi), omg_active);
 			}
+			if (king > 0.001) {                                      // SIMON KING: the screen catches fire
+				g = mix(g, arcFire(s, t + fi * 2.7), king);
+			}
 			float vig = smoothstep(1.05, 0.4, length((s - 0.5) * 2.0));
 			float m = win1(s.x, 0.03, 0.97, 0.05) * win1(s.y, 0.03, 0.97, 0.05);
 			col = mix(col, g * bright * (0.55 + 0.45 * vig), m * occ);
@@ -5223,20 +5280,20 @@ vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
 		float mround = (style == 1) ? ch * 0.1 : ((style == 2) ? 0.0 : ch * 0.04);
 		float mq = sdRBox(mp, vec2(cw * 1.06, ch * 0.135), mround);
 		float flick = 0.85 + 0.15 * sin(t * 3.0 + fi) - 0.35 * step(0.97, hash11(fi + floor(t * 7.0)));
-		col += mc * smoothstep(0.12 * dscale, 0.0, abs(mq)) * flick * 0.15 * bright;
-		col += mc * aafill(mq) * max(flick - 0.75, 0.0) * 0.5;
+		col += mc * smoothstep(0.12 * dscale, 0.0, abs(mq)) * flick * 0.15 * bright * roomLit;
+		col += mc * aafill(mq) * max(flick - 0.75, 0.0) * 0.5 * roomLit;
 		// soft, slightly-blurred floor reflection of the cabinet glow
 		float baseY = cc.y + ch;
 		float rd = a.y - baseY;
 		if (rd > 0.0) {
 			float refl = smoothstep(0.18 * dscale, 0.0, rd) * smoothstep(cw * 1.3, 0.0, abs(a.x - cc.x));
-			col += mc * refl * (0.6 + 0.4 * sin(t * 3.0 - rd * 40.0 + fi)) * 0.11 * bright;
+			col += mc * refl * (0.6 + 0.4 * sin(t * 3.0 - rd * 40.0 + fi)) * 0.11 * bright * roomLit;
 		}
 	}
-	// ---- background neon signs breathe / gently flicker ----
-	col += vec3(0.2, 0.9, 1.0) * arcSign(uv, vec2(0.235, 0.15), vec2(0.15, 0.05), 1.0) * 0.14 * (0.7 + 0.3 * sin(t * 1.7));
-	col += vec3(1.0, 0.32, 0.62) * arcSign(uv, vec2(0.775, 0.205), vec2(0.13, 0.042), 4.0) * 0.13 * (0.6 + 0.4 * step(0.15, hash11(floor(t * 6.0) * 0.7)));
-	col += vec3(0.5, 1.0, 0.55) * arcSign(uv, vec2(0.5, 0.09), vec2(0.1, 0.03), 8.0) * 0.09 * (0.7 + 0.3 * sin(t * 2.3 + 1.0));
+	// ---- background neon signs breathe / gently flicker (dark during the KING blackout) ----
+	col += vec3(0.2, 0.9, 1.0) * arcSign(uv, vec2(0.235, 0.15), vec2(0.15, 0.05), 1.0) * 0.14 * (0.7 + 0.3 * sin(t * 1.7)) * roomLit;
+	col += vec3(1.0, 0.32, 0.62) * arcSign(uv, vec2(0.775, 0.205), vec2(0.13, 0.042), 4.0) * 0.13 * (0.6 + 0.4 * step(0.15, hash11(floor(t * 6.0) * 0.7))) * roomLit;
+	col += vec3(0.5, 1.0, 0.55) * arcSign(uv, vec2(0.5, 0.09), vec2(0.1, 0.03), 8.0) * 0.09 * (0.7 + 0.3 * sin(t * 2.3 + 1.0)) * roomLit;
 	// ---- floating dust motes drifting up through the neon light ----
 	float dust = 0.0;
 	for (int k = 0; k < 3; k++) {
@@ -5247,12 +5304,12 @@ vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
 		vec2 f = fract(duv) - 0.5 + 0.3 * vec2(sin(t + h * 6.28), cos(t * 0.7 + h * 6.28));
 		dust += smoothstep(0.07, 0.0, length(f)) * step(0.84, h);
 	}
-	col += vec3(0.7, 0.85, 1.0) * dust * 0.22 * smoothstep(0.95, 0.3, uv.y);
+	col += vec3(0.7, 0.85, 1.0) * dust * 0.22 * smoothstep(0.95, 0.3, uv.y) * roomLit;
 	// ---- slow neon light sweep across the grid floor ----
-	col += vec3(0.4, 0.2, 0.6) * smoothstep(0.04, 0.0, abs(uv.x - fract(t * 0.06))) * step(horizon, uv.y) * 0.22;
+	col += vec3(0.4, 0.2, 0.6) * smoothstep(0.04, 0.0, abs(uv.x - fract(t * 0.06))) * step(horizon, uv.y) * 0.22 * roomLit;
 	// ---- subtle atmospheric haze band + breathing vanishing-point glow (behind wheel) ----
-	col += vec3(0.2, 0.1, 0.35) * smoothstep(0.12, 0.0, abs(uv.y - horizon)) * 0.15;
-	col += vec3(0.45, 0.2, 0.7) * smoothstep(0.22, 0.0, distance(uv, vec2(0.5, horizon))) * (0.12 + 0.05 * sin(t * 1.5)) * step(uv.y, horizon + 0.06);
+	col += vec3(0.2, 0.1, 0.35) * smoothstep(0.12, 0.0, abs(uv.y - horizon)) * 0.15 * roomLit;
+	col += vec3(0.45, 0.2, 0.7) * smoothstep(0.22, 0.0, distance(uv, vec2(0.5, horizon))) * (0.12 + 0.05 * sin(t * 1.5)) * step(uv.y, horizon + 0.06) * roomLit;
 	return col;
 }
 "
@@ -6852,6 +6909,10 @@ var _active := false
 var _river_surge_tween: Tween
 # Active tween driving the Arcade skin's global "OMG" event (omg_active 0 -> 1, hold, -> 0).
 var _omg_tween: Tween
+# Active tween driving the Arcade skin's level-8 "SIMON KING" blackout (king 0 -> 1, hold, -> 0).
+var _king_tween: Tween
+# Active tween driving the Volcano skin's level-8 thunderstorm (storm 0 -> 1, hold, -> 0).
+var _storm_tween: Tween
 # Active tween driving the Jackpot skin's Stage-5 Mega Jackpot celebration (jp clock 0 -> 5).
 var _jackpot_tween: Tween
 # Active tweens driving the Luna Park skin's Light Chase (chase clock 0 -> 2) and
@@ -7393,6 +7454,27 @@ func _set_river_boost(v: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("river_boost", v)
 
+# Level-8 thunderstorm on the Volcano skin: the night sky dims into a cold overcast and
+# cracks with lightning for ~3s (behind the "YOU ARE ON FIRE!" banner), then eases back.
+# A single `storm` uniform drives the whole effect. No-op unless the live background is
+# the Volcano skin's lava world.
+func volcano_thunderstorm() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:inferno":
+		return
+	if _storm_tween and _storm_tween.is_valid():
+		_storm_tween.kill()
+	_set_storm(0.0)
+	_storm_tween = create_tween()
+	_storm_tween.tween_method(_set_storm, 0.0, 1.0, 0.4) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)   # clouds roll in
+	_storm_tween.tween_interval(2.2)                            # storm holds
+	_storm_tween.tween_method(_set_storm, 1.0, 0.0, 0.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)    # clears back to night
+
+func _set_storm(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("storm", v)
+
 # Global arcade "OMG" event — called every 5th completed round. Every visible arcade
 # cabinet drops its game and lights up a big glowing OMG at the same instant, holds for
 # 4s, then all snap back together. A single shader uniform drives every tube, so switch
@@ -7412,6 +7494,27 @@ func arcade_omg() -> void:
 func _set_omg(v: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("omg_active", v)
+
+# Level-8 "SIMON KING" blackout on the Arcade skin: the whole hall drops to near-black
+# and every cabinet CRT catches fire for ~3s (behind the "SIMON KING" banner), then the
+# lights ease back up. A single `king` uniform drives every tube + the room dimming, so
+# it's perfectly synced. No-op unless the live background is the Arcade skin.
+func arcade_king() -> void:
+	if _mat == null or _resolved_bg_key() != "skin:arcade":
+		return
+	if _king_tween and _king_tween.is_valid():
+		_king_tween.kill()
+	_set_king(0.0)
+	_king_tween = create_tween()
+	_king_tween.tween_method(_set_king, 0.0, 1.0, 0.35) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)   # snap to black
+	_king_tween.tween_interval(2.3)                             # hold the blackout
+	_king_tween.tween_method(_set_king, 1.0, 0.0, 0.55) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)    # bring the room back
+
+func _set_king(v: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("king", v)
 
 # Mega Jackpot Celebration — fired every 8th completed level (8, 16, 24, …) on the
 # Jackpot (casino) skin. Runs the casino dynamic shader's `jp` clock linearly 0 -> 5

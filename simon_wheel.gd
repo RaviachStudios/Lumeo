@@ -116,6 +116,16 @@ var _preview_paused := false
 # glow) is frozen, and _process is turned off. This is what keeps the skins tab from
 # driving several live 3D scenes at once. See set_static_preview.
 var _static_preview := false
+# Every coal/cone ShaderMaterial on an animated skin (Volcano), collected each _rebuild.
+# Their `t_anim` uniform is driven to 0 while this wheel is a static/paused shop preview
+# so the lava is FROZEN at the shader level — a guarantee that holds even if a preview's
+# SubViewport happens to redraw (UPDATE_DISABLED can lag on some drivers). See
+# _refresh_skin_anim_freeze. The live gameplay wheel keeps t_anim = 1 (full animation).
+var _skin_anim_mats: Array[ShaderMaterial] = []
+# The key directional light, kept so the Volcano skin (the only wheel that re-renders its
+# shadow map EVERY frame, UPDATE_ALWAYS) can use a cheaper PCF shadow filter — its dark,
+# busy coal hides the softer edge, so it's imperceptible but lightens the per-frame cost.
+var _key_light: DirectionalLight3D
 var _cam: Camera3D
 var _wheel_root: Node3D
 var _segments: Array[MeshInstance3D] = []
@@ -281,6 +291,7 @@ func _build_shell() -> void:
 	key.shadow_blur = 3.0                          # softer = premium, no hard edge
 	key.shadow_opacity = 0.5                       # light shadows, no heavy darkening
 	_vp.add_child(key)
+	_key_light = key                               # kept so the animated skin can cheapen its shadow
 
 	# Cool, dim fill from the opposite low side: lifts the recessed/lower faces just
 	# enough to read their form without flattening the contrast.
@@ -760,6 +771,9 @@ func _rebuild() -> void:
 
 	_halos.clear()
 	_halo_mats.clear()
+	# Coal/cone shader materials are recreated below (per skin); collect them fresh so
+	# _refresh_skin_anim_freeze can freeze their `t_anim` on a shop preview.
+	_skin_anim_mats.clear()
 	# Eruption tongues are children of _wheel_root (freed above); just drop the refs.
 	_lava_tongues.clear()
 	if _glow_tex == null:
@@ -893,6 +907,9 @@ func _rebuild() -> void:
 		_wheel_root.add_child(halo)
 		_halos.append(halo)
 		_halo_mats.append(gmat)
+	# Freshly-built coal/cone materials default to t_anim = 1; re-assert the freeze so a
+	# shop preview wheel that just rebuilt stays frozen.
+	_refresh_skin_anim_freeze()
 	# Geometry/materials just changed — force the (otherwise idle) viewport to draw
 	# at least one frame so the rebuilt wheel actually appears.
 	_kick_render()
@@ -977,6 +994,11 @@ func apply_skin(outer: Variant, inner: Variant, number: Variant, skin_id: String
 	_apply_num_pack()
 	_sync_skin_overlay()
 	_layout_numeral()   # move the readout onto the volcano crater (or back to centre)
+	# The Volcano wheel re-renders its shadow map every frame (UPDATE_ALWAYS); a smaller PCF
+	# blur there is imperceptible on the dark coal but cheaper per frame. Other skins render
+	# their shadow once, so they keep the premium-soft blur.
+	if _key_light != null:
+		_key_light.shadow_blur = 1.5 if _animated_skin() else 3.0
 
 # Resolve a rim mesh's stock graphite colour through the equipped outer tint.
 # Inferno is handled separately via _ring_material (it uses a coal shader rather
@@ -1247,6 +1269,7 @@ func _coal_material(heat: float) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = _coal_shader
 	m.set_shader_parameter("heat", heat)
+	_skin_anim_mats.append(m)   # so a shop preview can freeze its `t_anim`
 	return m
 
 # ---------------- Volcano skin: hub cone + sulfur stones ----------------
@@ -1263,7 +1286,9 @@ func _volcano_mesh() -> ArrayMesh:
 
 func _volcano_material() -> ShaderMaterial:
 	# Same shared lava-cone shader the background cones wear (one compile for both).
-	return VolcanoCone.material(VOLC_H, VOLC_RIM_R)
+	var m := VolcanoCone.material(VOLC_H, VOLC_RIM_R)
+	_skin_anim_mats.append(m)   # so a shop preview can freeze its `t_anim`
+	return m
 
 # ---------------- Volcano skin: eruption lava tongues ----------------
 
@@ -1444,14 +1469,15 @@ shader_type spatial;
 render_mode cull_disabled;
 
 uniform float heat = 1.0;
+// 1.0 = live (gameplay), 0.0 = frozen still (shop preview). Multiplies TIME so a
+// static/paused preview's coal is FROZEN even if its viewport redraws. See _refresh_skin_anim_freeze.
+uniform float t_anim = 1.0;
 varying vec3 v_pos;
 
-// sin-free hash (Hoskins). The coal shader clads EVERY ring + the hub of the
-// inferno wheel and calls fbm 3x (5 octaves each) = 24 hash3/octave-sample per
-// pixel, redrawn EVERY frame (the Volcano skin runs the wheel viewport
-// continuously). sin() is among the slowest mobile-GPU ops, so the sin-based hash
-// made the whole wheel a per-frame bottleneck; this is pure arithmetic. The
-// gradient vectors shift slightly but the coal/crack character is identical.
+// sin-free hash (Hoskins). The coal shader clads EVERY ring + the hub of the inferno
+// wheel and is redrawn continuously (the Volcano wheel viewport runs UPDATE_ALWAYS), so
+// per-pixel cost is paid ~60x/s over the whole wheel — the source of the on-phone lag.
+// sin() is among the slowest mobile-GPU ops; this hash is pure arithmetic.
 vec3 hash3(vec3 p) {
 	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
 	p += dot(p, p.yxz + 33.33);
@@ -1474,42 +1500,44 @@ float gnoise(vec3 p) {
 		   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 0.5 + 0.5;
 }
 
-float fbm(vec3 p) {
-	float v = 0.0; float a = 0.5;
-	for (int i = 0; i < 5; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
-	return v;
-}
+// Two fixed-octave fbm variants (fully-unrolled constant loops — old GL ES drivers
+// unroll them cleanly). The coal look only needs a low-detail base grain + a
+// mid-detail crack field + a low-freq hot-zone mask, so the fragment now runs
+// 2+3+2 = 7 octaves/pixel instead of the old 3x5 = 15 — under half the hash cost,
+// cheap enough to animate every frame even on old phones. See volcano-skin-perf.
+float fbm2(vec3 p) { float v = 0.0; float a = 0.5; for (int i = 0; i < 2; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; } return v; }
+float fbm3(vec3 p) { float v = 0.0; float a = 0.5; for (int i = 0; i < 3; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; } return v; }
 
 void vertex() {
 	v_pos = VERTEX;
 }
 
 void fragment() {
+	float t = TIME * t_anim;
 	// Sample noise in object space so every ring/hub of the wheel reads as a
 	// SINGLE chunk of coal (no per-mesh seam where the noise pattern resets).
 	vec3 p = v_pos * 7.0;
 
-	// Coal base: rocky variation between near-black and a slightly warmer dark
-	// brown, so the rim doesn't look like a flat colour.
-	float coal = fbm(p);
+	// Coal base: rocky variation between near-black and a slightly warmer dark brown.
+	// Dark-on-dark, so a 2-octave grain is plenty — the detail was never visible.
+	float coal = fbm2(p);
 	vec3 coal_dark = vec3(0.020, 0.010, 0.006);
 	vec3 coal_light = vec3(0.085, 0.040, 0.022);
 	vec3 albedo = mix(coal_dark, coal_light, coal);
 
-	// Cracks via ridged noise (1 - |2n-1|): sharp lines where the noise crosses
-	// the midpoint. Slow drift gives the impression of glow seeping along veins.
-	float cn = fbm(p * 0.55 + vec3(0.0, TIME * 0.10, 0.0));
+	// Cracks via ridged noise (1 - |2n-1|): sharp lines where the noise crosses the
+	// midpoint. Slow drift gives the impression of glow seeping along the veins.
+	float cn = fbm3(p * 0.55 + vec3(0.0, t * 0.10, 0.0));
 	float ridge = 1.0 - abs(2.0 * cn - 1.0);
 	float cracks = smoothstep(0.74, 0.95, ridge);
 
 	// Per-position pulse phase so different cracks breathe at different times —
 	// reads as living embers, not a synchronised flicker.
-	float breath = 0.55 + 0.45 * sin(TIME * 1.4 + cn * 14.0);
+	float breath = 0.55 + 0.45 * sin(t * 1.4 + cn * 14.0);
 
-	// Rare 'hot stones': large-scale low-frequency noise selects a few zones
-	// that glow extra-bright yellow-white, like coals that just shifted to the
-	// surface.
-	float hot_noise = fbm(p * 0.32 + vec3(TIME * 0.07, 0.0, 0.0));
+	// Rare 'hot stones': large-scale low-frequency noise selects a few zones that
+	// glow extra-bright yellow-white, like coals that just shifted to the surface.
+	float hot_noise = fbm2(p * 0.32 + vec3(t * 0.07, 0.0, 0.0));
 	float hot = smoothstep(0.72, 0.88, hot_noise);
 
 	// Emission: cracks are red-orange, hot stones push toward yellow-white.
@@ -2198,6 +2226,13 @@ func _update_render_activity(animating: bool) -> void:
 		_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		return
 	# A static thumbnail never drives a continuous redraw (see set_static_preview).
+	# An animated skin (Volcano) redraws continuously via UPDATE_ALWAYS — the single
+	# reliable render-target mode for motion across GL drivers (rapid UPDATE_ONCE
+	# toggling stutters or stalls on some old phones). The per-frame cost is instead
+	# kept low by a cheap coal/cone shader (see _COAL_SHADER / volcano_cone), so the
+	# lava animates smoothly on all phones without the old lag. Stock looks settle to
+	# a single frame and then idle (UPDATE_ONCE self-disables) so a static wheel isn't
+	# re-rendered every frame — that continuous redraw OOM-crashed the mobile GL driver.
 	if (_animated_skin() or animating) and not _static_preview:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	elif _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
@@ -2228,6 +2263,9 @@ func set_static_preview(on: bool) -> void:
 	# _process — freezing the viewport doesn't stop it, so freeze it explicitly or a
 	# preview wheel's ring keeps animating/redrawing every frame.
 	_refresh_marquee_freeze()
+	# The Volcano coal/crater lava animates from shader TIME; freeze it at the shader
+	# level too, so the shop card shows a dead-still hot-coal thumbnail (not moving lava).
+	_refresh_skin_anim_freeze()
 	if _vp == null or _preview_paused:
 		return
 	# Render exactly one more frame (UPDATE_ONCE self-reverts to DISABLED after it
@@ -2242,6 +2280,7 @@ func set_preview_paused(paused: bool) -> void:
 		return
 	_preview_paused = paused
 	_refresh_marquee_freeze()
+	_refresh_skin_anim_freeze()
 	if paused:
 		if _vp:
 			_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -2254,6 +2293,17 @@ func set_preview_paused(paused: bool) -> void:
 func _refresh_marquee_freeze() -> void:
 	if _marquee != null and is_instance_valid(_marquee):
 		_marquee.set_frozen(_static_preview or _preview_paused)
+
+# Drive the coal/cone shaders' `t_anim` to 0 (frozen) on any shop preview wheel — static
+# thumbnail OR paused tab — and 1 (live) on the gameplay wheel. This freezes the Volcano
+# lava at the SHADER level, so a preview shows a still hot-coal image even if its
+# SubViewport happens to redraw (belt-and-suspenders with the viewport freeze). No-op off
+# the Volcano skin (the list is empty for every other skin).
+func _refresh_skin_anim_freeze() -> void:
+	var live := 1.0 if not (_static_preview or _preview_paused) else 0.0
+	for m in _skin_anim_mats:
+		if m != null and is_instance_valid(m):
+			m.set_shader_parameter("t_anim", live)
 
 # ---------------- hit testing ----------------
 

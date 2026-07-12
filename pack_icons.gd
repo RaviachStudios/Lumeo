@@ -511,6 +511,49 @@ static func _draw_coin(c: CanvasItem, cx: float, cy: float, r: float) -> void:
 	c.draw_arc(Vector2(cx, cy), r * 0.92, PI + 0.55, TAU - 0.55, 24,
 		Color(1, 1, 1, 0.55), 1.5, true)
 
+# A richly shaded, genuinely 3D-looking gold coin disc — no glyph, so callers
+# overlay their own "$"/mark on top. Light source sits at the top-left: the
+# face carries a directional gradient from a bright catchlight down to a dark
+# lower rim, and a visible edge/thickness peeking out below the face gives the
+# disc real depth (vs. the old flat single-colour circle). Used by the HUD
+# coin pills so the currency reads as a solid minted coin at any size.
+static func draw_coin_3d(c: CanvasItem, ctr: Vector2, r: float) -> void:
+	var cx := ctr.x
+	var cy := ctr.y
+	# Soft contact shadow on the ground, offset down-right.
+	c.draw_circle(Vector2(cx + r * 0.12, cy + r * 0.24), r * 1.05, Color(0, 0, 0, 0.30))
+	# Coin thickness: two rim discs peeking out below the face sell the depth.
+	c.draw_circle(Vector2(cx, cy + r * 0.14), r, GOLD_RIM)
+	c.draw_circle(Vector2(cx, cy + r * 0.07), r, GOLD_DARK)
+	# Face gradient — concentric discs whose centre drifts toward the top-left
+	# light, fading dark rim → mid → gold → pale catchlight.
+	var steps := 12
+	for i in steps:
+		var t := float(i) / float(steps - 1)      # 0 = rim, 1 = centre
+		var rr := r * (1.0 - 0.86 * t)
+		var off := Vector2(-r * 0.16, -r * 0.20) * t
+		c.draw_circle(Vector2(cx, cy) + off, rr, _sample_gold(t))
+	# Raised rim ridge: a bright ring just inside the edge where the light
+	# catches it (top-left), turning to a soft dark ring on the shadowed
+	# lower-right so the edge reads as rounded rather than a flat outline.
+	var ridge_w := maxf(1.0, r * 0.06)
+	c.draw_arc(Vector2(cx, cy), r * 0.86, PI * 0.72, PI * 1.9, 28,
+		Color(1, 1, 1, 0.45), ridge_w, true)
+	c.draw_arc(Vector2(cx, cy), r * 0.86, PI * 1.9, TAU + PI * 0.72, 28,
+		Color(0, 0, 0, 0.22), ridge_w, true)
+	# Tight specular catchlight on the upper-left face.
+	c.draw_circle(Vector2(cx - r * 0.30, cy - r * 0.32), r * 0.15,
+		Color(1, 1, 1, 0.55))
+
+# Samples the gold palette as a rim→catchlight ramp for draw_coin_3d.
+static func _sample_gold(t: float) -> Color:
+	var stops: Array[Color] = [GOLD_DARK, GOLD_MID, GOLD, GOLD_LIGHT, Color(1, 1, 0.86)]
+	var seg := clampf(t, 0.0, 1.0) * float(stops.size() - 1)
+	var i := int(seg)
+	if i >= stops.size() - 1:
+		return stops[stops.size() - 1]
+	return stops[i].lerp(stops[i + 1], seg - float(i))
+
 # Coin in an ellipse silhouette (side / mid-flip view).
 static func _draw_tilted_coin(c: CanvasItem, cx: float, cy: float, r: float) -> void:
 	var ry := r * 0.42

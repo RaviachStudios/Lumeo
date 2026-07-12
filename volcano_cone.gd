@@ -92,14 +92,16 @@ uniform float rim_r = 0.186;
 // 0 at rest; pulsed toward 1 (then tweened back to 0) when the wheel erupts every 3
 // rounds — the crater floods brighter and molten lava spills a little way down the slopes.
 uniform float erupt = 0.0;
+// 1.0 = live (gameplay), 0.0 = frozen still (shop preview). Multiplies TIME so a static
+// preview's crater lava is FROZEN even if its viewport redraws. Only the wheel hub cone
+// sets it to 0 (via SimonWheel); the baked background cones keep the default 1.0.
+uniform float t_anim = 1.0;
 varying vec3 v_pos;
 
-// sin-free hash (Hoskins). This runs 8x per gnoise x 5 octaves = 40x per fbm, on
-// every pixel of the hub cone EVERY frame (the Volcano skin redraws the wheel
-// viewport continuously). sin() is among the slowest mobile-GPU ops, so the old
-// sin-based hash made the cone a per-frame bottleneck; this is pure arithmetic.
-// The gradient vectors shift slightly, but the noise character/sharpness — and
-// therefore the rock texture and crater look — is identical.
+// sin-free hash (Hoskins). This runs on every pixel of the hub cone whenever the Volcano
+// wheel viewport draws (continuously, UPDATE_ALWAYS). sin() is among the slowest
+// mobile-GPU ops, so the old sin-based hash made the cone a per-frame bottleneck; this is
+// pure arithmetic. The gradient vectors shift slightly, but the rock/crater look is identical.
 vec3 hash3(vec3 p) {
 	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
 	p += dot(p, p.yxz + 33.33);
@@ -120,9 +122,12 @@ float gnoise(vec3 p) {
 	return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
 		   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z) * 0.5 + 0.5;
 }
+// 3 octaves (was 5): the hub cone is small, so its top octaves are sub-pixel and dropping
+// them is invisible, while cutting the per-pixel hash cost the continuously-redrawn Volcano
+// wheel pays. The baked background cones pay it once. See volcano-skin-perf.
 float fbm(vec3 p) {
 	float v = 0.0; float a = 0.5;
-	for (int i = 0; i < 5; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
+	for (int i = 0; i < 3; i++) { v += a * gnoise(p); p = p * 2.0; a *= 0.5; }
 	return v;
 }
 
@@ -131,6 +136,7 @@ void vertex() {
 }
 
 void fragment() {
+	float t = TIME * t_anim;
 	// Radius from the cone axis — used to isolate the crater bowl at the top.
 	float rad = length(vec2(v_pos.x, v_pos.z));
 
@@ -144,7 +150,7 @@ void fragment() {
 	// this is the ONLY lava, and it sits at the top of the cone. No streams run
 	// down the slope, so the front of the mountain stays earth brown.
 	float crater = smoothstep(rim_r * 1.0, rim_r * 0.55, rad);
-	float bubble = 0.7 + 0.3 * sin(TIME * 2.2 + rock * 20.0);
+	float bubble = 0.7 + 0.3 * sin(t * 2.2 + rock * 20.0);
 
 	vec3 lava_col = vec3(1.00, 0.30, 0.04);
 	vec3 hot_col = vec3(1.00, 0.78, 0.30);
@@ -162,7 +168,7 @@ void fragment() {
 		float onSlope = smoothstep(rim_r * 1.02, rim_r * 1.14, rad);     // only below the crater lip
 		float down = smoothstep(0.0, rim_y, v_pos.y);                    // 1 at the rim, fades toward the foot
 		float slopeLava = streak * onSlope * down * erupt;
-		float boil = 0.6 + 0.4 * sin(TIME * 3.0 + ang * 4.0);
+		float boil = 0.6 + 0.4 * sin(t * 3.0 + ang * 4.0);
 		albedo = mix(albedo, vec3(0.32, 0.07, 0.02), clamp(slopeLava, 0.0, 1.0));
 		emission += mix(lava_col, hot_col, 0.5) * slopeLava * boil * 5.0;
 	}

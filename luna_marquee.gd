@@ -53,7 +53,15 @@ var _frozen := false
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	z_index = 85                     # above the wheel render (bulbs sit outside the disc)
+	# The marquee must draw ABOVE the wheel's SubViewportContainer, but it must NOT
+	# escape an ancestor's clip_contents — the shop's SPECIAL SKINS / SIMON preview
+	# cards clip their wheel, and a CanvasItem with a non-zero z_index is lifted out of
+	# that clip in Godot, so its bulbs float over the whole shop instead of staying
+	# inside the card. SimonWheel adds this overlay AFTER the SubViewportContainer (see
+	# _build_center_overlay), so plain tree order already paints it on top of the wheel
+	# render — no z_index needed. Keeping z_index at 0 is what lets the card clip contain
+	# the ring so it can never remain floating on screen after the preview is gone.
+	z_index = 0
 	visibility_changed.connect(_on_visibility)
 	set_process(false)               # only runs while the ring is actually shown
 
