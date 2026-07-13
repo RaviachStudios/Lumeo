@@ -14,6 +14,7 @@ extends Control
 # Everything is laid out symmetrically and re-flowed in _layout() on resize.
 
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
+const DailyRankRewardPopup := preload("res://daily_rank_reward_popup.gd")
 const ProfilePopup := preload("res://profile_screen.gd")
 const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
 const HomeTutorial := preload("res://home_tutorial.gd")
@@ -158,12 +159,19 @@ func _ready() -> void:
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
 		_build_daily_claim_button()
-		# Opening the home screen is the heartbeat of the login-streak system.
-		# If the wallet hasn't finished loading yet, deferred call once it does.
+		# Show a summary popup when yesterday's leaderboard reward lands. Connect
+		# BEFORE kicking off the grant so we never miss the (possibly synchronous
+		# in editor) emission.
+		CoinsManager.daily_rank_reward_granted.connect(_on_daily_rank_reward)
+		# Opening the home screen is the heartbeat of the login-streak system AND
+		# the moment we collect the previous day's leaderboard-standing reward.
+		# If the wallet hasn't finished loading yet, defer both until it has.
 		if CoinsManager.is_loaded():
 			CoinsManager.register_login()
+			CoinsManager.grant_daily_rewards_if_due()
 		else:
 			CoinsManager.loaded.connect(CoinsManager.register_login, CONNECT_ONE_SHOT)
+			CoinsManager.loaded.connect(CoinsManager.grant_daily_rewards_if_due, CONNECT_ONE_SHOT)
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)
@@ -2067,6 +2075,15 @@ func _refresh_daily_badge() -> void:
 
 func _open_daily_popup() -> void:
 	var popup := DailyClaimPopup.new()
+	add_child(popup)
+
+# Yesterday's leaderboard-standing reward just landed — show the summary popup.
+func _on_daily_rank_reward(total: int, results: Array) -> void:
+	if not is_inside_tree():
+		return
+	var popup := DailyRankRewardPopup.new()
+	popup.total = total
+	popup.results = results
 	add_child(popup)
 
 # Player profile opens as a modal popup over the home screen (not a screen swap),

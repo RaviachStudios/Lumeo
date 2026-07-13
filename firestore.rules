@@ -40,6 +40,18 @@ service cloud.firestore {
     // at write time: a player at exactly the midnight tick could write
     // tomorrow's date a few seconds early — that's strictly fairer than
     // rejecting their score for clock drift.
+    // Daily rows are now keyed by `{date}__{uid}` (historical, one per day) so a
+    // later replay can't overwrite a closed day's board — the reward flow reads
+    // those past boards back. Ownership comes from a `uid` field validated against
+    // auth (same pattern as contest_members below).
+    //
+    // ROLLOUT COMPAT: already-released app versions still write the LEGACY shape
+    // (doc id == uid, no `uid` field). We accept both so those clients keep
+    // working until users update: a write is OK if it's the new shape
+    // (data.uid == auth.uid) OR the legacy shape (docId == auth.uid). The shared
+    // field checks (score/date/expires) apply to both; the `uid` field is only
+    // required-and-checked on the new shape. Once old versions age out this can
+    // collapse back to the new shape only.
     function dailyRowOk() {
       return scoreOk()
           && request.resource.data.date is string
@@ -48,20 +60,30 @@ service cloud.firestore {
               || request.resource.data.expires_at is timestamp
               || request.resource.data.expires_at is string);
     }
-    match /daily_easy/{uid} {
-      allow read: if true;
-      allow write: if isUser(uid) && dailyRowOk();
-      allow delete: if isUser(uid);
+    function dailyOwner(docId) {
+      // New shape carries uid; legacy shape is keyed by uid (docId).
+      return request.auth != null
+          && ( (request.resource.data.uid is string
+                && request.resource.data.uid == request.auth.uid)
+               || docId == request.auth.uid );
     }
-    match /daily_moderate/{uid} {
+    match /daily_easy/{docId} {
       allow read: if true;
-      allow write: if isUser(uid) && dailyRowOk();
-      allow delete: if isUser(uid);
+      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow delete: if request.auth != null
+          && (docId == request.auth.uid || resource.data.uid == request.auth.uid);
     }
-    match /daily_hard/{uid} {
+    match /daily_moderate/{docId} {
       allow read: if true;
-      allow write: if isUser(uid) && dailyRowOk();
-      allow delete: if isUser(uid);
+      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow delete: if request.auth != null
+          && (docId == request.auth.uid || resource.data.uid == request.auth.uid);
+    }
+    match /daily_hard/{docId} {
+      allow read: if true;
+      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow delete: if request.auth != null
+          && (docId == request.auth.uid || resource.data.uid == request.auth.uid);
     }
 
     // Private wallet doc: coin balance, owned/equipped theme, login streak
@@ -123,7 +145,17 @@ service cloud.firestore {
         // (~44 chars). One compact string regardless of how many are earned.
         && (!('badges' in request.resource.data)
             || (request.resource.data.badges is string
-                && request.resource.data.badges.size() <= 64));
+                && request.resource.data.badges.size() <= 64))
+        // All-time leaderboard reward tracker: { diff: best_band_index }. Small
+        // map (3 difficulties). Values are trusted like the rest of the wallet.
+        && (!('alltime_reward_bands' in request.resource.data)
+            || (request.resource.data.alltime_reward_bands is map
+                && request.resource.data.alltime_reward_bands.size() <= 8))
+        // Most recent day whose daily-standing reward has been resolved (UTC
+        // YYYY-MM-DD). Same shape/bound as last_claim_date.
+        && (!('last_daily_reward_date' in request.resource.data)
+            || (request.resource.data.last_daily_reward_date is string
+                && request.resource.data.last_daily_reward_date.size() <= 10));
     }
 
     // ---- Arena contests ----------------------------------------------------

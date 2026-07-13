@@ -4014,7 +4014,13 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		// SPATIAL GUARD: this cone's vent + molten stream all live in a narrow column around its
 		// axis. For the (many) fragments outside that column they contribute nothing, so skip the
 		// heavy per-cone fbm / occlusion work there — it is only paid where the cone actually draws.
-		bool nearCol = abs(a.x - v.x) < v.z + 0.16;
+		// The vent, mouth and molten stream all live in a column whose MAX lateral reach from the
+		// axis is ~0.53*v.z + 0.07 (stream veers 0.42*v.z onto one flank + meander + half-width). The
+		// old margin (v.z + 0.16) was ~2x that, so a wide band of empty sky/plain to either side paid
+		// the heavy coneTop*4 + groundTop fbm below for nothing. Tightened to a value that still
+		// comfortably contains the stream (headroom > 2x the fbm wander) so ~25% fewer fragments pay
+		// the CSE — same pixels drawn, provably identical output.
+		bool nearCol = abs(a.x - v.x) < v.z * 0.72 + 0.12;
 		// First time this fragment lands in ANY active cone's column, evaluate the shared
 		// coneTop()/groundTop() (the fbm-bearing terms) once; every cone i below then reuses them.
 		if (nearCol && !cReady) {
@@ -4259,6 +4265,11 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 	// small glowing embers drifting UP throughout the scene — more of them and spread across the
 	// full height of the sky (some barely lift off the horizon, others climb high), each twinkling
 	// and fading as it rises, gently swaying sideways. Kept small & faint so the sky stays calm.
+	// Every ember rises FROM the horizon UP into the sky (baseY <= HORIZON-0.005, ep.y only smaller),
+	// so no ember can ever be within its 0.0055 radius of a pixel below the horizon. Skip the whole
+	// 14-iteration loop for the foreground band — which is also the priciest band (river-flow fbm) —
+	// so the ember hashes never stack on top of it. Provably no ember draws there; identical output.
+	if (a.y < HORIZON + 0.005) {
 	for (int i = 0; i < 14; i++) {
 		float fi = float(i);
 		float rise = fract(t * (0.05 + 0.06 * hash11(fi * 1.7)) + hash11(fi * 2.3));
@@ -4268,6 +4279,7 @@ vec3 volcanoAnim(vec3 col, vec2 a, vec2 uv, float t) {
 		if (abs(a.x - ep.x) > 0.007 || abs(a.y - ep.y) > 0.007) continue;  // dot radius 0.0055 — skip the sqrt/smoothstep away from it
 		float tw = 0.55 + 0.45 * sin(t * 4.0 + fi * 2.0);
 		col += vec3(1.0, 0.52, 0.17) * smoothstep(0.0055, 0.0, distance(a, ep)) * (1.0 - rise) * 0.42 * tw;
+	}
 	}
 	// flowing surface of the foreground lava river — current streams RIGHT -> LEFT.
 	// Advancing the noise sample in +x with time slides the pattern toward -x (leftwards).

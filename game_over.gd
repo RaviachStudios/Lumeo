@@ -331,12 +331,15 @@ func _submit_and_show_rank() -> void:
 	if rank <= 0:
 		return
 	BadgeManager.note_rank(rank, false)   # leaderboard-placement badges
-	_show_rank_pill(rank)
+	# All-time milestone reward: paid once per rank band per difficulty. A new
+	# high is the only way an all-time rank improves, so this is the right place.
+	var reward := CoinsManager.maybe_reward_alltime(GameState.difficulty, rank)
+	_show_rank_pill(rank, reward)
 
 # Pill animating in from below with a brief bloom, showing the player's current
 # leaderboard place. Only reached on a new personal best, so it's styled
 # gold/celebratory — visually the loudest element after the score.
-func _show_rank_pill(rank: int) -> void:
+func _show_rank_pill(rank: int, reward: int = 0) -> void:
 	if not _rank_slot:
 		return
 	var slot_sz := _rank_slot.size
@@ -356,7 +359,12 @@ func _show_rank_pill(rank: int) -> void:
 	_rank_slot.add_child(pill)
 
 	var lbl := Label.new()
-	lbl.text = "🏅  You're #%d on the leaderboard!" % rank
+	# On a milestone that also paid coins, fold the reward into the pill so the
+	# player sees the payout at the same beat as the placement.
+	if reward > 0:
+		lbl.text = "🏅  You're #%d!   +%d 🪙" % [rank, reward]
+	else:
+		lbl.text = "🏅  You're #%d on the leaderboard!" % rank
 	lbl.add_theme_font_size_override("font_size", 20)
 	lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
 	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)

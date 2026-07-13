@@ -24,38 +24,54 @@ signal loaded
 # Running total of coins earned in the current game session (resets to 0 on
 # start_game_session). The in-game HUD tracks this instead of the wallet total.
 signal session_earned_changed(session_total: int)
+# Emitted when the daily-standing reward for one or more just-closed days is
+# granted on login. `results` is Array<{diff, rank, reward}> for the popup;
+# `total` is the summed coins. Only emitted when total > 0.
+signal daily_rank_reward_granted(total: int, results: Array)
 
 const _COLL := "users"
+
+# ---- leaderboard reward tables ----------------------------------------------
+# See LEADERBOARD_REWARDS_PLAN.md. Two independent systems:
+#   * All-time: paid once per rank BAND per difficulty, the first time you reach
+#     it (band improvement only). Keyed by band index (1 = best).
+#   * Daily: paid on first login after a day closes, for your final standing.
+
+# Band index -> coins, for the all-time board. Band index comes from
+# _alltime_band_index(rank); 0 means "outside top 50" (no reward).
+const ALLTIME_BAND_REWARDS := {1: 1000, 2: 750, 3: 500, 4: 350, 5: 250, 6: 150}
+
+# How many days back a login will look for an uncollected daily reward. Must not
+# exceed LeaderboardManager._DAILY_RETENTION_DAYS (rows older than that are gone).
+const DAILY_RANK_WINDOW_DAYS := 14
 
 # Theme catalog. "default" is the stock look (no purchased background) and is
 # always owned. Adding new shop items is just an entry here + a renderer in
 # BackgroundManager.
 const DEFAULT_THEME := "default"
+# Ordered by price, ascending (mirrors the THEMES tab's display order — see
+# CATEGORIES["items"] in shop_screen.gd, which is the actual source of shop order).
 const THEMES := {
 	"default":  {"name": "Default",  "price": 0,    "category": "themes"},
-	# Low-value static gradient backgrounds — elegant solid/gradient looks, 80 coins.
 	"midnight": {"name": "Midnight", "price": 80,   "category": "themes"},
 	"indigo":   {"name": "Indigo",   "price": 80,   "category": "themes"},
 	"sunset":   {"name": "Sunset",   "price": 80,   "category": "themes"},
 	"crimson":  {"name": "Crimson",  "price": 80,   "category": "themes"},
 	"slate":    {"name": "Slate",    "price": 80,   "category": "themes"},
 	"skybound": {"name": "Skybound", "price": 80,   "category": "themes"},
-	# Mid-value static illustrated backgrounds — detailed procedural scenes, 250-800.
-	"rainbow":  {"name": "Rainbow",           "price": 250, "category": "themes"},
 	"forest":   {"name": "Enchanted Forest",  "price": 350, "category": "themes"},
 	"desert":   {"name": "Wild West",         "price": 350, "category": "themes"},
+	"clouds":   {"name": "Dreamy Clouds",     "price": 400, "category": "themes"},
 	"speedway": {"name": "Speedway",          "price": 450, "category": "themes"},
-	"reef":     {"name": "Coral Reef",        "price": 450, "category": "themes"},
 	"kitty":    {"name": "Neko Pop",          "price": 550, "category": "themes"},
-	"cosmos":   {"name": "Cosmos",            "price": 600, "category": "themes"},
+	"rainbow":  {"name": "Rainbow",           "price": 600, "category": "themes"},
 	"neon":     {"name": "Neon City",         "price": 800, "category": "themes"},
-	# High-value animated backgrounds — detailed animated scenes, 1000-3200.
+	"castle":   {"name": "Dragon's Keep",     "price": 900, "category": "themes"},
 	"inferno":  {"name": "Inferno",           "price": 1000, "category": "themes"},
-	"clouds":   {"name": "Dreamy Clouds",     "price": 1000, "category": "themes"},
-	"aurora":   {"name": "Northern Lights",   "price": 1500, "category": "themes"},
-	"fairies":  {"name": "Enchanted Fairies", "price": 2000, "category": "themes"},
-	"deepspace":{"name": "Deep Space",        "price": 2500, "category": "themes"},
-	"castle":   {"name": "Dragon's Keep",     "price": 3000, "category": "themes"},
+	"fairies":  {"name": "Enchanted Fairies", "price": 1000, "category": "themes"},
+	"aurora":   {"name": "Northern Lights",   "price": 1050, "category": "themes"},
+	"reef":     {"name": "Coral Reef",        "price": 1200, "category": "themes"},
+	"deepspace":{"name": "Deep Space",        "price": 1600, "category": "themes"},
 }
 
 # Difficulty unlocks. "easy" is always playable; "moderate" and "hard" are
@@ -99,16 +115,15 @@ const SIMON_COLORS := {
 # Rim pattern codes: 1 zebra · 2 rainbow · 3 dots · 4 candy · 5 checker ·
 #                    6 tiger · 7 leopard · 8 gradient · 9 stars · 10 wave
 const SIMON_OUTER_PATTERNS := {
-	"zebra":    {"name": "Zebra",       "price": 180, "pattern": 1,  "color": Color(0.08, 0.08, 0.10), "color2": Color(0.96, 0.96, 0.98)},
-	"prism":    {"name": "Rainbow",     "price": 300, "pattern": 2,  "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
 	"pinkdots": {"name": "Pink Dots",   "price": 150, "pattern": 3,  "color": Color(0.96, 0.45, 0.72), "color2": Color(1.0, 1.0, 1.0)},
+	"zebra":    {"name": "Zebra",       "price": 180, "pattern": 1,  "color": Color(0.08, 0.08, 0.10), "color2": Color(0.96, 0.96, 0.98)},
 	"candy":    {"name": "Candy Cane",  "price": 200, "pattern": 4,  "color": Color(0.90, 0.16, 0.22), "color2": Color(1.0, 0.98, 0.98)},
-	"checker":  {"name": "Checker",     "price": 160, "pattern": 5,  "color": Color(0.10, 0.11, 0.16), "color2": Color(0.96, 0.96, 0.98)},
 	"tiger":    {"name": "Tiger",       "price": 220, "pattern": 6,  "color": Color(0.98, 0.55, 0.10), "color2": Color(0.08, 0.06, 0.05)},
-	"leopard":  {"name": "Leopard",     "price": 250, "pattern": 7,  "color": Color(0.87, 0.66, 0.34), "color2": Color(0.32, 0.18, 0.07)},
 	"sunset":   {"name": "Sunset",      "price": 240, "pattern": 8,  "color": Color(1.0, 0.48, 0.32),  "color2": Color(0.95, 0.30, 0.66)},
-	"starry":   {"name": "Starry Night","price": 300, "pattern": 9,  "color": Color(0.09, 0.12, 0.34), "color2": Color(1.0, 0.95, 0.72)},
+	"leopard":  {"name": "Leopard",     "price": 250, "pattern": 7,  "color": Color(0.87, 0.66, 0.34), "color2": Color(0.32, 0.18, 0.07)},
 	"ocean":    {"name": "Ocean Wave",  "price": 260, "pattern": 10, "color": Color(0.10, 0.52, 0.80), "color2": Color(0.58, 0.90, 0.96)},
+	"prism":    {"name": "Rainbow",     "price": 300, "pattern": 2,  "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
+	"starry":   {"name": "Starry Night","price": 300, "pattern": 9,  "color": Color(0.09, 0.12, 0.34), "color2": Color(1.0, 0.95, 0.72)},
 }
 
 # Drawn CENTER-HUB styles — a motif rendered on the hub disc. Same `pattern`/
@@ -117,20 +132,20 @@ const SIMON_OUTER_PATTERNS := {
 #                  26 target · 27 swirl · 28 rainbow · 30 crescent · 31 diamond ·
 #                  32 clover · 33 bolt · 34 yin-yang · 35 music note
 const SIMON_INNER_MOTIFS := {
-	"star":     {"name": "Gold Star",   "price": 180, "pattern": 21, "color": Color(0.20, 0.24, 0.46), "color2": Color(1.0, 0.84, 0.30)},
-	"daisy":    {"name": "Daisy",       "price": 250, "pattern": 22, "color": Color(0.74, 0.64, 0.96), "color2": Color(1.0, 1.0, 1.0)},
-	"smiley":   {"name": "Smiley",      "price": 200, "pattern": 23, "color": Color(1.0, 0.82, 0.24),  "color2": Color(0.14, 0.10, 0.04)},
 	"bubbles":  {"name": "Bubbles",     "price": 150, "pattern": 24, "color": Color(0.56, 0.40, 0.92), "color2": Color(1.0, 1.0, 1.0)},
-	"paw":      {"name": "Paw Print",   "price": 200, "pattern": 25, "color": Color(0.98, 0.70, 0.80), "color2": Color(0.55, 0.28, 0.36)},
 	"target":   {"name": "Bullseye",    "price": 160, "pattern": 26, "color": Color(0.90, 0.24, 0.28), "color2": Color(1.0, 1.0, 1.0)},
-	"swirl":    {"name": "Swirl",       "price": 220, "pattern": 27, "color": Color(0.16, 0.78, 0.74), "color2": Color(1.0, 1.0, 1.0)},
-	"rainbow":  {"name": "Rainbow",     "price": 300, "pattern": 28, "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
-	"crescent": {"name": "Crescent Moon","price": 220, "pattern": 30, "color": Color(0.10, 0.12, 0.30), "color2": Color(1.0, 0.93, 0.70)},
-	"diamond":  {"name": "Diamond",     "price": 280, "pattern": 31, "color": Color(0.10, 0.32, 0.45), "color2": Color(0.62, 0.92, 0.99)},
-	"clover":   {"name": "Lucky Clover","price": 240, "pattern": 32, "color": Color(0.95, 0.97, 0.90), "color2": Color(0.22, 0.68, 0.32)},
+	"star":     {"name": "Gold Star",   "price": 180, "pattern": 21, "color": Color(0.20, 0.24, 0.46), "color2": Color(1.0, 0.84, 0.30)},
+	"smiley":   {"name": "Smiley",      "price": 200, "pattern": 23, "color": Color(1.0, 0.82, 0.24),  "color2": Color(0.14, 0.10, 0.04)},
+	"paw":      {"name": "Paw Print",   "price": 200, "pattern": 25, "color": Color(0.98, 0.70, 0.80), "color2": Color(0.55, 0.28, 0.36)},
 	"bolt":     {"name": "Lightning",   "price": 200, "pattern": 33, "color": Color(0.16, 0.14, 0.30), "color2": Color(1.0, 0.86, 0.24)},
-	"yinyang":  {"name": "Harmony",     "price": 260, "pattern": 34, "color": Color(0.10, 0.10, 0.12), "color2": Color(0.97, 0.97, 0.98)},
+	"swirl":    {"name": "Swirl",       "price": 220, "pattern": 27, "color": Color(0.16, 0.78, 0.74), "color2": Color(1.0, 1.0, 1.0)},
+	"crescent": {"name": "Crescent Moon","price": 220, "pattern": 30, "color": Color(0.10, 0.12, 0.30), "color2": Color(1.0, 0.93, 0.70)},
 	"melody":   {"name": "Melody",      "price": 230, "pattern": 35, "color": Color(0.55, 0.30, 0.85), "color2": Color(1.0, 1.0, 1.0)},
+	"clover":   {"name": "Lucky Clover","price": 240, "pattern": 32, "color": Color(0.95, 0.97, 0.90), "color2": Color(0.22, 0.68, 0.32)},
+	"daisy":    {"name": "Daisy",       "price": 250, "pattern": 22, "color": Color(0.74, 0.64, 0.96), "color2": Color(1.0, 1.0, 1.0)},
+	"yinyang":  {"name": "Harmony",     "price": 260, "pattern": 34, "color": Color(0.10, 0.10, 0.12), "color2": Color(0.97, 0.97, 0.98)},
+	"diamond":  {"name": "Diamond",     "price": 280, "pattern": 31, "color": Color(0.10, 0.32, 0.45), "color2": Color(0.62, 0.92, 0.99)},
+	"rainbow":  {"name": "Rainbow",     "price": 300, "pattern": 28, "color": Color(1, 0, 0),          "color2": Color(1, 1, 1)},
 }
 
 # Complete pre-made wheel skins, each a single bundled look (rings, hub, numeral,
@@ -138,18 +153,20 @@ const SIMON_INNER_MOTIFS := {
 # SKIN and overrides the manual per-part colours; equipping a per-part colour
 # switches simon_mode back to MANUAL. Stock-look behaviour is unchanged when no
 # skin has ever been equipped.
+# Ordered by price, ascending (mirrors SKIN_DEFS in shop_screen.gd, the actual
+# source of shop display order).
 const SIMON_SKINS := {
+	"casino":     {"name": "Jackpot",   "price": 4500},
+	"arcade":     {"name": "Arcade",    "price": 5000},
+	"lunapark":   {"name": "Luna Park", "price": 5500},
+	"racing":     {"name": "Redline",   "price": 7000},
+	"pirate":     {"name": "Buccaneer", "price": 7200},
+	"submarine":  {"name": "Nautilus",  "price": 7500},
+	"phantom":    {"name": "Phantom",   "price": 7800},
 	# Stored id stays "inferno" (selected_skin / owned_skins in Firestore, and the
 	# _skin_id checks in SimonWheel) so existing ownership keeps working; only the
 	# display name changed when the skin was upgraded into the Volcano look.
 	"inferno":    {"name": "Volcano",   "price": 8000},
-	"racing":     {"name": "Redline",   "price": 7000},
-	"submarine":  {"name": "Nautilus",  "price": 7500},
-	"arcade":     {"name": "Arcade",    "price": 6500},
-	"pirate":     {"name": "Buccaneer", "price": 7200},
-	"casino":     {"name": "Jackpot",   "price": 6800},
-	"phantom":    {"name": "Phantom",   "price": 7800},
-	"lunapark":   {"name": "Luna Park", "price": 5500},
 }
 
 # The "level_number" category is NOT a flat colour — it's a font *package* (a whole
@@ -170,32 +187,32 @@ const SIMON_NUMBER_FONTS := {
 	"neon":    {"name": "Neon",    "price": 120, "font": "",
 		"color": Color(0.45, 1.0, 0.95), "glow": Color(0.10, 0.95, 0.90, 0.8), "glow_size": 15,
 		"outline": Color(0.0, 0.05, 0.07, 1.0), "outline_size": 4},
-	"inferno": {"name": "Inferno", "price": 150, "font": "",
-		"color": Color(1.0, 0.66, 0.22), "glow": Color(1.0, 0.28, 0.06, 0.75), "glow_size": 15,
-		"outline": Color(0.10, 0.02, 0.0, 1.0), "outline_size": 5},
-	"gold":    {"name": "Gold",    "price": 250, "font": "res://fonts/arial.ttf",
-		"color": Color(1.0, 0.84, 0.32), "glow": Color(1.0, 0.70, 0.16, 0.6), "glow_size": 11,
-		"outline": Color(0, 0, 0, 1), "outline_size": 5},
-	"script":  {"name": "Script",  "price": 180, "font": "res://fonts/orange_juice.ttf",
-		"color": Color(1.0, 0.96, 0.86), "glow": Color(0.90, 0.75, 0.50, 0.45), "glow_size": 9,
-		"outline": Color(0.12, 0.07, 0.03, 1.0), "outline_size": 4},
-	# Softer, girlier looks — the rounded handwritten face (orange_juice) in candy
-	# tones, plus a couple of bright playful colourways on the stock face.
-	"bubblegum": {"name": "Bubblegum", "price": 160, "font": "res://fonts/orange_juice.ttf",
-		"color": Color(1.0, 0.62, 0.82), "glow": Color(1.0, 0.45, 0.72, 0.7), "glow_size": 14,
-		"outline": Color(0.55, 0.12, 0.30, 1.0), "outline_size": 5},
-	"candy":   {"name": "Candy",   "price": 200, "font": "res://fonts/orange_juice.ttf",
-		"color": Color(1.0, 0.90, 0.98), "glow": Color(0.85, 0.35, 0.95, 0.7), "glow_size": 14,
-		"outline": Color(0.45, 0.10, 0.55, 1.0), "outline_size": 5},
+	"sky":     {"name": "Sky",     "price": 120, "font": "",
+		"color": Color(0.62, 0.86, 1.0), "glow": Color(0.35, 0.70, 1.0, 0.65), "glow_size": 13,
+		"outline": Color(0.05, 0.16, 0.38, 1.0), "outline_size": 4},
 	"lavender": {"name": "Lavender", "price": 140, "font": "",
 		"color": Color(0.80, 0.70, 1.0), "glow": Color(0.60, 0.45, 1.0, 0.65), "glow_size": 13,
 		"outline": Color(0.20, 0.12, 0.40, 1.0), "outline_size": 4},
 	"mint":    {"name": "Mint",    "price": 140, "font": "",
 		"color": Color(0.65, 1.0, 0.85), "glow": Color(0.30, 0.95, 0.75, 0.65), "glow_size": 13,
 		"outline": Color(0.04, 0.28, 0.22, 1.0), "outline_size": 4},
-	"sky":     {"name": "Sky",     "price": 120, "font": "",
-		"color": Color(0.62, 0.86, 1.0), "glow": Color(0.35, 0.70, 1.0, 0.65), "glow_size": 13,
-		"outline": Color(0.05, 0.16, 0.38, 1.0), "outline_size": 4},
+	"inferno": {"name": "Inferno", "price": 150, "font": "",
+		"color": Color(1.0, 0.66, 0.22), "glow": Color(1.0, 0.28, 0.06, 0.75), "glow_size": 15,
+		"outline": Color(0.10, 0.02, 0.0, 1.0), "outline_size": 5},
+	# Softer, girlier looks — the rounded handwritten face (orange_juice) in candy
+	# tones, plus a couple of bright playful colourways on the stock face.
+	"bubblegum": {"name": "Bubblegum", "price": 160, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.62, 0.82), "glow": Color(1.0, 0.45, 0.72, 0.7), "glow_size": 14,
+		"outline": Color(0.55, 0.12, 0.30, 1.0), "outline_size": 5},
+	"script":  {"name": "Script",  "price": 180, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.96, 0.86), "glow": Color(0.90, 0.75, 0.50, 0.45), "glow_size": 9,
+		"outline": Color(0.12, 0.07, 0.03, 1.0), "outline_size": 4},
+	"candy":   {"name": "Candy",   "price": 200, "font": "res://fonts/orange_juice.ttf",
+		"color": Color(1.0, 0.90, 0.98), "glow": Color(0.85, 0.35, 0.95, 0.7), "glow_size": 14,
+		"outline": Color(0.45, 0.10, 0.55, 1.0), "outline_size": 5},
+	"gold":    {"name": "Gold",    "price": 250, "font": "res://fonts/arial.ttf",
+		"color": Color(1.0, 0.84, 0.32), "glow": Color(1.0, 0.70, 0.16, 0.6), "glow_size": 11,
+		"outline": Color(0, 0, 0, 1), "outline_size": 5},
 }
 
 # The catalog backing a category: font packages for "level_number", and per-part
@@ -326,6 +343,13 @@ var first_login_at: String = ""           # ISO-8601 UTC ("YYYY-MM-DDTHH:MM:SS")
 var player_name: String = ""              # mirror of FirebaseManager.display_name.
                                           # Kept on /users so a rename can be pushed
                                           # to leaderboards even when offline.
+# Leaderboard rewards (see LEADERBOARD_REWARDS_PLAN.md):
+var alltime_reward_bands: Dictionary = {} # diff -> best (lowest) band idx already
+                                          # rewarded on the all-time board. Absent
+                                          # / 0 = never rewarded for that diff.
+var last_daily_reward_date: String = ""   # "YYYY-MM-DD" UTC of the most recent day
+                                          # whose daily-standing reward has been
+                                          # resolved. "" = never (fresh cycle).
 # Audit trail (added later so old wallets keep working — both default to empty
 # and accumulate forward from the first new event).
 var earned_coins: int = 0                 # lifetime coins earned by gameplay/claims,
@@ -460,6 +484,116 @@ func claim_daily() -> int:
 		"last_claim_date": last_claim_date,
 	})
 	return reward
+
+# --- leaderboard rewards ------------------------------------------------------
+
+# The all-time reward band for a rank (1 = best, 0 = outside top 50 / no reward).
+static func _alltime_band_index(rank: int) -> int:
+	if rank <= 0:  return 0
+	if rank == 1:  return 1
+	if rank == 2:  return 2
+	if rank == 3:  return 3
+	if rank <= 10: return 4
+	if rank <= 24: return 5
+	if rank <= 50: return 6
+	return 0
+
+# Coins for a FINAL daily standing (0 outside top 50).
+static func daily_reward_for_rank(rank: int) -> int:
+	if rank <= 0:  return 0
+	if rank == 1:  return 500
+	if rank == 2:  return 300
+	if rank == 3:  return 150
+	if rank <= 10: return 100
+	if rank <= 25: return 50
+	if rank <= 50: return 25
+	return 0
+
+# Grant the all-time milestone reward for reaching `rank` on `diff`, IF that rank
+# lands in a strictly better band than the best we've already rewarded for this
+# difficulty. Returns the coins granted (0 if no new band). Called at game over
+# on a new personal best (the only time an all-time rank can improve), after the
+# rank has been read back from the board.
+#
+# The band update and the coin delta ride the SAME merge write, so a failed save
+# never leaves "rewarded but unpaid": the server keeps the old band AND old
+# balance, and a later new-high re-attempts cleanly.
+func maybe_reward_alltime(diff: String, rank: int) -> int:
+	if not is_loaded():
+		return 0
+	var idx := _alltime_band_index(rank)
+	if idx == 0:
+		return 0
+	var best := int(alltime_reward_bands.get(diff, 0))
+	if best != 0 and idx >= best:
+		return 0                                   # same or worse band → nothing
+	var reward := int(ALLTIME_BAND_REWARDS.get(idx, 0))
+	if reward <= 0:
+		return 0
+	alltime_reward_bands[diff] = idx
+	balance += reward
+	earned_coins += reward
+	balance_changed.emit(balance)
+	_save_partial({
+		"coins": balance,
+		"earned_coins": earned_coins,
+		"alltime_reward_bands": alltime_reward_bands,
+	})
+	return reward
+
+# On first login of the day, pay the daily-standing reward for the most recent
+# uncollected day(s) the player placed in. Bounded to the retention window; in
+# normal play this resolves exactly one day (you cannot stack rewards — playing a
+# day requires opening the app that day, which already collects the day before).
+# The scan exists for DELAYED collection (returning a day or two later) and as a
+# safety net for a dropped write. Idempotent within a day via
+# `last_daily_reward_date`, which is stamped in the SAME merge write as the coins.
+func grant_daily_rewards_if_due() -> void:
+	if not is_loaded():
+		return
+	var yesterday_idx := _today_day_index() - 1
+	if yesterday_idx < 0:
+		return
+	# Fresh / migrating wallet: start the cycle from yesterday with no retroactive
+	# pay (there are no pre-existing date-partitioned rows to reward anyway).
+	if last_daily_reward_date.is_empty():
+		last_daily_reward_date = _date_str_from_day_index(yesterday_idx)
+		_save_partial({"last_daily_reward_date": last_daily_reward_date})
+		return
+	var last_idx := _day_index_from_date(last_daily_reward_date)
+	if last_idx >= yesterday_idx:
+		return                                       # already resolved through yesterday
+	var start_idx: int = maxi(last_idx + 1, yesterday_idx - (DAILY_RANK_WINDOW_DAYS - 1))
+	var total := 0
+	var results: Array = []
+	var di := start_idx
+	while di <= yesterday_idx:
+		var date_str := _date_str_from_day_index(di)
+		for diff in ["easy", "moderate", "hard"]:
+			var rank := await LeaderboardManager.my_daily_rank_for(diff, date_str)
+			if rank < 0:
+				# A read failed — abort the WHOLE pass without stamping or paying,
+				# so nothing is lost and the next login retries cleanly.
+				return
+			var reward := daily_reward_for_rank(rank)
+			if reward > 0:
+				total += reward
+				results.append({"diff": diff, "rank": rank, "reward": reward})
+		di += 1
+	# Guard against a concurrent sign-out mid-await (wallet no longer loaded).
+	if not is_loaded():
+		return
+	last_daily_reward_date = _date_str_from_day_index(yesterday_idx)
+	var fields := {"last_daily_reward_date": last_daily_reward_date}
+	if total > 0:
+		balance += total
+		earned_coins += total
+		fields["coins"] = balance
+		fields["earned_coins"] = earned_coins
+		balance_changed.emit(balance)
+	_save_partial(fields)
+	if total > 0:
+		daily_rank_reward_granted.emit(total, results)
 
 # --- real-money coin purchases ---
 
@@ -805,6 +939,8 @@ func _on_signed_out() -> void:
 	streak_days = 0
 	first_login_at = ""
 	player_name = ""
+	alltime_reward_bands = {}
+	last_daily_reward_date = ""
 	earned_coins = 0
 	purchase_history = {}
 	has_remove_ads = false
@@ -909,6 +1045,15 @@ func _apply_doc(doc: Dictionary) -> void:
 	streak_days = int(doc.get("streak_days", 0))
 	first_login_at = String(doc.get("first_login_at", ""))
 	player_name = String(doc.get("name", ""))
+	# Leaderboard-reward trackers. Missing on old wallets — defaults ({} / "")
+	# are correct: no bands rewarded yet, and an empty date starts a fresh daily
+	# cycle (no retroactive pay) on the next login.
+	alltime_reward_bands = {}
+	var raw_bands: Variant = doc.get("alltime_reward_bands", {})
+	if raw_bands is Dictionary:
+		for k in raw_bands.keys():
+			alltime_reward_bands[String(k)] = int(raw_bands[k])
+	last_daily_reward_date = String(doc.get("last_daily_reward_date", ""))
 	# Audit fields. Missing on old wallets — defaults are correct (0 / {}) and
 	# the value just accumulates forward from the next event.
 	earned_coins = int(doc.get("earned_coins", 0))
@@ -1032,3 +1177,18 @@ func _now_iso(unix_seconds: int) -> String:
 # DST-immune and matches _today() / _yesterday().
 func _utc_days_between(a_unix: int, b_unix: int) -> int:
 	return int(floor(float(b_unix) / 86400.0)) - int(floor(float(a_unix) / 86400.0))
+
+# UTC "day index" = number of whole days since the unix epoch. A single integer
+# per calendar day that's trivial to add/subtract and round-trips with a
+# "YYYY-MM-DD" string via the two helpers below. Used by the daily-reward scan.
+func _today_day_index() -> int:
+	return int(floor(float(Time.get_unix_time_from_system()) / 86400.0))
+
+func _day_index_from_date(date_str: String) -> int:
+	# Godot parses a bare "YYYY-MM-DD" as that date at 00:00 UTC.
+	var u := int(Time.get_unix_time_from_datetime_string(date_str))
+	return int(floor(float(u) / 86400.0))
+
+func _date_str_from_day_index(day_index: int) -> String:
+	var d := Time.get_date_dict_from_unix_time(day_index * 86400)
+	return "%04d-%02d-%02d" % [int(d["year"]), int(d["month"]), int(d["day"])]

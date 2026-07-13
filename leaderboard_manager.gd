@@ -38,11 +38,16 @@ const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 # endpoints hang off the same root.
 const _FB_BASE := "https://firestore.googleapis.com/v1/projects/simon-6bc39/databases/(default)/documents"
 
-# Buffer added to today's midnight-UTC before writing it as `expires_at`. TTL is
-# best-effort within ~24h, but the screen's `date == today` filter is what
-# actually hides yesterday's rows — the buffer only matters for storage cost,
-# so 6 hours is plenty of slack to keep TTL from racing with a player who is
-# active right at the day flip.
+# Daily rows are now HISTORICAL: keyed by `{date}__{uid}` (not `{uid}`), so a
+# later replay never overwrites a prior day's row, and each closed day's board
+# survives for the leaderboard-reward collection to read it back. We retain a
+# rolling window of days, then let TTL prune. The window doubles as "how long a
+# player has to return and still collect a day's reward" (see CoinsManager's
+# grant_daily_rewards_if_due). The screen's `date == today` filter keeps the
+# extra history from ever showing on the live board.
+const _DAILY_RETENTION_DAYS := 14
+# Buffer added past the retention window before writing `expires_at`, so TTL
+# never races a player active right at the day flip. 6h is plenty of slack.
 const _DAILY_EXPIRES_BUFFER_SECS := 6 * 3600
 
 var _is_editor := OS.get_name() != "Android"
@@ -118,40 +123,74 @@ func delete_all_my_rows() -> void:
 		return
 	if _is_editor:
 		for diff in DIFFS:
-			for table in [_sim_global, _sim_daily]:
-				var g: Dictionary = table.get(diff, {})
-				g.erase(my_uid)
-				table[diff] = g
+			# All-time sim rows are keyed by uid; daily sim rows by `{date}__{uid}`,
+			# so erase every daily key whose stored uid is mine.
+			var g: Dictionary = _sim_global.get(diff, {})
+			g.erase(my_uid)
+			_sim_global[diff] = g
+			var dd: Dictionary = _sim_daily.get(diff, {})
+			for key in dd.keys():
+				if String((dd[key] as Dictionary).get("uid", key)) == my_uid:
+					dd.erase(key)
+			_sim_daily[diff] = dd
 		return
 	for diff in DIFFS:
-		for coll in ["global_" + diff, "daily_" + diff]:
-			Firebase.firestore.delete_document(coll, my_uid)
+		# All-time: one row per uid.
+		Firebase.firestore.delete_document("global_" + diff, my_uid)
+		await Firebase.firestore.delete_task_completed
+		# Legacy daily row from before date-partitioning (keyed by `{uid}`, no
+		# `uid` field so the query below can't see it). Harmless no-op if absent.
+		var daily_coll := "daily_" + diff
+		Firebase.firestore.delete_document(daily_coll, my_uid)
+		await Firebase.firestore.delete_task_completed
+		# Daily: potentially one row per retained day. Query by the `uid` field
+		# (single-field auto-index — no composite needed) and delete each.
+		var mine := await _rest_run_query({
+			"from": [{"collectionId": daily_coll}],
+			"where": {"fieldFilter": {
+				"field": {"fieldPath": "uid"},
+				"op": "EQUAL",
+				"value": {"stringValue": my_uid},
+			}},
+		})
+		for item in mine.get("items", []):
+			Firebase.firestore.delete_document(daily_coll, String(item.get("id", "")))
 			await Firebase.firestore.delete_task_completed
 
 # A rename only touches existing leaderboard rows — we MUST NOT create empty
-# rows for a user just because they picked a name. So for each (collection,
-# uid) we read first and only write if the row already exists. We propagate to
-# the daily boards too so a same-day rename stays consistent across tabs.
+# rows for a user just because they picked a name. So for each row we read first
+# and only write if it already exists. All-time rows are keyed by uid; for daily
+# we update TODAY's row (`{today}__{uid}`) only — past days are historical
+# snapshots and their name is cosmetic, so we leave them untouched.
 func _on_display_name_changed(new_name: String) -> void:
 	var uid := _uid()
 	if uid.is_empty() or new_name.is_empty():
 		return
+	var today := _today_utc()
 	if _is_editor:
 		for diff in DIFFS:
-			for table in [_sim_global, _sim_daily]:
-				var g: Dictionary = table.get(diff, {})
-				if g.has(uid):
-					var e: Dictionary = g[uid]
-					e["name"] = new_name
-					g[uid] = e
-					table[diff] = g
+			var g: Dictionary = _sim_global.get(diff, {})
+			if g.has(uid):
+				var e: Dictionary = g[uid]
+				e["name"] = new_name
+				g[uid] = e
+				_sim_global[diff] = g
+			var dd: Dictionary = _sim_daily.get(diff, {})
+			var did := _daily_doc_id(today, uid)
+			if dd.has(did):
+				var de: Dictionary = dd[did]
+				de["name"] = new_name
+				dd[did] = de
+				_sim_daily[diff] = dd
 		return
 	for diff in DIFFS:
-		for coll in ["global_" + diff, "daily_" + diff]:
-			var existing := await _rest_get(coll, uid)
+		for entry in [["global_" + diff, uid], ["daily_" + diff, _daily_doc_id(today, uid)]]:
+			var coll: String = entry[0]
+			var doc_id: String = entry[1]
+			var existing := await _rest_get(coll, doc_id)
 			if not bool(existing.get("exists", false)):
 				continue
-			Firebase.firestore.set_document(coll, uid, {"name": new_name}, true)
+			Firebase.firestore.set_document(coll, doc_id, {"name": new_name}, true)
 			await Firebase.firestore.write_task_completed
 
 # ---- REST helpers ----
@@ -191,6 +230,35 @@ func _rest_get(collection: String, doc_id: String) -> Dictionary:
 	j.parse((r[3] as PackedByteArray).get_string_from_utf8())
 	if not j.data is Dictionary: return {"exists": false}
 	return {"exists": true, "data": _fields(j.data.get("fields", {}))}
+
+# Like _rest_get, but distinguishes a definitive 404 (document absent) from a
+# network/server failure. Returns {status: "ok"|"missing"|"error", data}. The
+# reward path needs this: treating a transient failure as "no row" would stamp a
+# day as resolved and skip a reward the player actually earned.
+func _rest_get_status(collection: String, doc_id: String) -> Dictionary:
+	var r := await _http_get(_FB_BASE + "/" + collection + "/" + doc_id)
+	var code := int(r[1])
+	if code == 200:
+		var j := JSON.new()
+		j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+		if j.data is Dictionary:
+			return {"status": "ok", "data": _fields(j.data.get("fields", {}))}
+		return {"status": "error", "data": {}}
+	if code == 404:
+		return {"status": "missing", "data": {}}
+	return {"status": "error", "data": {}}
+
+# The player uid a returned row belongs to. Daily rows carry an explicit `uid`
+# field (their doc id is `{date}__{uid}`, so the id itself is NOT the uid);
+# all-time rows are keyed by uid directly and have no `uid` field, so the doc id
+# is the fallback. Using this everywhere keeps "is this me?" correct on both.
+func _doc_uid(doc: Dictionary) -> String:
+	var d: Dictionary = doc.get("data", {})
+	return String(d.get("uid", doc.get("id", "")))
+
+# Firestore doc id for a player's daily row on a given UTC date.
+func _daily_doc_id(date_str: String, uid: String) -> String:
+	return date_str + "__" + uid
 
 # Runs a Firestore structured query. `query` is the body's `structuredQuery`
 # object (Firestore REST shape). Returns {ok, items} where each item is
@@ -325,36 +393,34 @@ func submit_score(difficulty: String, score: int) -> void:
 		{"name": _name(), "score": score}, true)
 	await Firebase.firestore.write_task_completed
 
-# Submit a new daily score. Only writes if it strictly beats the player's
-# existing row FOR TODAY. If the existing row is from a prior day (TTL hasn't
-# swept it yet), we overwrite unconditionally — that resets the row to today's
-# new score, so the score field stays a real same-day best instead of an
-# accidental "yesterday's best counts against today" cap.
+# Submit a new daily score. Rows are keyed per-day (`{today}__{uid}`), so this
+# only ever compares against TODAY's own row — no cross-day overwrite handling is
+# needed anymore (yesterday is a different document). Writes only if the score
+# strictly beats today's existing row.
 func submit_score_daily(difficulty: String, score: int) -> void:
-	if _uid().is_empty(): return
+	var uid := _uid()
+	if uid.is_empty(): return
 	if score <= 0: return
 	var today := _today_utc()
 	var now_u := int(Time.get_unix_time_from_system())
-	var expires_u := _next_midnight_utc(now_u) + _DAILY_EXPIRES_BUFFER_SECS
+	# Survive the full retention window so a closed day's board is still readable
+	# for reward collection right up to the last day of that window.
+	var expires_u := _next_midnight_utc(now_u) + _DAILY_RETENTION_DAYS * 86400 + _DAILY_EXPIRES_BUFFER_SECS
+	var doc_id := _daily_doc_id(today, uid)
 	if _is_editor:
 		var g: Dictionary = _sim_daily.get(difficulty, {})
-		var existing: Dictionary = g.get(_uid(), {})
-		var existing_today := String(existing.get("date", "")) == today
-		var existing_score := int(existing.get("score", 0)) if existing_today else 0
-		if score <= existing_score:
+		var existing: Dictionary = g.get(doc_id, {})
+		if score <= int(existing.get("score", 0)):
 			return
-		g[_uid()] = {
-			"name": _name(), "score": score, "date": today,
+		g[doc_id] = {
+			"uid": uid, "name": _name(), "score": score, "date": today,
 			"expires_at": _ts_value(expires_u)["timestampValue"],
 		}
 		_sim_daily[difficulty] = g
 		return
 	var coll := "daily_" + difficulty
-	var existing := await _rest_get(coll, _uid())
-	var d: Dictionary = existing.get("data", {})
-	var existing_today := String(d.get("date", "")) == today
-	var existing_score := int(d.get("score", 0)) if existing_today else 0
-	if score <= existing_score:
+	var existing := await _rest_get(coll, doc_id)
+	if score <= int(existing.get("data", {}).get("score", 0)):
 		return
 	# The plugin marshals GDScript dicts -> Firestore fields, but it doesn't
 	# know about the special {timestampValue: ...} wrapper used in REST shape.
@@ -364,11 +430,64 @@ func submit_score_daily(difficulty: String, score: int) -> void:
 	# which accepts ISO strings as timestamps. The TTL policy is what reads it.
 	# If the plugin's string mapping turns out to keep this as `stringValue`
 	# (and TTL refuses to delete), we'll move this row to a server-side write.
-	Firebase.firestore.set_document(coll, _uid(), {
-		"name": _name(), "score": score, "date": today,
+	Firebase.firestore.set_document(coll, doc_id, {
+		"uid": uid, "name": _name(), "score": score, "date": today,
 		"expires_at": Time.get_datetime_string_from_unix_time(expires_u) + "Z",
 	}, true)
 	await Firebase.firestore.write_task_completed
+
+# The signed-in player's FINAL rank on a past daily board (1-based), used by the
+# reward-collection flow. Returns:
+#   >0  the rank
+#    0  the player has no row for that day (didn't play) or scored 0
+#   -1  the read/aggregation failed (network/server) — caller must NOT treat
+#       this as "no reward" and must retry later.
+func my_daily_rank_for(difficulty: String, date_str: String) -> int:
+	var uid := _uid()
+	if uid.is_empty():
+		return 0
+	if _is_editor:
+		return _my_daily_rank_for_sim(difficulty, date_str)
+	var coll := "daily_" + difficulty
+	var mine := await _rest_get_status(coll, _daily_doc_id(date_str, uid))
+	match String(mine.get("status", "error")):
+		"missing":
+			return 0
+		"ok":
+			pass
+		_:
+			return -1
+	var d: Dictionary = mine.get("data", {})
+	# Defensive: the doc id already pins the date, but confirm the field agrees.
+	if String(d.get("date", "")) != date_str:
+		return 0
+	var my_score := int(d.get("score", 0))
+	if my_score <= 0:
+		return 0
+	var agg := await _rest_run_aggregation(
+		_build_score_compare_query(coll, {"date": date_str}, ">", my_score, ""),
+		"above_count")
+	if not bool(agg.get("ok", false)):
+		return -1
+	return int(agg.get("value", 0)) + 1
+
+# Editor-sim equivalent of my_daily_rank_for: count sim rows for that date with a
+# strictly higher score. Never fails (no network), so it never returns -1.
+func _my_daily_rank_for_sim(difficulty: String, date_str: String) -> int:
+	var uid := _uid()
+	var src: Dictionary = _sim_daily.get(difficulty, {})
+	var mine: Dictionary = src.get(_daily_doc_id(date_str, uid), {})
+	if String(mine.get("date", "")) != date_str:
+		return 0
+	var my_score := int(mine.get("score", 0))
+	if my_score <= 0:
+		return 0
+	var above := 0
+	for key in src:
+		var e: Dictionary = src[key]
+		if String(e.get("date", "")) == date_str and int(e.get("score", 0)) > my_score:
+			above += 1
+	return above + 1
 
 # Loads one all-time board: top 20 + my row + my neighborhood (if I'm outside
 # the top 20). Returns the same shape as the daily loader so the screen treats
@@ -448,10 +567,15 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 
 	var rows: Array = []
 	var my_uid := _uid()
+	# For daily boards a row's doc id is `{date}__{uid}`, so my own row lives at
+	# that composite id, not at `{uid}`. All-time boards read at `{uid}`.
+	var my_doc_id := my_uid
+	if extra_eq.has("date"):
+		my_doc_id = _daily_doc_id(String(extra_eq["date"]), my_uid)
 	var found_me_in_top := false
 	for doc in top.get("items", []):
 		var d: Dictionary = doc.get("data", {})
-		var uid := String(doc.get("id", ""))
+		var uid := _doc_uid(doc)
 		var is_me := uid == my_uid
 		if is_me:
 			found_me_in_top = true
@@ -470,7 +594,7 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 					my_row = {"uid": my_uid, "name": rows[i]["name"], "score": rows[i]["score"]}
 					break
 		else:
-			var existing := await _rest_get(collection, my_uid)
+			var existing := await _rest_get(collection, my_doc_id)
 			if bool(existing.get("exists", false)):
 				var d: Dictionary = existing.get("data", {})
 				# For daily, an extra_eq on `date` lets us reject yesterday's
@@ -589,7 +713,7 @@ func _assemble_neighborhood(my_row: Dictionary, my_rank: int, above_items: Array
 	for i in range(above_items.size() - 1, -1, -1):
 		var doc: Dictionary = above_items[i]
 		var d: Dictionary = doc.get("data", {})
-		var uid := String(doc.get("id", ""))
+		var uid := _doc_uid(doc)
 		out.append({
 			"uid": uid, "name": d.get("name", "Player"),
 			"score": int(d.get("score", 0)),
@@ -604,7 +728,7 @@ func _assemble_neighborhood(my_row: Dictionary, my_rank: int, above_items: Array
 	for i in below_items.size():
 		var doc: Dictionary = below_items[i]
 		var d: Dictionary = doc.get("data", {})
-		var uid := String(doc.get("id", ""))
+		var uid := _doc_uid(doc)
 		out.append({
 			"uid": uid, "name": d.get("name", "Player"),
 			"score": int(d.get("score", 0)),
@@ -621,8 +745,12 @@ func _load_board_sim(collection: String, extra_eq: Dictionary) -> Dictionary:
 	var table := _sim_daily if collection.begins_with("daily_") else _sim_global
 	var src: Dictionary = table.get(diff, {})
 	var rows_full: Array = []
-	for uid in src:
-		var e: Dictionary = src[uid]
+	for key in src:
+		var e: Dictionary = src[key]
+		# Daily sim rows are keyed `{date}__{uid}` and carry an explicit `uid`;
+		# all-time sim rows are keyed by uid directly (no `uid` field), so the key
+		# is the fallback — mirrors _doc_uid on the live path.
+		var uid := String(e.get("uid", key))
 		# date filter for daily collections.
 		var keep := true
 		for k in extra_eq:

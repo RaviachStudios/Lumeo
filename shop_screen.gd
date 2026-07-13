@@ -35,14 +35,11 @@ const CATEGORIES := [
 		"accent": Color(1.00, 0.78, 0.22),
 		# "default" is included so players can revert after equipping a paid
 		# theme; its card is always "owned" and free, so the buy/equip flow
-		# handles it without special casing. Ordered by tier: low-value gradients
-		# (80), then mid-value illustrated scenes (250-800), then high-value
-		# animated scenes (1000-3200).
+		# handles it without special casing. Ordered by price, ascending.
 		"items": ["default",
 			"midnight", "indigo", "sunset", "crimson", "slate", "skybound",
-			"rainbow", "forest", "desert", "speedway", "reef", "kitty",
-			"cosmos", "neon",
-			"inferno", "clouds", "aurora", "fairies", "deepspace", "castle"],
+			"forest", "desert", "clouds", "speedway", "kitty", "rainbow",
+			"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace"],
 	},
 	# Wheel colour customization. No flat `items` list — its content (live wheel
 	# preview + the three per-part colour tiles) is built specially in
@@ -860,8 +857,8 @@ func _make_card(theme_id: String, accent: Color) -> Dictionary:
 	root.size = Vector2(CARD_W, CARD_H)
 	# PASS (not the Panel default STOP) so a touch starting on the card body still
 	# reaches the ScrollContainer as a drag — otherwise the panel swallows it and
-	# the list only scrolls from the gaps between cards. The buy/equip button keeps
-	# its default STOP so taps on it still register.
+	# the list only scrolls from the gaps between cards. The buy/equip button is
+	# also PASS (see below) so a drag starting on the button itself still scrolls.
 	root.mouse_filter = Control.MOUSE_FILTER_PASS
 	var cs := StyleBoxFlat.new()
 	cs.bg_color = Color(0.06, 0.08, 0.20, 0.92)
@@ -913,6 +910,9 @@ func _make_card(theme_id: String, accent: Color) -> Dictionary:
 	btn.position = Vector2(16, CARD_H - 48 - 16)
 	btn.add_theme_font_size_override("font_size", 19)
 	btn.focus_mode = Control.FOCUS_NONE
+	# PASS so a press-and-drag that starts on the button still reaches the
+	# ScrollContainer; a plain tap still registers as a click.
+	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	root.add_child(btn)
 
 	# Price block lives inside the button; toggled off once the theme is owned.
@@ -1164,22 +1164,23 @@ const SKIN_FRAME_PAD := 26
 # _skins_coming_soon / _build_skins_coming_soon). Nothing is deleted — the full skin
 # card / preview pipeline stays intact and each skin returns the moment its entry is
 # flagged released (which also re-enables that skin's preview prewarm in _begin_load).
-# Currently VOLCANO is the only released skin.
+# Released skins: ARCADE, JACKPOT, LUNA PARK. (VOLCANO is detached — too laggy for now.)
 
 # Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
 # Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
 # + the corresponding skin path in SimonWheel. A `blurb` field is optional; when
 # absent the card renders just the title (used for VOLCANO). Only entries with
 # `released: true` appear in the shop — the rest stay hidden until they're ready.
+# Ordered by price, ascending.
 const SKIN_DEFS := [
-	{"id": "inferno", "label": "VOLCANO", "released": true},
-	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
-	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
-	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin.", "released": true},
-	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
 	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets.", "released": true},
-	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
+	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin.", "released": true},
 	{"id": "lunapark", "label": "LUNA PARK", "blurb": "Step right up.", "released": true},
+	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
+	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
+	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
+	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
+	{"id": "inferno", "label": "VOLCANO"},  # detached: too laggy for now (art/pipeline kept intact)
 ]
 
 # The subset of SKIN_DEFS that are live in the shop right now (flagged `released`).
@@ -1433,6 +1434,9 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	btn.position = Vector2(18, SKIN_CARD_H - 52 - 18)
 	btn.add_theme_font_size_override("font_size", 20)
 	btn.focus_mode = Control.FOCUS_NONE
+	# PASS so a press-and-drag that starts on the button still reaches the
+	# ScrollContainer; a plain tap still registers as a click.
+	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	root.add_child(btn)
 	var price := _make_price_content(CoinsManager.skin_price(skin_id), 13.0, 22, 52.0)
 	btn.add_child(price["box"])
@@ -1723,8 +1727,8 @@ func _make_color_card(category: String, color_id: String) -> Dictionary:
 	root.size = Vector2(SWATCH_CARD_W, SWATCH_CARD_H)
 	# PASS (not the Panel default STOP) so a drag that starts on a card body still
 	# reaches the enclosing ScrollContainer — otherwise the popup only scrolls when
-	# the drag begins in the gaps between cards. The BUY/EQUIP button stays STOP so
-	# taps on it still register as a press, not a scroll.
+	# the drag begins in the gaps between cards. The BUY/EQUIP button is also PASS
+	# (see below) so a drag starting on the button itself still scrolls.
 	root.mouse_filter = Control.MOUSE_FILTER_PASS
 	var cs := StyleBoxFlat.new()
 	cs.bg_color = Color(0.07, 0.09, 0.22, 0.92)
@@ -1761,6 +1765,9 @@ func _make_color_card(category: String, color_id: String) -> Dictionary:
 	btn.position = Vector2(10, SWATCH_CARD_H - 36 - 10)
 	btn.add_theme_font_size_override("font_size", 16)
 	btn.focus_mode = Control.FOCUS_NONE
+	# PASS so a press-and-drag that starts on the button still reaches the
+	# ScrollContainer; a plain tap still registers as a click.
+	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	root.add_child(btn)
 
 	# Price block inside the button (coin + number); hidden once the colour is owned.
