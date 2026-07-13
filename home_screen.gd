@@ -96,6 +96,30 @@ var _start_lm: Dictionary = {}
 var _shop_card: Dictionary = {}
 var _ranks_card: Dictionary = {}
 var _arena_card: Dictionary = {}   # bottom-center: opens the Arena (multiplayer contests)
+
+# --- knight-duel animation state (drives the two fencers on the Arena card) ---
+# The two knights fight in a loop of randomised "beats". Each beat winds up, strikes
+# (a sword clash or a dodged whiff), briefly freezes on impact, then recovers, with
+# continuous idle motion (breathing, weight-shifts, shield fidget) layered on top.
+# The heavy colosseum backdrop stays fully static; only the small knight overlay
+# redraws each frame, so the animation is cheap.
+const _KN_TF_POS := Vector2(13.0, -23.6)   # matches _draw_arena_simon's canvas transform
+const _KN_TF_SCL := Vector2(1.28, 1.13)
+const _KN_L_FEET := Vector2(91.0, 86.0)    # neutral stance, pre-transform (ctr 107,74)
+const _KN_R_FEET := Vector2(123.0, 86.0)
+var _duel_rng := RandomNumberGenerator.new()
+var _duel_t := 0.0
+var _beat_start := 0.0
+var _beat_end := 0.0
+var _atk_idx := 0                          # 0 = left leads this beat, 1 = right
+var _beat_dodge := false                   # this beat is a dodge/whiff rather than a clash
+var _beat_clash := Vector2(107.0, 54.0)    # where the blades meet on a clash beat
+var _clash_seed := 0.0                      # rotates the spark shards
+var _flashed := false                       # spark already fired for this beat
+var _clash_flash := 0.0                     # 0..1 spark intensity, decays after impact
+var _clash_at := Vector2(107.0, 54.0)
+var _pose_l := {"feet": Vector2(91.0, 86.0), "blade": Vector2(107.0, 54.0), "lean": 0.0, "guard": 0.15}
+var _pose_r := {"feet": Vector2(123.0, 86.0), "blade": Vector2(107.0, 54.0), "lean": 0.0, "guard": 0.15}
 var _profile_card: Panel
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
@@ -456,32 +480,63 @@ func _build_arena_card() -> void:
 	var panel := _card_panel(ARENA_SIZE, CARD_PURPLE, CARD_BORDER, CARD_GLOW)
 	floater.add_child(panel)
 
-	# Stadium illustration filling the left third.
+	# A wide, deluxe colosseum illustration filling the left of the card.
 	var art := Control.new()
-	art.size = Vector2(214, ARENA_SIZE.y)
+	art.size = Vector2(300, ARENA_SIZE.y)
 	art.position = Vector2(6, 0)
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	art.draw.connect(_draw_arena_simon.bind(art))
 	panel.add_child(art)
 
-	var title := Label.new()
-	title.text = "ARENA"
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_color", Color.WHITE)
-	title.add_theme_color_override("font_shadow_color", Color(0.45, 0.40, 1.0, 0.55))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 0)
-	title.add_theme_constant_override("shadow_outline_size", 7)
-	title.position = Vector2(228, 15)
-	title.size = Vector2(260, 36)
-	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	# The two duelling knights live on their own thin overlay above the (static)
+	# colosseum art, so only this tiny node redraws each frame. Same box + canvas
+	# transform as `art` so the fencers line up on the arena floor.
+	var knights := Control.new()
+	knights.size = Vector2(300, ARENA_SIZE.y)
+	knights.position = Vector2(6, 0)
+	knights.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	knights.draw.connect(_draw_arena_knights.bind(knights))
+	panel.add_child(knights)
+
+	# "ARENA" title — a custom-drawn, brushed-steel wordmark (metallic bevel + soft
+	# shadow, no neon) set to the right of the colosseum, lifted to leave room for a
+	# subtitle bubble beneath it (the whole card is tappable; no CTA pill).
+	var col_w := ARENA_SIZE.x - 306 - 20
+	var title := Control.new()
+	title.position = Vector2(306, 6)
+	title.size = Vector2(col_w, 62)
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.draw.connect(_draw_arena_title.bind(title))
 	panel.add_child(title)
 
-	# CTA pill (icon + label) along the bottom of the text column.
-	var pill := _cta_pill(Vector2(ARENA_SIZE.x - 228 - 18, 40), "Enter the Arena", _draw_sword_icon)
-	pill.position = Vector2(228, ARENA_SIZE.y - 52)
-	panel.add_child(pill)
+	# A rounded "bubble" subtitle under the title — mirrors the pill chrome of the
+	# Shop / Leaderboard CTA buttons so the Arena card reads as the same family.
+	var sub := Panel.new()
+	var sub_w := 178.0
+	var sub_h := 30.0
+	sub.size = Vector2(sub_w, sub_h)
+	sub.position = Vector2(306 + (col_w - sub_w) * 0.5, 78)
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sst := StyleBoxFlat.new()
+	# A slightly muted purple with a gentle shadow — inviting, not shouting.
+	sst.bg_color = Color(0.48, 0.35, 0.86, 0.94)
+	sst.set_corner_radius_all(int(sub_h * 0.5))
+	sst.shadow_color = Color(0.42, 0.28, 0.90, 0.38)
+	sst.shadow_size = 4
+	sub.add_theme_stylebox_override("panel", sst)
+	var sl := Label.new()
+	# Atmospheric tagline — deliberately small, low-contrast and light so it finishes
+	# the pill without competing with the title or the central PLAY button.
+	sl.text = "Fight for Glory"
+	sl.add_theme_font_size_override("font_size", 13)
+	sl.add_theme_color_override("font_color", Color(0.90, 0.90, 0.98, 0.74))
+	sl.add_theme_constant_override("line_spacing", 0)
+	sl.size = Vector2(sub_w, sub_h)
+	sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	sl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sub.add_child(sl)
+	panel.add_child(sub)
 
 	var btn := _overlay_button(ARENA_SIZE)
 	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
@@ -491,74 +546,374 @@ func _build_arena_card() -> void:
 	btn.pressed.connect(_on_arena)
 	floater.add_child(btn)
 
-	_arena_card = {"wrap": wrap, "art": art, "floater": floater}
+	_arena_card = {"wrap": wrap, "art": art, "floater": floater, "knights": knights}
+	_duel_rng.randomize()
 
-# The Arena mascot: a little clipart stadium — an oval bowl packed with a
-# colourful crowd, a striped green pitch in the middle, and two floodlight
-# towers glowing over the rim. `c` is a ~214 x 124 art box.
+# The Arena mascot: a medieval colosseum. Massive tiered stone grandstands ring a
+# central arena floor rendered as Simon himself (the four-colour wheel), where two
+# armoured knights duel with swords. Torches, banners, a wooden railing and a dark,
+# warm-lit mood set the epic medieval scene. Fully static. `c` is a ~214 x 124 box.
 func _draw_arena_simon(c: Control) -> void:
+	# The scene below is authored around the original 214x124 box; a scaled canvas
+	# transform blows it up crisply to fill the wider, deluxe art box.
+	# Squashed a touch vertically (sy 1.13 vs sx 1.28) so the bowl sits fully inside
+	# the card instead of clipping its top/bottom; offset keeps the centre at y≈60.
+	c.draw_set_transform(Vector2(13.0, -23.6), 0.0, Vector2(1.28, 1.13))
 	var ctr := Vector2(107, 74)
-	var out_rx := 92.0
-	var out_ry := 44.0
-	# soft cool glow behind the whole bowl
-	_glow(c, ctr + Vector2(0, -4), 90.0, Color(0.52, 0.60, 1.0), 5)
 
-	# Floodlight towers behind the bowl (poles first so the stands overlap them).
-	for fx in [-70.0, 70.0]:
-		var base := ctr + Vector2(fx, -8)
-		var top := base + Vector2(fx * 0.10, -56)
-		c.draw_line(base, top, Color(0.28, 0.31, 0.44), 4.0)
-		var panel_c := top + Vector2(0, -3)
-		_glow(c, panel_c, 22.0, Color(1.0, 0.95, 0.62), 4)
-		# a little grid of bulbs on a rounded head
-		c.draw_colored_polygon(PackedVector2Array([
-			panel_c + Vector2(-11, -6), panel_c + Vector2(11, -6),
-			panel_c + Vector2(11, 6), panel_c + Vector2(-11, 6)]),
-			Color(0.34, 0.37, 0.52))
-		for gx in [-6.5, 0.0, 6.5]:
-			for gy in [-3.0, 3.0]:
-				c.draw_circle(panel_c + Vector2(gx, gy), 2.6, Color(1.0, 0.97, 0.74))
+	# Warm torch-lit haze — keeps the arena dark with an amber core.
+	_glow(c, ctr + Vector2(0, -2), 78.0, Color(0.95, 0.50, 0.16), 5)
 
-	# Stadium bowl: dark outer rim → lighter seating ring.
-	c.draw_colored_polygon(_ellipse_pts(ctr, out_rx, out_ry), Color(0.15, 0.17, 0.29))
-	c.draw_colored_polygon(_ellipse_pts(ctr, out_rx - 5.0, out_ry - 3.0),
-		Color(0.31, 0.34, 0.49))
+	# Dark, warm stone (lit from within by the torches).
+	var st_edge := Color(0.10, 0.08, 0.06)
+	var st_dk := Color(0.21, 0.16, 0.11)
+	var st_md := Color(0.37, 0.29, 0.19)
+	var st_lt := Color(0.56, 0.44, 0.28)
 
-	# The crowd: rings of little multi-colour dots filling the stands, each nudged
-	# by a cheap deterministic jitter so the packing reads as a lively crowd.
-	var crowd := [Color(0.93, 0.30, 0.32), Color(0.98, 0.78, 0.24),
-		Color(0.30, 0.72, 0.42), Color(0.32, 0.60, 0.98),
-		Color(0.95, 0.95, 0.97), Color(0.80, 0.42, 0.92)]
-	var field_rx := 52.0
-	var field_ry := 23.0
-	for ring in 3:
-		var t := (float(ring) + 0.5) / 3.0
-		var rx: float = lerp(field_rx + 5.0, out_rx - 7.0, t)
-		var ry: float = lerp(field_ry + 4.0, out_ry - 5.0, t)
-		var n := 22 + ring * 6
+	# Soft cast shadow under the whole bowl.
+	c.draw_colored_polygon(_ellipse_pts(ctr + Vector2(0, 4), 97.0, 46.0), Color(0, 0, 0, 0.22))
+
+	# --- massive tiered grandstands: concentric seating bowls stepping down + in,
+	# each with a thin warm-lit lip so the levels read as stacked stone steps ---
+	var tiers := [Vector3(96, 46, 0.0), Vector3(88, 42, 0.28), Vector3(79, 37.5, 0.5),
+		Vector3(69, 33, 0.72), Vector3(59, 28, 0.95)]
+	for tv in tiers:
+		var t: Vector3 = tv
+		c.draw_colored_polygon(_ellipse_pts(ctr, t.x, t.y), st_dk.lerp(st_md, t.z))
+		var lip := PackedVector2Array()
+		for k in 22:
+			var a: float = PI + PI * float(k) / 21.0
+			lip.append(ctr + Vector2(cos(a) * (t.x - 1.0), sin(a) * (t.y - 1.0)))
+		c.draw_polyline(lip, Color(st_lt.r, st_lt.g, st_lt.b, 0.5), 1.3, true)
+
+	# --- gilded cornice crowning the outer wall (the deluxe touch) ---
+	var gold := Color(0.98, 0.82, 0.34)
+	var crown := _ellipse_pts(ctr, 96.5, 46.0, 56)
+	crown.append(crown[0])
+	c.draw_polyline(crown, Color(gold.r, gold.g, gold.b, 0.7), 2.0, true)
+	c.draw_polyline(_ellipse_pts(ctr, 96.5, 46.0, 56), Color(1.0, 0.94, 0.72, 0.35), 0.8, true)
+
+	# --- a subtle crowd murmuring in the upper stands (sparse warm-dark dots) ---
+	for ring in 2:
+		var rx: float = 90.0 - ring * 8.0
+		var ry: float = 43.0 - ring * 4.0
+		var n := 34 - ring * 6
 		for i in n:
-			var a := TAU * float(i) / n
-			var jr := 0.86 + 0.14 * sin(float(i) * 2.3 + ring * 1.7)
-			var jt := 0.10 * cos(float(i) * 1.7 + ring)
-			var p := ctr + Vector2(cos(a + jt) * rx * jr, sin(a + jt) * ry * jr)
-			c.draw_circle(p, 2.2, crowd[(i + ring * 2) % crowd.size()])
+			var a := TAU * float(i) / float(n)
+			var warm := 0.5 + 0.5 * sin(float(i) * 2.7 + ring * 1.3)
+			c.draw_circle(ctr + Vector2(cos(a) * rx, sin(a) * ry), 1.2,
+				Color(0.30 + 0.22 * warm, 0.20 + 0.08 * warm, 0.14, 0.65))
 
-	# The pitch: green oval with clipart centre line + centre circle.
-	c.draw_colored_polygon(_ellipse_pts(ctr, field_rx, field_ry), Color(0.19, 0.60, 0.28))
-	c.draw_colored_polygon(_ellipse_pts(ctr, field_rx - 3.0, field_ry - 2.0),
-		Color(0.23, 0.66, 0.32))
-	var line_col := Color(1.0, 1.0, 1.0, 0.85)
-	c.draw_line(Vector2(ctr.x, ctr.y - field_ry + 3.0),
-		Vector2(ctr.x, ctr.y + field_ry - 3.0), line_col, 1.6)
-	c.draw_polyline(_ellipse_pts(ctr, 12.0, 6.0, 20) + PackedVector2Array([ctr + Vector2(12.0, 0.0)]),
-		line_col, 1.6, true)
+	# --- the arcade: dark arch openings set into the outer wall ---
+	var na := 30
+	for i in na:
+		var a := TAU * float(i) / float(na)
+		var p := ctr + Vector2(cos(a) * 88.0, sin(a) * 42.0)
+		c.draw_rect(Rect2(p.x - 1.8, p.y - 1.2, 3.6, 3.9), st_edge)
+		c.draw_circle(Vector2(p.x, p.y - 1.2), 1.8, st_edge)
 
-	# A crisp white highlight along the top rim to pop the bowl off the card.
-	var rim := PackedVector2Array()
-	for i in 20:
-		var a: float = PI + PI * float(i) / 19.0
-		rim.append(ctr + Vector2(cos(a) * (out_rx - 2.0), sin(a) * (out_ry - 2.0)))
-	c.draw_polyline(rim, Color(0.85, 0.90, 1.0, 0.45), 2.0, true)
+	# --- a deluxe balustrade fence ringing the very top of the outer wall ---
+	_draw_arena_fence(c, ctr, 95.0, 45.5)
+
+	# --- medieval banners draped over the upper wall ---
+	var bcols := [Color(0.72, 0.16, 0.18), Color(0.20, 0.34, 0.64),
+		Color(0.74, 0.56, 0.16), Color(0.30, 0.52, 0.28)]
+	var bang := [PI * 1.20, PI * 1.40, PI * 1.60, PI * 1.80]
+	for i in bang.size():
+		_draw_arena_banner(c, ctr + Vector2(cos(bang[i]) * 83.0, sin(bang[i]) * 39.0), bcols[i])
+
+	# --- torches ringing the back of the arena, casting warm pools of light ---
+	for a in [PI * 1.12, PI * 1.34, PI * 1.66, PI * 1.88]:
+		_draw_arena_torch(c, ctr + Vector2(cos(a) * 73.0, sin(a) * 35.0))
+
+	# --- the arena floor: a sand ledge fenced by a wooden railing ---
+	c.draw_colored_polygon(_ellipse_pts(ctr, 56.0, 27.0), st_md.darkened(0.15))
+	c.draw_colored_polygon(_ellipse_pts(ctr, 52.0, 24.5), Color(0.30, 0.22, 0.14))
+	var rail := _ellipse_pts(ctr, 54.0, 25.5)
+	rail.append(rail[0])
+	c.draw_polyline(rail, Color(0.36, 0.23, 0.12), 1.8, true)
+	for i in 16:
+		var a := TAU * float(i) / 16.0
+		var p := ctr + Vector2(cos(a) * 54.0, sin(a) * 25.5)
+		c.draw_line(p, p + Vector2(0, -3.0), Color(0.42, 0.28, 0.15), 1.4)
+
+	# --- Simon himself as the arena floor: the four-colour wheel (top gold, right
+	# red, bottom green, left blue), the sand showing through the gaps as a cross ---
+	var f_rx := 50.0
+	var f_ry := 24.0
+	var simon := [Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
+		Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
+	var gap := deg_to_rad(6.0)
+	for q in 4:
+		var a0 := -PI * 0.75 + q * PI * 0.5 + gap * 0.5
+		var a1 := -PI * 0.75 + (q + 1) * PI * 0.5 - gap * 0.5
+		var wedge := PackedVector2Array([ctr])
+		for k in 11:
+			var a: float = lerp(a0, a1, float(k) / 10.0)
+			wedge.append(ctr + Vector2(cos(a) * f_rx, sin(a) * f_ry))
+		c.draw_colored_polygon(wedge, simon[q])
+	# Glossy sheen across the top of the colour wheel — makes Simon read as polished.
+	c.draw_colored_polygon(_ellipse_pts(ctr + Vector2(0, -7), 34.0, 11.0), Color(1, 1, 1, 0.10))
+	# Thin gold ring binding the wheel, then the dark hub.
+	var wheel_ring := _ellipse_pts(ctr, f_rx, f_ry, 44)
+	wheel_ring.append(wheel_ring[0])
+	c.draw_polyline(wheel_ring, Color(0.98, 0.82, 0.34, 0.6), 1.4, true)
+	c.draw_colored_polygon(_ellipse_pts(ctr, 8.0, 4.0), Color(0.12, 0.12, 0.18))   # hub
+	c.draw_polyline(_ellipse_pts(ctr, 8.0, 4.0, 20), Color(0.98, 0.82, 0.34, 0.7), 1.0, true)  # gilded hub rim
+
+	# The two duelling knights are drawn on a separate animated overlay
+	# (_draw_arena_knights), so nothing below the wheel needs to redraw per frame.
+
+# A deluxe balustrade fence ringing the colosseum: a stone rail of gilded posts
+# linked by twin rails, each post crowned with a golden finial. `rx`,`ry` are the
+# outer-wall radii it rides on. Fully static.
+func _draw_arena_fence(c: Control, ctr: Vector2, rx: float, ry: float) -> void:
+	var wood := Color(0.36, 0.26, 0.16)
+	var wood_dk := Color(0.18, 0.12, 0.08)
+	var gold := Color(0.98, 0.82, 0.34)
+	var gold_hi := Color(1.0, 0.95, 0.74)
+	var ph := 6.5                                    # post height (screen-up)
+	# Lower rail hugging the wall, then a top rail lifted by the post height.
+	var lower := _ellipse_pts(ctr, rx, ry, 60)
+	lower.append(lower[0])
+	var upper := PackedVector2Array()
+	for p in lower:
+		upper.append(p + Vector2(0, -ph))
+	c.draw_polyline(lower, wood_dk, 2.4, true)
+	c.draw_polyline(upper, wood, 2.2, true)
+	c.draw_polyline(upper, Color(gold.r, gold.g, gold.b, 0.55), 1.0, true)   # gilded cap-rail
+	# Balusters: a shaded post with a bright edge, crowned by a gilded finial.
+	var n := 30
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		var b := ctr + Vector2(cos(a) * rx, sin(a) * ry)
+		var top := b + Vector2(0, -ph)
+		c.draw_line(b, top, wood, 2.2)
+		c.draw_line(b + Vector2(0.7, 0), top + Vector2(0.7, 0), wood_dk, 0.8)
+		c.draw_line(b + Vector2(-0.7, 0), top + Vector2(-0.7, 0), Color(0.62, 0.48, 0.30), 0.7)
+		c.draw_circle(top, 1.7, gold)
+		c.draw_circle(top + Vector2(-0.5, -0.5), 0.7, gold_hi)
+
+# One wall torch: a warm glow, a short bracket and a two-tone flame.
+func _draw_arena_torch(c: Control, base: Vector2) -> void:
+	_glow(c, base + Vector2(0, -4), 13.0, Color(1.0, 0.58, 0.20), 4)
+	c.draw_rect(Rect2(base.x - 1.1, base.y - 2.0, 2.2, 8.0), Color(0.26, 0.17, 0.09))
+	c.draw_colored_polygon(PackedVector2Array([
+		base + Vector2(0, -12), base + Vector2(2.8, -5), base + Vector2(0, -2),
+		base + Vector2(-2.8, -5)]), Color(1.0, 0.52, 0.16))
+	c.draw_colored_polygon(PackedVector2Array([
+		base + Vector2(0, -9), base + Vector2(1.5, -5), base + Vector2(0, -3),
+		base + Vector2(-1.5, -5)]), Color(1.0, 0.86, 0.42))
+
+# A small hanging medieval banner: a rod, a swallow-tail flag (shaded right half)
+# and a light emblem dot.
+func _draw_arena_banner(c: Control, top: Vector2, col: Color) -> void:
+	var w := 7.0
+	var h := 12.0
+	c.draw_colored_polygon(PackedVector2Array([
+		top + Vector2(-w * 0.5, 0), top + Vector2(w * 0.5, 0), top + Vector2(w * 0.5, h),
+		top + Vector2(0, h - 3.5), top + Vector2(-w * 0.5, h)]), col)
+	c.draw_colored_polygon(PackedVector2Array([
+		top + Vector2(0, 0), top + Vector2(w * 0.5, 0),
+		top + Vector2(w * 0.5, h), top + Vector2(0, h - 3.5)]), col.darkened(0.22))
+	c.draw_rect(Rect2(top.x - w * 0.5 - 1.0, top.y - 1.6, w + 2.0, 1.8), Color(0.30, 0.21, 0.11))
+	c.draw_circle(top + Vector2(0, h * 0.42), 1.5, Color(1, 1, 0.85, 0.85))
+
+# One armoured knight standing at `feet`, facing `face` (+1 right, -1 left), his
+# sword swinging toward `blade_tip`. `lean` is a world-x offset applied to the upper
+# body (positive toward the foe when lunging, negative when dodging back); `guard`
+# in 0..1 raises the shield across the chest to block. Dark steel so he reads
+# against the colour wheel; the plume carries his team colour.
+func _draw_arena_knight(c: Control, feet: Vector2, face: float, plume: Color, blade_tip: Vector2, lean: float, guard: float) -> void:
+	var steel := Color(0.40, 0.43, 0.52)
+	var steel_dk := Color(0.20, 0.22, 0.29)
+	var steel_hi := Color(0.68, 0.72, 0.82)
+	var cx := feet.x
+	var ux := cx + lean            # leaning upper-body x
+	var hipx := cx + lean * 0.4    # hips follow the lean a little
+	var hip := feet.y - 9.0
+	var sh := feet.y - 20.0
+	# Legs stay planted at the feet and rise to the (leaning) hips.
+	c.draw_line(Vector2(cx - 2.6, feet.y), Vector2(hipx - 2.6, hip), steel_dk, 2.6)
+	c.draw_line(Vector2(cx + 2.6, feet.y), Vector2(hipx + 2.6, hip), steel_dk, 2.6)
+	# Shield on the outer arm; it rises and swings across the chest as `guard` grows.
+	var sxx := ux - face * 6.5 + face * guard * 3.8
+	var syy := sh - guard * 4.0
+	var ss := 1.0 + guard * 0.15
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(sxx - 3.2 * ss, syy + 1), Vector2(sxx + 3.2 * ss, syy + 1), Vector2(sxx + 3.2 * ss, syy + 8 * ss),
+		Vector2(sxx, syy + 11.5 * ss), Vector2(sxx - 3.2 * ss, syy + 8 * ss)]), steel_dk)
+	c.draw_line(Vector2(sxx, syy + 2), Vector2(sxx, syy + 9 * ss), plume, 1.2)
+	# Torso (armoured trapezoid) + a vertical sheen.
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(ux - 4.5, sh), Vector2(ux + 4.5, sh),
+		Vector2(hipx + 3.6, hip), Vector2(hipx - 3.6, hip)]), steel)
+	c.draw_line(Vector2(ux - face * 2.2, sh + 1.5), Vector2(hipx - face * 2.2, hip - 1.0), steel_hi, 1.0)
+	# Helmet with a shaded face side, a dark visor slit and a swept-back plume.
+	var hy := sh - 4.0
+	c.draw_circle(Vector2(ux, hy), 4.3, steel)
+	c.draw_circle(Vector2(ux + face * 1.3, hy + 0.4), 3.6, steel_dk)
+	c.draw_rect(Rect2(ux - 3.4, hy - 0.8, 6.8, 1.7), Color(0.04, 0.04, 0.07))
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(ux - face * 1.0, hy - 4.5), Vector2(ux - face * 3.5, hy - 9.5),
+		Vector2(ux - face * 5.5, hy - 8.0), Vector2(ux - face * 2.0, hy - 3.0)]), plume)
+	# Sword: gauntlet at the inner shoulder, blade swinging to the tip, crossguard.
+	var hand := Vector2(ux + face * 5.0, sh + 2.0)
+	c.draw_line(hand, blade_tip, steel_hi, 2.0)
+	c.draw_line(hand, blade_tip, Color(1, 1, 1, 0.5), 0.8)
+	var bv := blade_tip - hand
+	if bv.length() < 0.01:
+		bv = Vector2(0, -1)
+	var gd := bv.normalized().orthogonal() * 3.0
+	c.draw_line(hand - gd, hand + gd, Color(0.55, 0.42, 0.16), 2.2)
+	c.draw_circle(hand, 1.4, steel_dk)
+
+# The animated knight overlay: the two fencers plus the spark that flares when their
+# blades meet. Same canvas transform as the (static) arena art so they sit on the
+# floor. Poses are advanced in _advance_duel(); this only renders the current frame.
+func _draw_arena_knights(c: Control) -> void:
+	c.draw_set_transform(_KN_TF_POS, 0.0, _KN_TF_SCL)
+	_draw_arena_knight(c, _pose_l["feet"], 1.0, Color(0.28, 0.44, 0.72),
+		_pose_l["blade"], _pose_l["lean"], _pose_l["guard"])
+	_draw_arena_knight(c, _pose_r["feet"], -1.0, Color(0.80, 0.26, 0.28),
+		_pose_r["blade"], _pose_r["lean"], _pose_r["guard"])
+	# Spark burst at the point of impact, fading over ~0.2s after the clash.
+	if _clash_flash > 0.02:
+		var a := _clash_flash
+		var p := _clash_at
+		for i in 3:
+			var rr := (3.0 + 7.0 * a) * (1.0 - i * 0.25)
+			c.draw_circle(p, rr, Color(1.0, 0.9, 0.5, 0.18 * a))
+		_star4(c, p, 2.0 + 4.0 * a, Color(1.0, 0.98, 0.80, a))
+		c.draw_circle(p, 1.6 * a, Color(1, 1, 1, 0.95 * a))
+		for k in 5:
+			var ang := TAU * float(k) / 5.0 + _clash_seed
+			var d0 := 3.0 + 10.0 * (1.0 - a)
+			var dir := Vector2(cos(ang), sin(ang))
+			c.draw_line(p + dir * d0, p + dir * (d0 + 3.0 + 4.0 * a), Color(1.0, 0.9, 0.5, 0.9 * a), 1.0)
+
+# The "ARENA" wordmark: a brushed-steel, beveled extrusion (bright top rim → dark
+# lower face) over a soft drop shadow and a whisper of cool glow — medieval and
+# metallic, never neon. Fully static (drawn once).
+func _draw_arena_title(c: Control) -> void:
+	var font := get_theme_default_font()
+	var fs := 40
+	var txt := "ARENA"
+	var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	var asc := font.get_ascent(fs)
+	var desc := font.get_descent(fs)
+	var base := Vector2((c.size.x - ts.x) * 0.5, (c.size.y - (asc + desc)) * 0.5 + asc)
+	# Soft drop shadow for depth.
+	for off in [Vector2(0, 3), Vector2(1.2, 3), Vector2(-1.2, 3)]:
+		c.draw_string(font, base + off, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.02, 0.02, 0.06, 0.28))
+	# A very subtle cool glow behind the letters (not a neon halo).
+	c.draw_string(font, base + Vector2(0, 0.5), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.55, 0.62, 0.85, 0.10))
+	# Beveled steel extrusion: stacked copies from dark/low to bright/high fake a
+	# vertical brushed-metal gradient with a lit top edge and a shadowed base.
+	var steps := [
+		[Vector2(0, 2.0), Color(0.20, 0.22, 0.30)],
+		[Vector2(0, 1.3), Color(0.31, 0.34, 0.43)],
+		[Vector2(0, 0.6), Color(0.46, 0.49, 0.59)],
+		[Vector2(0, 0.0), Color(0.63, 0.67, 0.77)],
+		[Vector2(-0.4, -0.7), Color(0.81, 0.85, 0.93)],
+		[Vector2(-0.5, -1.3), Color(0.96, 0.98, 1.0)],
+	]
+	for s in steps:
+		c.draw_string(font, base + (s[0] as Vector2), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, s[1] as Color)
+
+# ---------------- knight-duel director (runs while the menu is visible) ----------------
+
+func _process(_dt: float) -> void:
+	if _arena_card.is_empty() or not is_visible_in_tree():
+		return
+	_advance_duel(_dt)
+	(_arena_card["knights"] as Control).queue_redraw()
+
+# Roll a fresh combat "beat": a randomised duration, lead attacker, clash point and
+# whether it is a clash or a dodged whiff — so the duel never settles into a pattern.
+func _roll_beat() -> void:
+	_beat_start = _beat_end
+	_beat_end = _beat_start + _duel_rng.randf_range(2.0, 3.2)
+	_beat_dodge = _duel_rng.randf() < 0.30
+	_atk_idx = 0 if _duel_rng.randf() < 0.5 else 1
+	_beat_clash = Vector2(107.0 + _duel_rng.randf_range(-8.0, 8.0), 54.0 + _duel_rng.randf_range(-5.0, 9.0))
+	_clash_seed = _duel_rng.randf() * TAU
+	_flashed = false
+
+# Piecewise-linear keyframe lookup with smoothstep easing between segments.
+func _kf(u: float, keys: Array) -> float:
+	if u <= float(keys[0][0]):
+		return float(keys[0][1])
+	for i in range(1, keys.size()):
+		if u <= float(keys[i][0]):
+			var seg: float = max(0.0001, float(keys[i][0]) - float(keys[i - 1][0]))
+			var t: float = (u - float(keys[i - 1][0])) / seg
+			t = t * t * (3.0 - 2.0 * t)
+			return lerpf(float(keys[i - 1][1]), float(keys[i][1]), t)
+	return float(keys[keys.size() - 1][1])
+
+# Advance the duel by `dt` and write both knights' current poses into _pose_l/_pose_r.
+func _advance_duel(dt: float) -> void:
+	_duel_t += dt
+	while _duel_t >= _beat_end:
+		_roll_beat()
+	var dur: float = max(0.001, _beat_end - _beat_start)
+	var u := (_duel_t - _beat_start) / dur
+
+	# The strike envelope: rest → wind back → lunge → hold (impact freeze) → recover.
+	var drive := _kf(u, [[0.0, 0.12], [0.34, -0.14], [0.50, 1.0], [0.60, 1.0], [1.0, 0.12]])
+	# Fire the clash spark once, at the strike, on clash (non-dodge) beats.
+	if not _beat_dodge and not _flashed and u >= 0.50:
+		_flashed = true
+		_clash_flash = 1.0
+		_clash_at = _beat_clash
+	_clash_flash = max(0.0, _clash_flash - dt * 4.5)
+
+	# Continuous idle motion, always present so neither knight is ever fully still.
+	var breath := sin(_duel_t * 1.7)
+	var sway := sin(_duel_t * 0.45)          # slow circling drift of the pair
+
+	for idx in 2:
+		var face := 1.0 if idx == 0 else -1.0
+		var feet0: Vector2 = _KN_L_FEET if idx == 0 else _KN_R_FEET
+		var pose: Dictionary = _pose_l if idx == 0 else _pose_r
+		var is_atk := idx == _atk_idx
+		# The lead attacker commits fully; a partner on a clash beat commits a touch less.
+		var d := drive * (1.0 if is_atk else 0.86)
+		var lunge: float = max(0.0, d)
+
+		var lean := 0.0
+		var guard: float = 0.15 + 0.10 * max(0.0, sin(_duel_t * 1.1 + idx * 2.1))  # subtle shield fidget
+		var blade: Vector2
+		# Footwork: step in on the lunge / small step back on the wind-up, plus the
+		# slow circling drift and a tiny weight-shift so the stance is never rigid.
+		var fx := feet0.x + face * d * 5.0 + sway * 2.0 + sin(_duel_t * 1.3 + idx) * 0.5
+		var fy := feet0.y + breath * 0.5 + absf(sin(_duel_t * 0.9 + idx * 1.7)) * 0.4
+
+		if _beat_dodge and not is_atk:
+			# Defender: lean away, raise the shield to block, sword held in guard.
+			var dd := _kf(u, [[0.0, 0.0], [0.45, 0.0], [0.52, 1.0], [0.62, 1.0], [1.0, 0.0]])
+			lean = -face * dd * 3.5
+			guard = 0.25 + 0.75 * dd
+			fx = feet0.x - face * dd * 2.5 + sway * 2.0
+			blade = feet0 + Vector2(face * 3.0, -25.0 - 2.0 * dd)
+		else:
+			# Attacker (or both, on a clash beat): swing the blade to its target and
+			# lean into the strike.
+			lean = face * lunge * 2.2
+			var rest_tip := feet0 + Vector2(face * 3.0, -25.0)
+			if _beat_dodge and is_atk:
+				# Whiff: the blade sweeps low, across where the foe was.
+				blade = rest_tip.lerp(feet0 + Vector2(face * 14.0, -6.0), lunge)
+			else:
+				blade = rest_tip.lerp(_beat_clash, lunge)
+			if d < 0.0:
+				blade.y += d * 5.0   # wind-up raises the blade a little higher
+
+		pose["feet"] = Vector2(fx, fy)
+		pose["blade"] = blade
+		pose["lean"] = lean
+		pose["guard"] = clampf(guard, 0.0, 1.0)
 
 # A small crossed-swords glyph for the Arena CTA pill (24x24 box).
 func _draw_sword_icon(c: Control) -> void:
@@ -826,95 +1181,246 @@ func _draw_block(c: Control, x0: float, x1: float, top: float, base: float, fron
 	c.draw_rect(Rect2(x0, top, x1 - x0, base - top), front)
 	c.draw_rect(Rect2(x0, base - 10.0, x1 - x0, 10.0), front.darkened(0.15))
 
-# Gold trophy: pedestal, stem, cup bowl (gradient), two handles, rim shine + gem.
+# Deluxe championship cup: a tiered marble-gold base and stem, a metallic 3D bowl
+# with a bright specular sweep and rounded side shading, an elliptical raised rim,
+# rounded tube handles, a jewelled plaque and a few star glints. Light comes from
+# the upper-left; the bowl stays near-symmetric so the podium still reads clean.
 func _draw_trophy(c: Control, bc: Vector2) -> void:
-	var g_lt := Color(1.0, 0.88, 0.42)
-	var g_md := Color(0.88, 0.66, 0.18)
-	var g_dk := Color(0.62, 0.44, 0.12)
-	c.draw_rect(Rect2(bc.x - 26, bc.y - 10, 52, 10), g_md)        # base tier 1
-	c.draw_rect(Rect2(bc.x - 18, bc.y - 20, 36, 12), g_dk)        # base tier 2
-	c.draw_rect(Rect2(bc.x - 7, bc.y - 34, 14, 16), g_md)         # stem
+	var g_hi := Color(1.0, 0.98, 0.80)   # specular highlight
+	var g_lt := Color(1.0, 0.87, 0.44)
+	var g_md := Color(0.90, 0.66, 0.20)
+	var g_dk := Color(0.60, 0.42, 0.12)
+	var g_edge := Color(0.40, 0.27, 0.07)
 
-	var cup_top := bc.y - 78.0
-	var cup_bot := bc.y - 34.0
-	# Bowl body — tapered goblet shaded vertically only (top-lit) so both sides read
-	# identically; a rounded 3D barrel that stays left/right symmetric.
-	var cup := PackedVector2Array([
-		Vector2(bc.x - 30, cup_top), Vector2(bc.x + 30, cup_top),
-		Vector2(bc.x + 26, cup_top + 18), Vector2(bc.x + 12, cup_bot),
-		Vector2(bc.x - 12, cup_bot), Vector2(bc.x - 26, cup_top + 18)])
-	var ccol := PackedColorArray()
-	for pt in cup:
-		var tv: float = clampf((pt.y - cup_top) / (cup_bot - cup_top), 0.0, 1.0)
-		ccol.append(g_lt.lerp(g_dk, tv))
-	c.draw_polygon(cup, ccol)
+	# Soft cast-shadow puddle under the whole trophy.
+	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, bc.y + 3.0), 42.0, 8.0),
+		Color(0, 0, 0, 0.20))
 
-	# Elliptical rim: raised gold lip + darker hollow interior, seen at a slight angle
-	# so you look down into the bowl. Built as concentric ellipses for a rounded lip.
-	var rim_lip := PackedVector2Array()
-	var rim_in := PackedVector2Array()
-	for i in 28:
-		var a := TAU * float(i) / 28.0
-		var cx := cos(a)
-		rim_lip.append(Vector2(bc.x + cx * 31.0, cup_top + sin(a) * 8.5))
-		rim_in.append(Vector2(bc.x + cx * 23.0, cup_top + 2.0 + sin(a) * 6.0))
-	c.draw_colored_polygon(rim_lip, g_lt)                           # bright gold lip
-	c.draw_colored_polygon(rim_in, g_dk.darkened(0.32))            # hollow interior
-	# inner-wall shading crescent: the far (top) inside wall stays lit, the near dips dark
-	c.draw_arc(Vector2(bc.x, cup_top + 1.0), 26.0, PI, TAU, 18, g_md, 3.0, true)
+	# --- tiered base + stem ---
+	_draw_bevel_slab(c, Rect2(bc.x - 30, bc.y - 12, 60, 12), g_md, g_lt, g_dk)   # plinth
+	_draw_bevel_slab(c, Rect2(bc.x - 20, bc.y - 23, 40, 12), g_lt, g_hi, g_dk)   # tier
+	var stem_top := bc.y - 40.0
+	c.draw_polygon(PackedVector2Array([
+		Vector2(bc.x - 9, stem_top), Vector2(bc.x + 9, stem_top),
+		Vector2(bc.x + 6, bc.y - 23), Vector2(bc.x - 6, bc.y - 23)]),
+		PackedColorArray([g_lt, g_dk, g_md, g_hi]))
+	c.draw_line(Vector2(bc.x - 2, stem_top + 2), Vector2(bc.x - 2, bc.y - 24), g_hi, 2.0)
 
-	# Handles — identical on both sides so the trophy stays symmetric.
-	c.draw_arc(Vector2(bc.x - 26, cup_top + 18), 16.0, PI * 0.5, PI * 1.5, 18, g_dk, 6.0, true)
-	c.draw_arc(Vector2(bc.x + 26, cup_top + 18), 16.0, -PI * 0.5, PI * 0.5, 18, g_dk, 6.0, true)
-	var gy := cup_top + 22.0                                     # little gem on the cup
+	# --- bowl: horizontal rows tapering from a wide rim down to the stem ---
+	var cup_top := bc.y - 82.0
+	var cup_bot := bc.y - 40.0
+	var bh := cup_bot - cup_top
+	var rw := 34.0   # rim half-width
+	var bw := 9.0    # base half-width
+	var rows := 22
+	for i in rows:
+		var t0 := float(i) / float(rows)
+		var t1 := float(i + 1) / float(rows)
+		var y0 := cup_top + bh * t0
+		var y1 := cup_top + bh * t1
+		var w0 := bw + (rw - bw) * pow(1.0 - t0, 0.72)
+		var w1 := bw + (rw - bw) * pow(1.0 - t1, 0.72)
+		var c0 := g_lt.lerp(g_dk, smoothstep(0.0, 1.0, t0))
+		var c1 := g_lt.lerp(g_dk, smoothstep(0.0, 1.0, t1))
+		c.draw_polygon(PackedVector2Array([
+			Vector2(bc.x - w0, y0), Vector2(bc.x + w0, y0),
+			Vector2(bc.x + w1, y1), Vector2(bc.x - w1, y1)]),
+			PackedColorArray([c0, c0, c1, c1]))
+
+	# Rounded-cylinder edge shading — a dark crescent down each side, deeper on the
+	# right (shadow side) than the lit left.
+	_bowl_edge(c, bc.x, cup_top, bh, rw, bw, -1.0, Color(g_edge.r, g_edge.g, g_edge.b, 0.40))
+	_bowl_edge(c, bc.x, cup_top, bh, rw, bw, 1.0, Color(g_edge.r, g_edge.g, g_edge.b, 0.66))
+
+	# Specular sweep: a soft bright vertical lens just left of center, plus a crisp glint.
+	for k in 6:
+		var sy := cup_top + 7.0 + k * 5.0
+		var sw := lerpf(6.0, 2.5, float(k) / 5.0)
+		c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x - 8, sy), sw, 4.5, 16),
+			Color(g_hi.r, g_hi.g, g_hi.b, 0.15))
+	c.draw_circle(Vector2(bc.x - 14, cup_top + 12), 3.0, Color(1, 1, 1, 0.85))
+
+	# --- rim: raised elliptical lip over a dark hollow interior ---
+	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, cup_top + 1.0), 34, 9), g_dk)
+	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, cup_top - 1.0), 33, 8), g_lt)
+	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, cup_top - 1.0), 25, 5.5),
+		g_edge.darkened(0.25))
+
+	# --- rounded tube handles (symmetric) ---
+	_draw_handle(c, Vector2(bc.x - 26, cup_top + 20), false, g_dk, g_lt)
+	_draw_handle(c, Vector2(bc.x + 26, cup_top + 20), true, g_dk, g_lt)
+
+	# --- deluxe star glints ---
+	_star4(c, Vector2(bc.x + 27, cup_top + 1), 6.0, Color(1, 1, 1, 0.90))
+	_star4(c, Vector2(bc.x - 24, cup_top + 36), 4.0, Color(1, 1, 0.95, 0.70))
+	_star4(c, Vector2(bc.x + 20, cup_top + 42), 3.0, Color(1, 1, 1, 0.55))
+
+# A 3D bevelled slab: flat face with a lit top/left edge and a shadowed bottom/right.
+func _draw_bevel_slab(c: Control, r: Rect2, face: Color, hi: Color, dk: Color) -> void:
+	c.draw_rect(r, face)
+	c.draw_rect(Rect2(r.position.x, r.position.y, r.size.x, 3), hi)
+	c.draw_rect(Rect2(r.position.x, r.position.y, 2, r.size.y), hi)
+	c.draw_rect(Rect2(r.position.x, r.position.y + r.size.y - 3, r.size.x, 3), dk)
+	c.draw_rect(Rect2(r.position.x + r.size.x - 2, r.position.y, 2, r.size.y), dk)
+
+# A thin shadow crescent hugging one side of the bowl, fading transparent inward.
+func _bowl_edge(c: Control, cx: float, top: float, bh: float, rw: float, bw: float,
+		side: float, col: Color) -> void:
+	var band := 9.0
+	var n := 11
+	var pts := PackedVector2Array()
+	var cols := PackedColorArray()
+	var clear := Color(col.r, col.g, col.b, 0.0)
+	for i in n + 1:                                   # outer edge, top -> bottom
+		var t := float(i) / float(n)
+		var w := bw + (rw - bw) * pow(1.0 - t, 0.72)
+		pts.append(Vector2(cx + side * w, top + bh * t))
+		cols.append(col)
+	for i in range(n, -1, -1):                        # inner edge, bottom -> top
+		var t := float(i) / float(n)
+		var w := bw + (rw - bw) * pow(1.0 - t, 0.72)
+		pts.append(Vector2(cx + side * maxf(w - band, 0.0), top + bh * t))
+		cols.append(clear)
+	c.draw_polygon(pts, cols)
+
+# A rounded gold handle: a thick dark tube arc with a thin bright sheen on top.
+func _draw_handle(c: Control, center: Vector2, right: bool, dk: Color, lt: Color) -> void:
+	var a0 := -PI * 0.5 if right else PI * 0.5
+	var a1 := PI * 0.5 if right else PI * 1.5
+	c.draw_arc(center, 16.0, a0, a1, 20, dk, 7.0, true)
+	c.draw_arc(center, 16.0, a0, a1, 20, lt, 2.5, true)
+
+# A four-point sparkle: two slim diamonds crossed over a bright core.
+func _star4(c: Control, ctr: Vector2, r: float, col: Color) -> void:
+	var w := r * 0.26
 	c.draw_colored_polygon(PackedVector2Array([
-		Vector2(bc.x, gy - 8), Vector2(bc.x + 6, gy),
-		Vector2(bc.x, gy + 8), Vector2(bc.x - 6, gy)]), Color(1, 0.97, 0.7))
+		Vector2(ctr.x, ctr.y - r), Vector2(ctr.x + w, ctr.y),
+		Vector2(ctr.x, ctr.y + r), Vector2(ctr.x - w, ctr.y)]), col)
+	c.draw_colored_polygon(PackedVector2Array([
+		Vector2(ctr.x - r, ctr.y), Vector2(ctr.x, ctr.y - w),
+		Vector2(ctr.x + r, ctr.y), Vector2(ctr.x, ctr.y + w)]), col)
+	c.draw_circle(ctr, r * 0.22, col)
 
 # Shop illustration: storefront, drawn into the card; offset to centre in the art.
 func _draw_shop_card(c: Control) -> void:
 	c.draw_set_transform(Vector2(-16, -2), 0.0, Vector2.ONE)
 	_draw_shop(c)
 
-# Storefront: walls, a dark sign header, a striped/scalloped awning, two warm
-# display windows and a glowing doorway.
+# Deluxe 3D storefront: a boxed building with a receding right wall + roof, a
+# glossy sign carrying a shopping-bag mark, a scalloped awning with a lit top
+# face, two glowing display windows full of merch, a warm glass doorway and a
+# bevelled step. Light comes from the upper-left.
 func _draw_shop(c: Control) -> void:
-	var x0 := 40.0
-	var x1 := 240.0
-	_glow(c, Vector2(140, 150), 130.0, Color(1.0, 0.82, 0.45), 6)
-	c.draw_rect(Rect2(x0, 76, x1 - x0, 146), Color(0.93, 0.90, 0.84))   # walls
-	c.draw_rect(Rect2(x0, 76, x1 - x0, 30), Color(0.20, 0.24, 0.40))    # sign header band
-	_draw_awning(c, x0 + 4.0, x1 - 4.0, 106.0)
-	# doorway
-	c.draw_rect(Rect2(122, 156, 36, 66), Color(0.34, 0.24, 0.20))
-	c.draw_rect(Rect2(126, 160, 28, 30), Color(1.0, 0.80, 0.45, 0.85))
-	c.draw_circle(Vector2(151, 192), 2.5, Color(0.95, 0.86, 0.5))
-	_draw_window(c, Rect2(56, 150, 46, 40))
-	_draw_window(c, Rect2(178, 150, 46, 40))
-	c.draw_rect(Rect2(x0, 220, x1 - x0, 5), Color(0.0, 0.0, 0.0, 0.18))  # ground shadow
+	var fx0 := 52.0     # front-left
+	var fx1 := 196.0    # front-right
+	var top := 74.0
+	var bot := 224.0
+	var dx := 24.0      # perspective depth
+	var dy := 18.0
+	_glow(c, Vector2(130, 150), 130.0, Color(1.0, 0.82, 0.45), 6)
 
-# Striped awning with a scalloped lower edge.
-func _draw_awning(c: Control, ax0: float, ax1: float, ay: float) -> void:
-	var h := 26.0
-	var stripes := 8
+	# Ground shadow.
+	c.draw_colored_polygon(_ellipse_pts(Vector2(130, bot + 6), 96, 12), Color(0, 0, 0, 0.22))
+
+	# --- building box ---
+	var wall := Color(0.94, 0.91, 0.85)
+	c.draw_colored_polygon(PackedVector2Array([          # receding right wall
+		Vector2(fx1, top), Vector2(fx1 + dx, top - dy),
+		Vector2(fx1 + dx, bot - dy), Vector2(fx1, bot)]), wall.darkened(0.28))
+	c.draw_colored_polygon(PackedVector2Array([          # lit roof top face
+		Vector2(fx0, top), Vector2(fx1, top),
+		Vector2(fx1 + dx, top - dy), Vector2(fx0 + dx, top - dy)]), wall.lightened(0.10))
+	c.draw_rect(Rect2(fx0, top, fx1 - fx0, bot - top), wall)
+	c.draw_polygon(PackedVector2Array([                  # gentle left-lit front shade
+		Vector2(fx0, top), Vector2(fx1, top), Vector2(fx1, bot), Vector2(fx0, bot)]),
+		PackedColorArray([Color(1, 1, 1, 0.10), Color(0, 0, 0, 0.10),
+			Color(0, 0, 0, 0.10), Color(1, 1, 1, 0.10)]))
+
+	# --- sign band ---
+	var sign_h := 26.0
+	c.draw_rect(Rect2(fx0, top, fx1 - fx0, sign_h), Color(0.18, 0.22, 0.40))
+	c.draw_rect(Rect2(fx0, top, fx1 - fx0, 3), Color(0.34, 0.40, 0.64))       # lit top edge
+	c.draw_colored_polygon(PackedVector2Array([          # sign side on the receding wall
+		Vector2(fx1, top), Vector2(fx1 + dx, top - dy),
+		Vector2(fx1 + dx, top - dy + sign_h), Vector2(fx1, top + sign_h)]),
+		Color(0.12, 0.15, 0.30))
+	_draw_bag_glyph(c, Vector2((fx0 + fx1) * 0.5, top + sign_h * 0.5))
+
+	# --- awning ---
+	_draw_awning3d(c, fx0 - 2.0, fx1 + 2.0, top + sign_h)
+
+	# --- windows + door ---
+	var base_y := 150.0
+	_draw_shop_window(c, Rect2(fx0 + 8, base_y, 40, 46))
+	_draw_shop_window(c, Rect2(fx1 - 48, base_y, 40, 46))
+	_draw_shop_door(c, Rect2((fx0 + fx1) * 0.5 - 18, base_y - 2, 36, bot - base_y + 2))
+
+	# --- bevelled step ---
+	_draw_bevel_slab(c, Rect2(fx0 - 6, bot - 8, (fx1 - fx0) + 12, 10),
+		Color(0.80, 0.78, 0.74), Color(0.93, 0.91, 0.87), Color(0.55, 0.53, 0.50))
+
+# 3D striped awning: a lit top slab receding back, a scalloped front and shadow.
+func _draw_awning3d(c: Control, ax0: float, ax1: float, ay: float) -> void:
+	var h := 24.0
+	var depth := 10.0
+	var stripes := 7
 	var w := (ax1 - ax0) / float(stripes)
-	var a_cream := Color(0.96, 0.93, 0.88)
-	var a_red := Color(0.86, 0.30, 0.34)
+	var cream := Color(0.97, 0.94, 0.90)
+	var red := Color(0.86, 0.28, 0.32)
+	c.draw_colored_polygon(PackedVector2Array([          # lit top face
+		Vector2(ax0, ay), Vector2(ax1, ay),
+		Vector2(ax1 - 6, ay - depth), Vector2(ax0 + 6, ay - depth)]), Color(0.90, 0.44, 0.46))
 	for i in stripes:
 		var sx := ax0 + i * w
-		var col := a_red if i % 2 == 0 else a_cream
+		var col := red if i % 2 == 0 else cream
 		c.draw_rect(Rect2(sx, ay, w, h), col)
-		c.draw_circle(Vector2(sx + w * 0.5, ay + h), 9.0, col)        # scallop
-	c.draw_rect(Rect2(ax0, ay - 4.0, ax1 - ax0, 5.0), Color(0.55, 0.16, 0.20))  # trim
+		c.draw_circle(Vector2(sx + w * 0.5, ay + h), w * 0.5, col)               # scallop
+		c.draw_arc(Vector2(sx + w * 0.5, ay + h), w * 0.5, 0, PI, 10, col.darkened(0.18), 2.0, true)
+	c.draw_rect(Rect2(ax0, ay + h - 2, ax1 - ax0, 2), Color(0, 0, 0, 0.15))      # underside
+	c.draw_rect(Rect2(ax0, ay - 3, ax1 - ax0, 4), Color(0.55, 0.16, 0.20))       # valance trim
 
-# Warm glowing window with a cross frame.
-func _draw_window(c: Control, r: Rect2) -> void:
-	c.draw_rect(r, Color(1.0, 0.82, 0.5, 0.9))
-	c.draw_rect(r, Color(0.30, 0.22, 0.18), false, 3.0)
-	var mx := r.position.x + r.size.x * 0.5
-	var my := r.position.y + r.size.y * 0.5
-	c.draw_line(Vector2(mx, r.position.y), Vector2(mx, r.position.y + r.size.y), Color(0.30, 0.22, 0.18), 2.0)
-	c.draw_line(Vector2(r.position.x, my), Vector2(r.position.x + r.size.x, my), Color(0.30, 0.22, 0.18), 2.0)
+# Glowing display window: recessed frame, glass with a cool-to-warm gradient,
+# a shelf of little merch and a diagonal gloss streak.
+func _draw_shop_window(c: Control, r: Rect2) -> void:
+	c.draw_rect(r.grow(3), Color(0.30, 0.22, 0.18))       # recessed frame
+	c.draw_polygon(PackedVector2Array([                   # glass gradient
+		r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]),
+		PackedColorArray([Color(0.55, 0.70, 0.85), Color(0.48, 0.62, 0.80),
+			Color(1.0, 0.80, 0.45), Color(1.0, 0.76, 0.42)]))
+	var sy := r.position.y + r.size.y - 12.0               # merch on a shelf
+	c.draw_rect(Rect2(r.position.x + 4, sy, 8, 8), Color(0.90, 0.35, 0.40))
+	c.draw_rect(Rect2(r.position.x + 16, sy - 2, 8, 10), Color(0.40, 0.70, 0.95))
+	c.draw_rect(Rect2(r.position.x + 28, sy, 8, 8), Color(0.55, 0.85, 0.55))
+	c.draw_rect(Rect2(r.position.x, sy + 8, r.size.x, 3), Color(0.30, 0.22, 0.18))
+	c.draw_line(r.position + Vector2(6, 4), r.position + Vector2(r.size.x * 0.5, r.size.y * 0.55),
+		Color(1, 1, 1, 0.35), 3.0)                         # gloss streak
+	c.draw_line(r.position + Vector2(16, 4), r.position + Vector2(r.size.x * 0.72, r.size.y * 0.6),
+		Color(1, 1, 1, 0.20), 2.0)
+	c.draw_rect(r, Color(0.30, 0.22, 0.18), false, 2.0)
+
+# Warm glass doorway: bevelled frame, gradient door, a lit upper pane and a knob.
+func _draw_shop_door(c: Control, r: Rect2) -> void:
+	c.draw_rect(r.grow(3), Color(0.28, 0.20, 0.16))       # frame
+	c.draw_polygon(PackedVector2Array([                   # door body gradient
+		r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]),
+		PackedColorArray([Color(0.42, 0.30, 0.24), Color(0.34, 0.24, 0.20),
+			Color(0.30, 0.21, 0.17), Color(0.40, 0.28, 0.22)]))
+	var pane := Rect2(r.position.x + 6, r.position.y + 6, r.size.x - 12, 26)
+	c.draw_rect(pane, Color(1.0, 0.82, 0.48, 0.9))
+	c.draw_line(pane.position + Vector2(3, 3), pane.position + Vector2(pane.size.x * 0.5, pane.size.y * 0.8),
+		Color(1, 1, 1, 0.35), 2.0)
+	c.draw_rect(pane, Color(0.28, 0.20, 0.16), false, 2.0)
+	c.draw_circle(Vector2(r.end.x - 8, (r.position.y + r.end.y) * 0.5 + 6), 2.6, Color(0.95, 0.86, 0.5))
+
+# Small cream shopping-bag mark for the sign band.
+func _draw_bag_glyph(c: Control, ctr: Vector2) -> void:
+	var col := Color(0.95, 0.90, 0.80)
+	var bw := 16.0
+	var bh := 14.0
+	c.draw_rect(Rect2(ctr.x - bw * 0.5, ctr.y - bh * 0.4, bw, bh), col)       # bag body
+	c.draw_arc(ctr - Vector2(0, bh * 0.4), 5.0, PI, TAU, 12, col, 2.0, true)  # handle loop
+	c.draw_line(Vector2(ctr.x - bw * 0.5, ctr.y - bh * 0.4),
+		Vector2(ctr.x - bw * 0.5 + 3, ctr.y + bh * 0.5), col.darkened(0.15), 1.0)
 
 # ---------------- small icons ----------------
 

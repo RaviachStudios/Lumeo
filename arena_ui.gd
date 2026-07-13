@@ -266,9 +266,15 @@ static func pill_button(text: String, accent: Color, primary: bool = false) -> B
 	var b := Button.new()
 	b.text = text
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 20)
-	b.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.10, 0.7))
-	b.add_theme_constant_override("outline_size", 1)          # crisp faux-bold label
+	# ~17% larger, heavier faux-bold weight, and a soft drop shadow — premium,
+	# game-like typography (Clash Royale / Marvel Snap read).
+	b.add_theme_font_size_override("font_size", 23)
+	b.add_theme_color_override("font_outline_color", Color(0.06, 0.04, 0.02, 0.85))
+	b.add_theme_constant_override("outline_size", 3)          # thicker → bolder weight
+	b.add_theme_color_override("font_shadow_color", Color(0.04, 0.02, 0.01, 0.55))
+	b.add_theme_constant_override("shadow_offset_x", 0)
+	b.add_theme_constant_override("shadow_offset_y", 2)
+	b.add_theme_constant_override("shadow_outline_size", 3)   # soft, diffuse shadow
 	var body := Color(accent.r, accent.g, accent.b, 0.34 if primary else 0.16)
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.10, 0.09, 0.16, 0.90).lerp(body, 0.62)
@@ -293,7 +299,9 @@ static func pill_button(text: String, accent: Color, primary: bool = false) -> B
 	sd.border_color = Color(accent.r, accent.g, accent.b, 0.25)
 	sd.shadow_size = 0
 	b.add_theme_stylebox_override("disabled", sd)
-	b.add_theme_color_override("font_color", accent.lightened(0.55) if primary else TEXT)
+	# Warm ivory rather than a plain/cool white; the primary reads a touch brighter
+	# to carry the visual hierarchy.
+	b.add_theme_color_override("font_color", Color(1.0, 0.97, 0.90) if primary else Color(0.97, 0.93, 0.85))
 	b.add_theme_color_override("font_disabled_color", MUTED.darkened(0.2))
 
 	# Glossy top sheen — a soft translucent highlight over the upper half.

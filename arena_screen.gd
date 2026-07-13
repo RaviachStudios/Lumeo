@@ -14,7 +14,10 @@ var _bg: ColorRect
 var _fx: ArenaFX
 var _back: Button
 var _title: Label
+var _subtitle: Label             # "Fight for Glory" under the title
+var _swords: Control             # crossed swords drawn faintly behind the title
 var _lobby_btn: Button           # top-right: browse the public contests lobby
+var _lobby_dot: Control          # the pulsing green "public" status dot on the badge
 
 # Carousel.
 var _card: Button
@@ -31,6 +34,8 @@ var _create_btn: Button
 var _join_btn: Button
 var _create_cap: Label
 var _join_cap: Label
+var _create_shimmer: Control     # sweeping gloss highlight over the primary button
+var _shimmer_x := 1.5            # sweep position, 0..1 across the button (idle: off-right)
 
 var _overlay: Panel
 var _overlay_lbl: Label
@@ -57,7 +62,7 @@ func _ready() -> void:
 	_bg = ArenaUI.make_bg("hub")
 	add_child(_bg)
 
-	# Ambient flourish (spotlights / confetti / winged Simon fly-by) behind the UI.
+	# Ambient colosseum flourish (crowd / banners / torches / champion shield) behind the UI.
 	_fx = ArenaFX.new()
 	add_child(_fx)
 	_fx.setup(get_viewport_rect().size)
@@ -66,12 +71,27 @@ func _ready() -> void:
 	_back.pressed.connect(func() -> void: game_manager.show_home())
 	add_child(_back)
 
+	# Two crossed swords sit faintly behind the ARENA title (added before it so it
+	# draws underneath the letters).
+	_swords = Control.new()
+	_swords.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_swords.draw.connect(_draw_title_swords)
+	add_child(_swords)
+
 	_title = ArenaUI.title("ARENA")
 	add_child(_title)
 
-	# Top-right entry into the public contests lobby.
-	_lobby_btn = ArenaUI.pill_button("Public Lobby", ArenaUI.SAND)
-	_lobby_btn.add_theme_font_size_override("font_size", 16)
+	# Elegant tagline under the title.
+	_subtitle = Label.new()
+	_subtitle.text = "Fight for Glory"
+	_subtitle.add_theme_font_size_override("font_size", 16)
+	_subtitle.add_theme_color_override("font_color", Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.72))
+	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_subtitle)
+
+	# Top-right entry into the public contests lobby — styled as a status badge.
+	_lobby_btn = _make_lobby_badge()
 	_lobby_btn.pressed.connect(func() -> void: game_manager.show_contest_lobby())
 	add_child(_lobby_btn)
 
@@ -79,9 +99,13 @@ func _ready() -> void:
 
 	_create_btn = ArenaUI.pill_button("＋  Create Contest", ArenaUI.ACCENT, true)
 	_create_btn.pressed.connect(_on_create)
+	# Subtle premium hover lift on the primary action (~1.03x).
+	_create_btn.mouse_entered.connect(func() -> void: _hover_scale(_create_btn, 1.03))
+	_create_btn.mouse_exited.connect(func() -> void: _hover_scale(_create_btn, 1.0))
 	add_child(_create_btn)
 	_create_cap = _make_cap()
 	add_child(_create_cap)
+	_build_create_shimmer()
 
 	_join_btn = ArenaUI.pill_button("⮕  Join by ID", ArenaUI.SAND)
 	_join_btn.pressed.connect(_open_join_modal)
@@ -156,7 +180,7 @@ func _build_carousel() -> void:
 	add_child(_dots)
 
 	_empty_lbl = Label.new()
-	_empty_lbl.text = "No contests yet.\nCreate one, or join a friend's with their ID."
+	_empty_lbl.text = "The Arena is waiting…\nCreate a contest or challenge a friend."
 	_empty_lbl.add_theme_font_size_override("font_size", 19)
 	_empty_lbl.add_theme_color_override("font_color", ArenaUI.MUTED)
 	_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -234,6 +258,109 @@ func _draw_dots() -> void:
 		var col: Color = ArenaUI.GOLD if on else ArenaUI.MUTED
 		_dots.draw_circle(Vector2(x + i * gap, y), 6.0 if on else 4.0, Color(col.r, col.g, col.b, 1.0 if on else 0.5))
 
+# ---------------- header chrome (swords / badge / shimmer) ----------------
+
+# Two faint crossed swords behind the ARENA title — heraldic, low-opacity so the
+# gold letters always stay dominant.
+func _draw_title_swords() -> void:
+	var ctr := _swords.size * 0.5
+	var steel := Color(0.82, 0.86, 0.94)
+	var a := 0.14
+	for s in [-1.0, 1.0]:
+		var ang: float = deg_to_rad(40.0) * s
+		var dir := Vector2(sin(ang), -cos(ang))          # blade points up-and-out
+		var perp := Vector2(-dir.y, dir.x)
+		var tip := ctr + dir * 66.0
+		var guard := ctr - dir * 4.0
+		var grip := ctr - dir * 22.0
+		var pommel := ctr - dir * 27.0
+		# blade
+		_swords.draw_line(guard, tip, Color(steel.r, steel.g, steel.b, a), 6.0)
+		_swords.draw_line(guard, tip, Color(1, 1, 1, a * 0.8), 2.0)
+		# crossguard
+		_swords.draw_line(guard - perp * 12.0, guard + perp * 12.0, Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, a * 1.5), 4.0)
+		# grip + pommel
+		_swords.draw_line(guard, grip, Color(0.42, 0.30, 0.14, a * 1.8), 4.0)
+		_swords.draw_circle(pommel, 3.6, Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, a * 1.5))
+
+# The "Public Lobby" entry, restyled as a minimal status badge (pulsing green dot +
+# label) rather than another glossy pill.
+func _make_lobby_badge() -> Button:
+	var b := Button.new()
+	b.text = "Public Lobby"
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 16)
+	b.add_theme_color_override("font_color", ArenaUI.TEXT)
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.09, 0.10, 0.18, 0.74)
+	s.set_corner_radius_all(16)
+	s.border_color = Color(0.40, 0.82, 0.50, 0.55)   # faint green rim → "online / open"
+	s.set_border_width_all(1)
+	s.content_margin_left = 34                        # room for the status dot
+	s.content_margin_right = 12
+	b.add_theme_stylebox_override("normal", s)
+	var sh := s.duplicate() as StyleBoxFlat
+	sh.bg_color = Color(0.13, 0.15, 0.25, 0.88)
+	b.add_theme_stylebox_override("hover", sh)
+	var sp := s.duplicate() as StyleBoxFlat
+	sp.bg_color = Color(0.06, 0.07, 0.13, 0.9)
+	b.add_theme_stylebox_override("pressed", sp)
+	_lobby_dot = Control.new()
+	_lobby_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lobby_dot.draw.connect(_draw_lobby_dot)
+	b.add_child(_lobby_dot)
+	return b
+
+func _draw_lobby_dot() -> void:
+	var c := _lobby_dot.size * 0.5
+	var t := float(Time.get_ticks_msec()) / 1000.0
+	var p := 0.5 + 0.5 * sin(t * 2.4)
+	var g := Color(0.36, 0.90, 0.46)
+	_lobby_dot.draw_circle(c, 6.5 + p * 2.0, Color(g.r, g.g, g.b, 0.18))   # soft halo
+	_lobby_dot.draw_circle(c, 4.0, g)
+	_lobby_dot.draw_circle(c, 1.6, Color(0.85, 1.0, 0.88))
+
+# A gloss highlight that sweeps across the primary Create button every few seconds.
+func _build_create_shimmer() -> void:
+	_create_shimmer = Control.new()
+	_create_shimmer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_create_shimmer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_create_shimmer.clip_contents = true
+	_create_shimmer.z_index = 2                       # above the button's sheen child
+	_create_shimmer.draw.connect(_draw_create_shimmer)
+	_create_btn.add_child(_create_shimmer)
+	var tw := create_tween().set_loops()
+	tw.tween_interval(4.5)
+	tw.tween_method(_set_shimmer, -0.35, 1.45, 0.7)
+
+func _set_shimmer(v: float) -> void:
+	_shimmer_x = v
+	if _create_shimmer:
+		_create_shimmer.queue_redraw()
+
+func _draw_create_shimmer() -> void:
+	if _create_btn == null or _create_btn.disabled:
+		return
+	var w := _create_shimmer.size.x
+	var h := _create_shimmer.size.y
+	if w <= 0.0:
+		return
+	var cx := _shimmer_x * w
+	var half := 18.0
+	var skew := h * 0.35
+	var band := PackedVector2Array([
+		Vector2(cx - half + skew, 0), Vector2(cx + half + skew, 0),
+		Vector2(cx + half - skew, h), Vector2(cx - half - skew, h)])
+	_create_shimmer.draw_colored_polygon(band, Color(1, 1, 1, 0.13))
+
+# Smoothly ease a button toward a target scale (used for the primary hover lift).
+func _hover_scale(b: Button, to: float) -> void:
+	if b == null:
+		return
+	b.pivot_offset = b.size * 0.5
+	var tw := create_tween()
+	tw.tween_property(b, "scale", Vector2(to, to), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
 # ---------------- layout ----------------
 
 func _layout() -> void:
@@ -248,9 +375,20 @@ func _layout() -> void:
 		var lw := 186.0
 		_lobby_btn.size = Vector2(lw, 46)
 		_lobby_btn.position = Vector2(sz.x - lw - 20, 20)
+		if _lobby_dot:
+			_lobby_dot.size = Vector2(24, 46)
+			_lobby_dot.position = Vector2(6, 0)
+	if _swords:
+		var swd := 300.0
+		_swords.size = Vector2(swd, 96)
+		_swords.position = Vector2(cx - swd * 0.5, 4)
+		_swords.queue_redraw()
 	if _title:
 		_title.size = Vector2(sz.x, 52)
 		_title.position = Vector2(0, 22)
+	if _subtitle:
+		_subtitle.size = Vector2(sz.x, 22)
+		_subtitle.position = Vector2(0, 74)
 
 	var card_w: float = minf(CARD_MAX_W, sz.x - 200.0)
 	var card_top := 150.0
@@ -275,31 +413,38 @@ func _layout() -> void:
 		_dots.size = Vector2(300, 24)
 		_dots.queue_redraw()
 	if _empty_lbl:
-		_empty_lbl.position = Vector2(cx - card_w * 0.5, card_top + CARD_H * 0.5 - 40)
-		_empty_lbl.size = Vector2(card_w, 80)
+		# Sit the message in the upper half of the card zone so it reads clearly
+		# ABOVE the champion-shield platform (which the FX layer centres lower down).
+		_empty_lbl.position = Vector2(cx - card_w * 0.5, card_top + 44)
+		_empty_lbl.size = Vector2(card_w, 72)
 
 	# bottom action row (create / join), centered
 	var by := card_top + CARD_H + 56.0
 	by = minf(by, sz.y - 88.0)
+	# Primary (Create) is a touch wider than the secondary (Join) to signal hierarchy,
+	# while both keep the same height for a clean, consistent action row.
+	var create_w := 256.0
+	var join_w := 216.0
 	if _create_btn:
-		_create_btn.size = Vector2(240, 58)
+		_create_btn.size = Vector2(create_w, 60)
+		_create_btn.pivot_offset = _create_btn.size * 0.5   # scale from the centre on hover
 	if _join_btn:
-		_join_btn.size = Vector2(210, 58)
+		_join_btn.size = Vector2(join_w, 60)
 	var gap := 18.0
-	var total := 240.0 + 210.0 + gap
+	var total := create_w + join_w + gap
 	var x := cx - total * 0.5
-	var cap_y := by + 58.0 + 6.0
+	var cap_y := by + 60.0 + 6.0
 	if _create_btn:
 		_create_btn.position = Vector2(x, by)
 		if _create_cap:
 			_create_cap.position = Vector2(x, cap_y)
-			_create_cap.size = Vector2(240, 20)
-		x += 240.0 + gap
+			_create_cap.size = Vector2(create_w, 20)
+		x += create_w + gap
 	if _join_btn:
 		_join_btn.position = Vector2(x, by)
 		if _join_cap:
 			_join_cap.position = Vector2(x, cap_y)
-			_join_cap.size = Vector2(210, 20)
+			_join_cap.size = Vector2(join_w, 20)
 
 	if _overlay:
 		_overlay.position = Vector2.ZERO
@@ -526,6 +671,8 @@ const JOIN_MODAL_H := 236.0
 const JOIN_MODAL_TOP_MARGIN := 10.0   # modal top never lifts past this many px from the top
 
 func _process(delta: float) -> void:
+	if _lobby_dot:
+		_lobby_dot.queue_redraw()      # keep the "public" status dot gently pulsing
 	if _join_modal == null:
 		return
 	var target := 0.0
