@@ -4,24 +4,25 @@ const ArenaUI := preload("res://arena_ui.gd")
 const PodiumStage := preload("res://podium_stage.gd")
 const SimonFlyer := preload("res://simon_flyer.gd")
 
-# Contest detail — three faces driven by status:
-#   lobby    : share ID, roster (+kick), Start (creator), Leave
-#   active   : countdown (client-side) / "waiting", standings, PLAY, Leave,
-#              creator: kick + End-now (one_game)
-#   finished : podium + full standings table, Exit only
+# Live room — three faces driven by the room's status, kept in sync by a Firestore
+# document listener (ContestManager.room_changed):
+#   lobby    : share ID, live roster (+kick), Start (creator), Leave/Cancel
+#   playing  : if I haven't raced yet -> jump straight into the game; otherwise a
+#              live "who's still racing / who finished" board (+ creator Finish now)
+#   finished : podium + full standings, Exit only
 #
-# Reads happen on open + explicit Refresh only. The countdown is read once and
-# ticks locally; when it hits 0 we do a single reload to fetch the result.
+# When the creator presses Start, the status flips to "playing" for everyone at
+# once and every client auto-launches its match on the shared seed.
 
 var game_manager: Node
 var contest_id: String = ""
 
-var _bg: ColorRect              # amphitheatre (active / finished)
+var _bg: ColorRect              # amphitheatre (playing / finished)
 var _lobby_bg: ColorRect        # the distinct champions' antechamber (lobby)
 var _back: Button
-var _corner_btn: Button         # active screen: Cancel/Leave, top-right (mirrors Back)
-var _title: Label               # the contest's big carved name
-var _subtitle: Label            # type · difficulty, under the name
+var _corner_btn: Button         # playing/results: Cancel/Leave, top-right (mirrors Back)
+var _title: Label               # the room's big carved name
+var _subtitle: Label            # difficulty, under the name
 var _content: Control          # cleared + rebuilt per render
 var _overlay: Panel
 var _overlay_lbl: Label
@@ -32,13 +33,10 @@ var _confirm: Panel
 var _confirm_lbl: Label
 var _confirm_yes_cb: Callable
 
-var _data: Dictionary = {}
+var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
 var _busy := false
-
-# Client-side countdown (timed contests). 0 = none.
-var _countdown_target := 0
-var _countdown_lbl: Label
-var _deadline_fired := false
+var _launched := false           # guard: only auto-launch my match once
+var _finalize_sent := false      # guard: only nudge the all-done finalize once
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -51,9 +49,9 @@ func _ready() -> void:
 	_back = ArenaUI.make_back_button()
 	_back.pressed.connect(func() -> void: game_manager.show_arena())
 	add_child(_back)
-	_title = ArenaUI.big_title("CONTEST")
+	_title = ArenaUI.big_title("ROOM")
 	add_child(_title)
-	# Fancy "format · difficulty" plaque under the title (spaced away from it).
+	# Fancy difficulty plaque under the title.
 	_subtitle = Label.new()
 	_subtitle.add_theme_font_size_override("font_size", 20)
 	_subtitle.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.2))
@@ -72,31 +70,16 @@ func _ready() -> void:
 	_build_toast()
 	_layout_static()
 	get_viewport().size_changed.connect(_on_resize)
-	_reload()
+	_initial_load()
 
-func _process(_dt: float) -> void:
-	if _countdown_target > 0 and _countdown_lbl and is_instance_valid(_countdown_lbl):
-		var secs := _countdown_target - int(Time.get_unix_time_from_system())
-		if secs <= 0:
-			_countdown_lbl.text = "Time's up!"
-			if not _deadline_fired:
-				_deadline_fired = true
-				_countdown_target = 0
-				_reload()
-		else:
-			_countdown_lbl.text = _fmt_countdown(secs)
-
-func _fmt_countdown(secs: int) -> String:
-	var h := secs / 3600
-	var m := (secs % 3600) / 60
-	var s := secs % 60
-	if h > 0:
-		return "%d:%02d:%02d left" % [h, m, s]
-	return "%02d:%02d left" % [m, s]
+func _exit_tree() -> void:
+	if ContestManager.room_changed.is_connected(_on_room_changed):
+		ContestManager.room_changed.disconnect(_on_room_changed)
+	ContestManager.unwatch_room(contest_id)
 
 func _on_resize() -> void:
 	_layout_static()
-	if not _data.is_empty():
+	if not _room.is_empty():
 		_render()
 
 func _layout_static() -> void:
@@ -125,22 +108,28 @@ func _layout_static() -> void:
 		_toast.position = Vector2(0, sz.y - 70)
 	_layout_confirm(sz)
 
-# ---------------- load ----------------
+# ---------------- load / live watch ----------------
 
-func _reload() -> void:
-	if _busy:
-		return
+func _initial_load() -> void:
 	_busy = true
-	_countdown_target = 0
-	_deadline_fired = false
 	_set_overlay(true, "Loading…")
-	var res: Dictionary = await ContestManager.load_contest(contest_id)
+	_room = await ContestManager.load_room(contest_id)
 	if not is_inside_tree():
 		return
-	_data = res
 	_set_overlay(false)
 	_busy = false
 	_render()
+	# Go live: subsequent changes (joins, start, scores, finish) push in.
+	if not ContestManager.room_changed.is_connected(_on_room_changed):
+		ContestManager.room_changed.connect(_on_room_changed)
+	ContestManager.watch_room(contest_id)
+
+func _on_room_changed(cid: String, room: Dictionary) -> void:
+	if cid != contest_id:
+		return
+	_room = room
+	if is_inside_tree():
+		_render()
 
 # ---------------- render dispatch ----------------
 
@@ -150,18 +139,15 @@ func _render() -> void:
 	if _corner_btn:
 		_corner_btn.queue_free()
 		_corner_btn = null
-	_countdown_lbl = null
-	_countdown_target = 0
-	if not bool(_data.get("ok", false)):
-		_render_message("This contest no longer exists.", "Back to Arena",
+	if _room.is_empty():
+		_render_message("This room no longer exists.", "Back to Arena",
 			func() -> void: game_manager.show_arena())
 		return
-	var meta: Dictionary = _data.get("meta", {})
-	var status := String(meta.get("status", "lobby"))
-	_title.text = ArenaUI.clamp_title(String(meta.get("title", "Contest")))
-	_subtitle.text = "✦   %s   ·   %s   ✦" % [ContestManager.type_label(String(meta.get("type", ""))),
-		ContestManager.diff_label(String(meta.get("difficulty", "easy")))]
-	# Lobby lives in its own room; active/finished use the amphitheatre floor.
+
+	var status := String(_room.get("status", "lobby"))
+	_title.text = ArenaUI.clamp_title(String(_room.get("title", "Room")))
+	_subtitle.text = "✦   %s   ✦" % ContestManager.diff_label(String(_room.get("difficulty", "easy")))
+	# Lobby lives in its own room; playing/finished use the amphitheatre floor.
 	var in_lobby := status == "lobby"
 	_lobby_bg.visible = in_lobby
 	_bg.visible = not in_lobby
@@ -169,39 +155,57 @@ func _render() -> void:
 		ArenaUI.set_bg_mode(_bg, "active")
 
 	if status == "finished":
-		_render_finished(meta)
+		_render_finished()
 		return
-	# Active/lobby but I'm not a member anymore (kicked / left elsewhere).
-	if not bool(_data.get("i_am_member", false)):
-		_render_message("You're no longer in this contest.", "Back to Arena",
+
+	var players: Dictionary = _room.get("players", {})
+	var my: Dictionary = players.get(FirebaseManager.uid, {})
+	var i_am_member := not my.is_empty() and String(my.get("state", "")) != "left"
+	if not i_am_member:
+		_render_message("You're no longer in this room.", "Back to Arena",
 			func() -> void: game_manager.show_arena())
 		return
+
 	if status == "lobby":
-		_render_lobby(meta)
+		_render_lobby()
 	else:
-		_render_active(meta)
+		# status == "playing"
+		if String(my.get("state", "")) == "done":
+			_render_results()
+		else:
+			_route_into_game()
+
+# Active (non-left) players as roster dicts: {uid, name, is_creator, state, score}.
+func _active_players() -> Array:
+	var players: Dictionary = _room.get("players", {})
+	var out: Array = []
+	for uid in players:
+		var p: Dictionary = players[uid]
+		if String(p.get("state", "")) == "left":
+			continue
+		out.append({
+			"uid": uid, "name": String(p.get("name", "Player")),
+			"is_creator": bool(p.get("is_creator", false)),
+			"state": String(p.get("state", "lobby")), "score": int(p.get("score", 0)),
+		})
+	return out
 
 # ---------------- lobby ----------------
 
-func _render_lobby(meta: Dictionary) -> void:
+func _render_lobby() -> void:
 	var w := _content.size.x
 	var cx := w * 0.5
-	var is_creator := String(meta.get("creator_uid", "")) == FirebaseManager.uid
-	var members: Array = _data.get("members", [])
+	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
+	var members := _active_players()
 	var is_full := members.size() >= ContestManager.MAX_MEMBERS
 
-	# Two-column layout inside the banner frame: roster on the LEFT, share-ID on the
-	# RIGHT. Columns sit inside the drape lines (~11% / 89% of width) so the flyers
-	# have clear edge lanes.
+	# Roster on the LEFT, share-ID plaque on the RIGHT.
 	var roster_x := w * 0.12
 	var roster_w: float = clampf(w * 0.40, 240.0, 400.0)
 	var right_cx := clampf(w * 0.73, roster_x + roster_w + 180.0, w - 180.0)
 
-	# Roster of registered players ("Friends in Lobby") on the LEFT.
 	_add_roster(members, is_creator, Vector2(roster_x, 4.0), roster_w)
 
-	# Stone plaque on the RIGHT: the shareable ID while there's room; once full, the
-	# code is hidden and the plaque says the contest is full and ready to play.
 	var plaque_w := 330.0
 	var idbox := ArenaUI.stone_panel(ArenaUI.SAND)
 	idbox.size = Vector2(plaque_w, 104)
@@ -209,7 +213,7 @@ func _render_lobby(meta: Dictionary) -> void:
 	_content.add_child(idbox)
 	if is_full:
 		var fcap := Label.new()
-		fcap.text = "CONTEST FULL"
+		fcap.text = "ROOM FULL"
 		fcap.add_theme_font_size_override("font_size", 18)
 		fcap.add_theme_color_override("font_color", ArenaUI.MUTED)
 		fcap.position = Vector2(0, 20); fcap.size = Vector2(plaque_w, 22)
@@ -250,7 +254,7 @@ func _render_lobby(meta: Dictionary) -> void:
 		copy.position = Vector2(right_cx - 90, 160.0)
 		copy.pressed.connect(func() -> void:
 			DisplayServer.clipboard_set(contest_id)
-			_show_toast("Contest ID copied!"))
+			_show_toast("Room ID copied!"))
 		_content.add_child(copy)
 		var hint := Label.new()
 		hint.text = "Share this ID so friends can join."
@@ -262,8 +266,7 @@ func _render_lobby(meta: Dictionary) -> void:
 		hint.size = Vector2(plaque_w, 22)
 		_content.add_child(hint)
 
-	# Two golden Simons rising up the far LEFT and RIGHT edge lanes (between the
-	# screen edge and the banner drape lines). Slow, infrequent, staggered.
+	# Two golden Simons rising up the far LEFT and RIGHT edge lanes.
 	var lanes := [{"side": -1.0, "x": w * 0.05, "delay": 0.5},
 		{"side": 1.0, "x": w * 0.95, "delay": 4.0}]
 	for lane in lanes:
@@ -277,199 +280,143 @@ func _render_lobby(meta: Dictionary) -> void:
 	# Buttons at the bottom.
 	var by := _content.size.y - 78.0
 	if is_creator:
-		var start := ArenaUI.pill_button("▶  Start Contest", Color(0.30, 0.80, 0.52), true)
+		var start := ArenaUI.pill_button("▶  Start Race", Color(0.30, 0.80, 0.52), true)
 		start.size = Vector2(240, 56)
 		start.position = Vector2(cx - 250, by)
 		start.pressed.connect(_on_start)
 		_content.add_child(start)
-		var cancel := ArenaUI.pill_button("Cancel Contest", Color(0.80, 0.34, 0.34))
+		var cancel := ArenaUI.pill_button("Cancel Room", Color(0.80, 0.34, 0.34))
 		cancel.size = Vector2(200, 56)
 		cancel.position = Vector2(cx + 10, by)
-		cancel.pressed.connect(_on_delete)
+		cancel.pressed.connect(_on_cancel)
 		_content.add_child(cancel)
 	else:
-		var leave := ArenaUI.pill_button("Leave Contest", Color(0.7, 0.4, 0.4))
+		var leave := ArenaUI.pill_button("Leave Room", Color(0.7, 0.4, 0.4))
 		leave.size = Vector2(240, 56)
 		leave.position = Vector2(cx - 120, by)
 		leave.pressed.connect(_on_leave)
 		_content.add_child(leave)
 
-# ---------------- active ----------------
+# ---------------- playing: auto-launch my match ----------------
 
-func _render_active(meta: Dictionary) -> void:
+func _route_into_game() -> void:
+	if _launched:
+		_set_overlay(true, "Get ready…")
+		return
+	_launched = true
+	_set_overlay(true, "Get ready…")
+	# Stop the lobby/menu music before the game.
+	AudioManager.stop_bg_music()
+	await ContestManager.begin_contest_game(contest_id,
+		String(_room.get("difficulty", "easy")), int(_room.get("seed", 0)))
+	if not is_inside_tree():
+		return
+	game_manager.show_game()
+
+# ---------------- playing: live results / waiting board ----------------
+
+func _render_results() -> void:
 	var w := _content.size.x
 	var h := _content.size.y
-	var type := String(meta.get("type", ""))
-	var is_creator := String(meta.get("creator_uid", "")) == FirebaseManager.uid
-	var members: Array = _data.get("members", [])
-	var my_member: Dictionary = _data.get("my_member", {})
+	var cx := w * 0.5
+	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
+	var members := _active_players()
 
 	# An occasional golden Simon drifting across the floor.
 	var flyer := SimonFlyer.new()
 	_content.add_child(flyer)
 	flyer.setup(_content.size, {"mode": "wander", "scale": 0.6})
 
-	var now := int(Time.get_unix_time_from_system())
-	var deadline := int(meta.get("deadline_at", 0))
-	var past_deadline := type != "one_game" and deadline > 0 and now >= deadline
-
-	# ---- split: played (ranked by score) then the yet-to-play (shuffled) ----
-	var played: Array = []
-	var unplayed: Array = []
+	# Split: finished (ranked by score) then still racing.
+	var done: Array = []
+	var racing: Array = []
 	for m: Dictionary in members:
-		if int(m.get("games_played", 0)) > 0:
-			played.append(m)
+		if String(m.get("state", "")) == "done":
+			done.append(m)
 		else:
-			unplayed.append(m)
-	played.sort_custom(func(a, b): return int(a.get("best_score", 0)) > int(b.get("best_score", 0)))
-	unplayed.shuffle()
+			racing.append(m)
+	done.sort_custom(func(a, b): return int(a.get("score", 0)) > int(b.get("score", 0)))
 
-	# ---- styled time-left / status chip, top area ----
-	var chip := _make_countdown_chip()
-	chip.position = Vector2((w - chip.size.x) * 0.5, 6.0)
+	# Safety net: if everyone's already done but the room hasn't flipped to finished
+	# (e.g. the last finisher's read was stale), nudge it — any participant may.
+	if racing.is_empty() and not _finalize_sent:
+		_finalize_sent = true
+		ContestManager.finalize_if_done(contest_id)
+
+	# Status chip: "N of M finished".
+	var chip := ArenaUI.stone_panel(ArenaUI.ACCENT)
+	chip.size = Vector2(320, 52)
+	chip.position = Vector2((w - 320) * 0.5, 6.0)
 	_content.add_child(chip)
-	if type == "one_game":
-		var pending := 0
-		for m in members:
-			if not bool(m.get("done", false)):
-				pending += 1
-		_countdown_lbl.text = "%d still to finish" % pending
-	elif past_deadline:
-		_countdown_lbl.text = "Finishing…"
-	else:
-		_countdown_target = deadline
-		_countdown_lbl.text = _fmt_countdown(maxi(0, deadline - now))
+	var chip_lbl := Label.new()
+	chip_lbl.text = "%d of %d finished" % [done.size(), members.size()]
+	chip_lbl.add_theme_font_size_override("font_size", 24)
+	chip_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.7))
+	chip_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	chip_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chip_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	chip_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.add_child(chip_lbl)
 
-	var top_y := chip.position.y + chip.size.y + 14.0
+	var top_y := chip.position.y + chip.size.y + 18.0
+	var note := Label.new()
+	note.text = "Waiting for everyone to finish their race…"
+	note.add_theme_font_size_override("font_size", 16)
+	note.add_theme_color_override("font_color", ArenaUI.MUTED)
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.position = Vector2(0, top_y); note.size = Vector2(w, 22)
+	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_content.add_child(note)
 
-	# ---- podium on the RIGHT (top 3 of the played) ----
-	var right_cx := w * 0.70
-	var pod_scale: float = clampf((w * 0.52) / 600.0, 0.44, 0.86)
-	_add_stage(_ranked_to_standings(played.slice(0, 3)), right_cx, top_y + 8.0, pod_scale)
-
-	# ---- table on the LEFT (ranks 4..N + the yet-to-play); always 7 slots ----
-	var rest: Array = played.slice(3)
-	rest.append_array(unplayed)
-	var tw: float = clampf(w * 0.44, 220.0, 300.0)
-	var lx := 24.0
+	# One combined table: finished first (with score + rank), then still-racing.
+	var ordered: Array = done.duplicate()
+	ordered.append_array(racing)
 	var row_h := 46.0
 	var sep := 8.0
 	var visible_rows := 7
+	var tw: float = clampf(w * 0.6, 320.0, 560.0)
+	var table_top := top_y + 34.0
 	var table_h := visible_rows * row_h + (visible_rows - 1) * sep
-	table_h = minf(table_h, h - top_y - 96.0)
+	table_h = minf(table_h, h - table_top - 96.0)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.position = Vector2(lx, top_y)
+	scroll.position = Vector2(cx - tw * 0.5, table_top)
 	scroll.size = Vector2(tw, table_h)
 	_content.add_child(scroll)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", int(sep))
 	vb.custom_minimum_size = Vector2(tw, 0)
 	scroll.add_child(vb)
-	var played_rest := played.size() - 3          # how many table rows carry a real rank
-	for i in rest.size():
-		var m: Dictionary = rest[i]
-		var rank := (4 + i) if i < played_rest else -1     # -1 → "—" (not played yet)
-		vb.add_child(_make_active_row(m, rank, is_creator, tw, row_h))
-	# Pad with empty slots so the table always shows 7 rows.
-	for i in range(rest.size(), visible_rows):
+	for i in ordered.size():
+		var m: Dictionary = ordered[i]
+		var is_done := String(m.get("state", "")) == "done"
+		var rank := (i + 1) if is_done else -1
+		vb.add_child(_make_status_row(m, rank, is_done, tw, row_h))
+	for i in range(ordered.size(), visible_rows):
 		vb.add_child(_make_empty_row(tw, row_h))
 
-	# ---- Cancel / Leave: top-right of the SCREEN, its right edge aligned with the
-	# Play button's right edge (both sit 24px from the screen edge).
-	_corner_btn = ArenaUI.pill_button("Cancel Contest" if is_creator else "Leave",
+	# Cancel / Leave: top-right corner.
+	_corner_btn = ArenaUI.pill_button("Cancel Room" if is_creator else "Leave",
 		Color(0.80, 0.40, 0.40))
-	var corner_w := 172.0 if is_creator else 120.0
+	var corner_w := 160.0 if is_creator else 120.0
 	_corner_btn.size = Vector2(corner_w, 46)
 	_corner_btn.position = Vector2(get_viewport_rect().size.x - corner_w - 24, 20)
-	_corner_btn.pressed.connect(_on_delete if is_creator else _on_leave)
+	_corner_btn.pressed.connect(_on_cancel if is_creator else _on_leave)
 	add_child(_corner_btn)
 
-	# ---- Play: big, bottom-right corner ----
-	var can_play := true
-	if type == "one_game" and bool(my_member.get("done", false)):
-		can_play = false
-	if past_deadline:
-		can_play = false
-	if can_play:
-		var play := ArenaUI.pill_button("▶  Play", Color(0.30, 0.80, 0.52), true)
-		play.add_theme_font_size_override("font_size", 26)
-		play.size = Vector2(300, 74)
-		play.position = Vector2(w - 300 - 24, h - 74 - 24)
-		play.pressed.connect(_on_play)
-		_content.add_child(play)
-	else:
-		var doneb := ArenaUI.pill_button("✓ You've played", Color(0.4, 0.5, 0.5))
-		doneb.disabled = true
-		doneb.size = Vector2(300, 74)
-		doneb.position = Vector2(w - 300 - 24, h - 74 - 24)
-		_content.add_child(doneb)
-
-	# One-game hosts can still finalize early — small, unobtrusive, bottom-left.
-	if is_creator and type == "one_game":
-		var endnow := ArenaUI.pill_button("End now", Color(0.9, 0.6, 0.3))
-		endnow.size = Vector2(150, 50)
-		endnow.position = Vector2(24, h - 50 - 24)
-		endnow.pressed.connect(_on_finalize_now)
+	# Creator may end the race early, locking in current scores.
+	if is_creator and not racing.is_empty():
+		var endnow := ArenaUI.pill_button("Finish now", Color(0.9, 0.6, 0.3))
+		endnow.size = Vector2(180, 52)
+		endnow.position = Vector2(cx - 90, h - 52 - 20)
+		endnow.pressed.connect(_on_finish_now)
 		_content.add_child(endnow)
 
-# Map ranked live-member rows to the {name, score} shape the podium expects.
-func _ranked_to_standings(rows: Array) -> Array:
-	var out: Array = []
-	for m: Dictionary in rows:
-		out.append({
-			"name": String(m.get("name", "Player")),
-			"score": int(m.get("best_score", 0)),
-		})
-	return out
-
-# Add the shared leaderboards-style podium (stage + medal blocks + trophy cups +
-# swaying spotlights) centered at `center_x`, stage top near `top_y`, at `scale`.
-func _add_stage(entries: Array, center_x: float, top_y: float, scale: float = 1.0) -> void:
-	var stage := PodiumStage.new()
-	stage.position = Vector2(center_x, top_y)
-	stage.scale = Vector2.ONE * scale
-	_content.add_child(stage)
-	stage.setup(entries)
-	stage.start_anim()
-
-# A styled "time left" chip: a stone plaque with a drawn clock and the countdown
-# label (kept in _countdown_lbl so _process can tick it). Replaces the plain banner.
-func _make_countdown_chip() -> Panel:
-	var chip := ArenaUI.stone_panel(ArenaUI.ACCENT)
-	chip.size = Vector2(300, 52)
-	var clock := Control.new()
-	clock.size = Vector2(30, 52)
-	clock.position = Vector2(18, 0)
-	clock.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	clock.draw.connect(_draw_clock.bind(clock))
-	chip.add_child(clock)
-	_countdown_lbl = Label.new()
-	_countdown_lbl.add_theme_font_size_override("font_size", 24)
-	_countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.7))
-	_countdown_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_countdown_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_countdown_lbl.position = Vector2(44, 0)
-	_countdown_lbl.size = Vector2(300 - 44 - 14, 52)
-	_countdown_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip.add_child(_countdown_lbl)
-	return chip
-
-# A simple clock face (rim + two hands) for the countdown chip.
-func _draw_clock(c: Control) -> void:
-	var ctr := Vector2(15, 26)
-	var gold := ArenaUI.ACCENT.lightened(0.3)
-	c.draw_arc(ctr, 11.0, 0.0, TAU, 28, gold, 2.4, true)
-	c.draw_line(ctr, ctr + Vector2(0, -7), gold, 2.2)
-	c.draw_line(ctr, ctr + Vector2(5, 2), gold, 2.2)
-
-# A left-table row (rank 4+), styled like the leaderboards ranks-table: a stroked
-# rank circle, the name, and a green score on the right. A not-yet-played row shows
-# a "—" circle and "…". `rank` < 0 marks the not-yet-played state.
-func _make_active_row(m: Dictionary, rank: int, can_kick: bool, width: float, rh: float) -> Control:
+# A results-board row: rank circle (or "•" while racing), name, and score or a
+# "Racing…" tag.
+func _make_status_row(m: Dictionary, rank: int, is_done: bool, width: float, rh: float) -> Control:
 	var uid := String(m.get("uid", ""))
 	var is_me := uid == FirebaseManager.uid
-	var played := rank > 0
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(width, rh)
 	var s := StyleBoxFlat.new()
@@ -481,8 +428,8 @@ func _make_active_row(m: Dictionary, rank: int, can_kick: bool, width: float, rh
 	row.add_theme_stylebox_override("panel", s)
 
 	var rd := rh - 12.0
-	var circle := _rank_circle(rd, "%d" % rank if played else "—", int(rd * 0.5),
-		Color(0.82, 0.87, 1.0) if played else Color(0.6, 0.64, 0.85, 0.5))
+	var circle := _rank_circle(rd, "%d" % rank if is_done else "•", int(rd * 0.5),
+		Color(0.82, 0.87, 1.0) if is_done else Color(0.6, 0.64, 0.85, 0.6))
 	circle.position = Vector2(9, (rh - rd) * 0.5)
 	row.add_child(circle)
 
@@ -491,40 +438,35 @@ func _make_active_row(m: Dictionary, rank: int, can_kick: bool, width: float, rh
 	nm.text = String(m.get("name", "Player")) + ("  (you)" if is_me else "")
 	nm.add_theme_font_size_override("font_size", 17)
 	nm.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.3) if is_me else Color(0.84, 0.88, 0.98))
-	nm.position = Vector2(name_x, 0); nm.size = Vector2(width - name_x - 76, rh)
+	nm.position = Vector2(name_x, 0); nm.size = Vector2(width - name_x - 116, rh)
 	nm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	nm.clip_text = true
 	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(nm)
+
 	var sc := Label.new()
-	sc.text = str(int(m.get("best_score", 0))) if played else "…"
-	sc.add_theme_font_size_override("font_size", 18 if played else 16)
-	sc.add_theme_color_override("font_color", Color(0.44, 0.86, 0.52) if played else Color(0.55, 0.60, 0.85, 0.5))
-	sc.position = Vector2(width - 72, 0); sc.size = Vector2(60, rh)
+	sc.text = str(int(m.get("score", 0))) if is_done else "Racing…"
+	sc.add_theme_font_size_override("font_size", 18 if is_done else 15)
+	sc.add_theme_color_override("font_color", Color(0.44, 0.86, 0.52) if is_done else Color(0.7, 0.75, 0.5, 0.9))
+	sc.position = Vector2(width - 112, 0); sc.size = Vector2(100, rh)
 	sc.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	sc.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	sc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(sc)
-	# Kick sits behind the score column; keep it only where there's a real member.
-	if can_kick and not is_me:
-		var kick := Button.new()
-		kick.text = "✕"
-		kick.focus_mode = Control.FOCUS_NONE
-		var ks := StyleBoxFlat.new()
-		ks.bg_color = Color(0.4, 0.12, 0.12, 0.85)
-		ks.set_corner_radius_all(8)
-		kick.add_theme_stylebox_override("normal", ks)
-		kick.add_theme_color_override("font_color", Color(1, 0.85, 0.85))
-		kick.size = Vector2(30, 28)
-		kick.position = Vector2(width - 34, (rh - 28) * 0.5)
-		var target_name := String(m.get("name", "Player"))
-		kick.pressed.connect(func() -> void: _on_kick(uid, target_name))
-		row.add_child(kick)
 	return row
 
-# A stroked rank circle (leaderboards style): a navy disc with a bright rim and a
-# centered rank number (or "—").
+# Add the shared leaderboards-style podium centered at `center_x`, top near
+# `top_y`, at `scale`.
+func _add_stage(entries: Array, center_x: float, top_y: float, scale: float = 1.0) -> void:
+	var stage := PodiumStage.new()
+	stage.position = Vector2(center_x, top_y)
+	stage.scale = Vector2.ONE * scale
+	_content.add_child(stage)
+	stage.setup(entries)
+	stage.start_anim()
+
+# A stroked rank circle (leaderboards style).
 func _rank_circle(d: float, text: String, font_size: int, text_col: Color) -> Panel:
 	var p := Panel.new()
 	p.custom_minimum_size = Vector2(d, d)
@@ -547,7 +489,7 @@ func _rank_circle(d: float, text: String, font_size: int, text_col: Color) -> Pa
 	p.add_child(l)
 	return p
 
-# An empty placeholder slot (faint row) so the table always fills 7 rows.
+# An empty placeholder slot (faint row) so tables fill to a fixed height.
 func _make_empty_row(width: float, rh: float) -> Control:
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(width, rh)
@@ -570,10 +512,10 @@ func _make_empty_row(width: float, rh: float) -> Control:
 
 # ---------------- finished ----------------
 
-func _render_finished(meta: Dictionary) -> void:
+func _render_finished() -> void:
 	var w := _content.size.x
 	var cx := w * 0.5
-	var standings: Array = _data.get("standings", [])
+	var standings: Array = ContestManager.standings_from_room(_room)
 
 	# Award contest-placement badges (win / podium) from the player's final rank.
 	for r: Dictionary in standings:
@@ -581,9 +523,6 @@ func _render_finished(meta: Dictionary) -> void:
 			BadgeManager.note_contest_result(int(r.get("rank", 0)))
 			break
 
-	# Celebration FX (behind the podium/table): heavy multicoloured confetti, pulsing
-	# flash lights, and several golden Simons drifting across — the same wander path
-	# as the active-contest screen.
 	_add_finish_confetti()
 	_add_finish_flashes()
 	for i in 3:
@@ -603,8 +542,7 @@ func _render_finished(meta: Dictionary) -> void:
 
 	_add_stage(standings, cx, 44.0)
 
-	# The top 3 stand on the podium; the table lists places 4+ only. It shows 5 slots
-	# at a time (scrolls when fuller), padding with empty rows when there aren't 8.
+	# Top 3 stand on the podium; the table lists places 4+.
 	var rest: Array = standings.slice(3)
 	var res_row_h := 44.0
 	var res_sep := 6.0
@@ -624,18 +562,15 @@ func _render_finished(meta: Dictionary) -> void:
 	scroll.add_child(vb)
 	for r: Dictionary in rest:
 		vb.add_child(_make_result_row(r, tw))
-	# Pad with empty slots so the table always shows at least res_visible rows.
 	for i in range(rest.size(), res_visible):
 		vb.add_child(_make_empty_row(tw, res_row_h))
 
-	var exit := ArenaUI.pill_button("Exit Contest", ArenaUI.ACCENT, true)
+	var exit := ArenaUI.pill_button("Exit", ArenaUI.ACCENT, true)
 	exit.size = Vector2(240, 56)
 	exit.position = Vector2(cx - 120, _content.size.y - 70.0)
 	exit.pressed.connect(_on_exit)
 	_content.add_child(exit)
 
-# Heavy celebration confetti: one emitter per Simon colour (+ gold) raining from the
-# top, so particles come in a mix of colours all at once.
 func _add_finish_confetti() -> void:
 	var cols: Array = SimonFlyer.SIMON_COLS.duplicate()
 	cols.append(ArenaUI.GOLD)
@@ -645,7 +580,7 @@ func _add_finish_confetti() -> void:
 		p.texture = flake
 		p.amount = 22
 		p.lifetime = maxf(4.0, _content.size.y / 40.0)
-		p.preprocess = p.lifetime          # pre-fill so it starts mid-air
+		p.preprocess = p.lifetime
 		p.position = Vector2(_content.size.x * 0.5, -20.0)
 		p.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
 		p.emission_rect_extents = Vector2(_content.size.x * 0.5, 8.0)
@@ -663,7 +598,6 @@ func _add_finish_confetti() -> void:
 		p.color = col
 		_content.add_child(p)
 
-# Pulsing coloured flash lights across the top band — extra sparkle for the finish.
 func _add_finish_flashes() -> void:
 	var cols: Array = SimonFlyer.SIMON_COLS.duplicate()
 	cols.append(ArenaUI.GOLD)
@@ -681,7 +615,6 @@ func _add_finish_flashes() -> void:
 		b.position = Vector2(_content.size.x * (0.10 + 0.80 * float(i) / float(n - 1)),
 			randf_range(30.0, 150.0))
 		_content.add_child(b)
-		# Random-phase looping flash + gentle breathe.
 		var dur := randf_range(0.7, 1.3)
 		var tw := b.create_tween().set_loops()
 		tw.tween_interval(randf_range(0.0, 1.2))
@@ -722,36 +655,31 @@ func _make_result_row(r: Dictionary, width: float) -> Control:
 	nm.text = String(r.get("name", "Player")) + ("  (you)" if is_me else "")
 	nm.add_theme_font_size_override("font_size", 18)
 	nm.add_theme_color_override("font_color", Color.WHITE if not is_me else ArenaUI.GOLD.lightened(0.3))
-	nm.position = Vector2(76, 0); nm.size = Vector2(width - 240, 44)
+	nm.position = Vector2(76, 0); nm.size = Vector2(width - 200, 44)
 	nm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	nm.clip_text = true
 	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(nm)
 	var sc := Label.new()
-	sc.text = "%d  ·  %d game%s" % [int(r.get("score", 0)), int(r.get("games", 0)),
-		"" if int(r.get("games", 0)) == 1 else "s"]
-	sc.add_theme_font_size_override("font_size", 17)
-	sc.add_theme_color_override("font_color", Color(0.8, 0.85, 1.0))
-	sc.position = Vector2(width - 200, 0); sc.size = Vector2(186, 44)
+	sc.text = "%d" % int(r.get("score", 0))
+	sc.add_theme_font_size_override("font_size", 18)
+	sc.add_theme_color_override("font_color", Color(0.44, 0.86, 0.52))
+	sc.position = Vector2(width - 120, 0); sc.size = Vector2(106, 44)
 	sc.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	sc.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	sc.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(sc)
 	return row
 
-# ---------------- roster / standings rows ----------------
+# ---------------- roster rows (lobby) ----------------
 
-# The registered players, titled "Friends in Lobby": a leaderboards-style table
-# (navy rounded rows, gold-rimmed host/you) showing just names + a HOST/YOU tag.
-# Always 7 slots tall — empty rows pad the gaps — and scrolls once fuller.
 const ROSTER_VISIBLE := 7
 const ROSTER_ROW_H := 46.0
 const ROSTER_SEP := 8.0
 
 func _add_roster(members: Array, can_kick: bool, pos: Vector2, width: float) -> void:
-	# Section title over the table.
 	var cap := Label.new()
-	cap.text = "FRIENDS IN LOBBY"
+	cap.text = "PLAYERS IN LOBBY"
 	cap.add_theme_font_size_override("font_size", 20)
 	cap.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.1))
 	cap.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.35))
@@ -762,10 +690,8 @@ func _add_roster(members: Array, can_kick: bool, pos: Vector2, width: float) -> 
 	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(cap)
 
-	# Inset so each row's rim sits INSIDE the scroll rect and isn't clipped.
 	const PAD := 8
 	var row_w := width - PAD * 2
-	# Exactly ROSTER_VISIBLE rows visible; capped to whatever height is available.
 	var table_h := ROSTER_VISIBLE * ROSTER_ROW_H + (ROSTER_VISIBLE - 1) * ROSTER_SEP + PAD * 2
 	table_h = minf(table_h, _content.size.y - (pos.y + 34.0) - 96.0)
 	var scroll := ScrollContainer.new()
@@ -783,14 +709,11 @@ func _add_roster(members: Array, can_kick: bool, pos: Vector2, width: float) -> 
 	margin.add_child(vb)
 	for m: Dictionary in members:
 		vb.add_child(_make_roster_row(m, can_kick, row_w))
-	# Pad with empty slots so the table always shows at least ROSTER_VISIBLE rows.
 	for i in range(members.size(), ROSTER_VISIBLE):
 		vb.add_child(_make_empty_row(row_w, ROSTER_ROW_H))
 
 const ROW_H := ROSTER_ROW_H
 
-# A leaderboards-style roster row: a navy rounded panel with the name and a
-# HOST / YOU tag (no rank/score). Host & you rows carry a warm gold rim.
 func _make_roster_row(m: Dictionary, can_kick: bool, width: float) -> Control:
 	var uid := String(m.get("uid", ""))
 	var is_me := uid == FirebaseManager.uid
@@ -816,7 +739,6 @@ func _make_roster_row(m: Dictionary, can_kick: bool, width: float) -> Control:
 	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(nm)
 
-	# HOST / YOU chip on the right.
 	var chip_txt := ""
 	if is_host:
 		chip_txt = "HOST"
@@ -828,7 +750,6 @@ func _make_roster_row(m: Dictionary, can_kick: bool, width: float) -> Control:
 		chip.position = Vector2(chip_right - chip.size.x, (ROW_H - 28) * 0.5)
 		row.add_child(chip)
 
-	# Creator may kick anyone but themselves.
 	if can_kick and not is_me:
 		var kick := Button.new()
 		kick.text = "✕"
@@ -849,7 +770,6 @@ func _make_roster_row(m: Dictionary, can_kick: bool, width: float) -> Control:
 		row.add_child(kick)
 	return row
 
-# A small rounded pill chip with a bold label.
 func _make_chip(text: String, accent: Color) -> Control:
 	var w: float = 34.0 + text.length() * 10.0
 	var chip := Panel.new()
@@ -891,79 +811,46 @@ func _render_message(msg: String, btn_text: String, cb: Callable) -> void:
 # ---------------- actions ----------------
 
 func _on_start() -> void:
-	var members: Array = _data.get("members", [])
+	var members := _active_players()
 	if members.size() < 2:
-		_show_confirm("No one else has joined yet.\nStart the contest anyway?",
+		_show_confirm("No one else has joined yet.\nStart the race anyway?",
 			func() -> void: _do_start())
 	else:
 		_do_start()
 
 func _do_start() -> void:
 	_set_overlay(true, "Starting…")
-	var res: Dictionary = await ContestManager.start_contest(contest_id)
+	var res: Dictionary = await ContestManager.start_room(contest_id)
 	if not is_inside_tree():
 		return
-	_set_overlay(false)
 	if not bool(res.get("ok", false)):
-		_show_toast("Couldn't start the contest.")
-		return
-	_reload()
-
-func _on_play() -> void:
-	var meta: Dictionary = _data.get("meta", {})
-	var my_member: Dictionary = _data.get("my_member", {})
-	# Re-verify the deadline locally so a stale screen can't launch a game after
-	# time expired.
-	var type := String(meta.get("type", ""))
-	if type != "one_game":
-		var dl := int(meta.get("deadline_at", 0))
-		if dl > 0 and int(Time.get_unix_time_from_system()) >= dl:
-			_show_toast("Time's up for this contest.")
-			_reload()
-			return
-	# Stop the lobby/menu music before the game — otherwise it keeps playing over
-	# gameplay (normal play stops it on the home screen's Start button).
-	AudioManager.stop_bg_music()
-	await ContestManager.begin_contest_game(contest_id, type,
-		String(meta.get("difficulty", "easy")),
-		int(my_member.get("best_score", 0)), int(my_member.get("games_played", 0)))
-	if not is_inside_tree():
-		return
-	game_manager.show_game()
+		_set_overlay(false)
+		_show_toast("Couldn't start the race.")
+	# On success the room_changed listener flips us to "playing" and auto-launches
+	# the match for everyone (including the host).
 
 func _on_kick(uid: String, nm: String) -> void:
-	_show_confirm("Remove %s from the contest?" % nm, func() -> void:
-		_set_overlay(true, "Removing…")
-		await ContestManager.kick_member(contest_id, uid)
-		if not is_inside_tree():
-			return
-		_set_overlay(false)
-		_reload())
+	_show_confirm("Remove %s from the room?" % nm, func() -> void:
+		await ContestManager.kick_member(contest_id, uid))
 
-func _on_finalize_now() -> void:
-	_show_confirm("End the contest now and lock in the results?", func() -> void:
-		_set_overlay(true, "Finalizing…")
-		await ContestManager.finalize_now(contest_id)
-		if not is_inside_tree():
-			return
-		_set_overlay(false)
-		_reload())
+func _on_finish_now() -> void:
+	_show_confirm("End the race now and lock in the results?", func() -> void:
+		await ContestManager.finish_now(contest_id))
 
-func _on_delete() -> void:
-	_show_confirm("Cancel this contest for everyone?\nThis can't be undone.", func() -> void:
-		_set_overlay(true, "Deleting…")
-		await ContestManager.delete_contest(contest_id)
+func _on_cancel() -> void:
+	_show_confirm("Cancel this room for everyone?\nThis can't be undone.", func() -> void:
+		_set_overlay(true, "Cancelling…")
+		await ContestManager.cancel_room(contest_id)
 		if not is_inside_tree():
 			return
 		game_manager.show_arena())
 
 func _on_leave() -> void:
-	var meta: Dictionary = _data.get("meta", {})
-	var is_creator := String(meta.get("creator_uid", "")) == FirebaseManager.uid
-	var status := String(meta.get("status", ""))
-	var msg := "Leave this contest?"
-	if is_creator and status != "finished":
-		msg = "You're the host. Leaving ends the contest for everyone. Continue?"
+	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
+	var status := String(_room.get("status", ""))
+	var msg := "Leave this room?"
+	if is_creator and status == "lobby":
+		msg = "You're the host. Leaving cancels the room for everyone. Continue?"
 	_show_confirm(msg, func() -> void: _do_leave())
 
 func _do_leave() -> void:
@@ -974,17 +861,13 @@ func _do_leave() -> void:
 	game_manager.show_arena()
 
 func _on_exit() -> void:
-	_set_overlay(true, "Exiting…")
-	await ContestManager.leave_contest(contest_id)
-	if not is_inside_tree():
-		return
 	game_manager.show_arena()
 
 # ---------------- overlay / toast / confirm ----------------
 
 func _build_overlay() -> void:
 	_overlay = Panel.new()
-	_overlay.z_index = 90     # above spotlight beams (z_index = 1)
+	_overlay.z_index = 90
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.02, 0.02, 0.06, 0.72)
 	_overlay.add_theme_stylebox_override("panel", s)
@@ -1028,7 +911,6 @@ func _show_confirm(msg: String, on_yes: Callable) -> void:
 
 func _build_confirm() -> void:
 	_confirm = Panel.new()
-	# Draw above the podium spotlight beams (which carry z_index = 1).
 	_confirm.z_index = 100
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.05, 0.05, 0.14, 0.99)

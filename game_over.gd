@@ -89,14 +89,11 @@ var _bg_mat: ShaderMaterial
 var _score_label: Label
 var _rank_slot: Control               # placeholder; the rank pill is added here once Firestore returns
 var _rank_token := 0                  # bumped on free; awaited callbacks bail when stale
-# Captured Arena contest context (empty for normal play). Captured + cleared at
-# the very top of _ready so nothing downstream sees a stale global context.
-var _contest_ctx: Dictionary = {}
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
-	# Capture the contest context (if any) before it can leak into a later game.
-	_contest_ctx = GameState.contest_context.duplicate(true)
+	# Defensive: this screen is solo-only now (Arena races end in the live room, not
+	# here), so make sure no stale contest context lingers into a later game.
 	GameState.contest_context = {}
 	_is_new_high = GameState.submit_score(rounds)
 	# Badges: a finished game (+ its score milestones) is always worth evaluating.
@@ -119,11 +116,6 @@ func _ready() -> void:
 	# for why the rank reveal is gated.
 	if _is_new_high and FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
 		_submit_and_show_rank()
-	# Record the result for the Arena contest this game belonged to. Independent of
-	# the leaderboard submits above (which still run — a contest game updates the
-	# player's global/daily bests exactly like a normal game).
-	if not _contest_ctx.is_empty():
-		ContestManager.submit_contest_result(_contest_ctx, rounds)
 
 func _exit_tree() -> void:
 	# Invalidate any in-flight rank load; the node is about to be freed.
@@ -296,23 +288,12 @@ func _build_ui() -> void:
 	# lands on it first.
 	var btn_y := sz.y * 0.92 - BTN_H * 0.5
 	var btn_total := BTN_W * 2.0 + BTN_GAP
-	if not _contest_ctx.is_empty():
-		# Contest game: return to the contest (primary) instead of replaying, since
-		# whether the player may play again depends on the contest state.
-		var cid := String(_contest_ctx.get("id", ""))
-		_make_pill_button("HOME", "home", Color(0.40, 0.58, 1.0), false,
-			Vector2(cx - btn_total * 0.5, btn_y),
-			func() -> void: game_manager.show_home())
-		_make_pill_button("BACK TO ARENA", "replay", Color(0.30, 0.80, 0.52), true,
-			Vector2(cx - btn_total * 0.5 + BTN_W + BTN_GAP, btn_y),
-			func() -> void: game_manager.show_contest_detail(cid))
-	else:
-		_make_pill_button("HOME", "home", Color(0.40, 0.58, 1.0), false,
-			Vector2(cx - btn_total * 0.5, btn_y),
-			func() -> void: game_manager.show_home())
-		_make_pill_button("PLAY AGAIN", "replay", Color(0.30, 0.80, 0.52), true,
-			Vector2(cx - btn_total * 0.5 + BTN_W + BTN_GAP, btn_y),
-			func() -> void: game_manager.show_difficulty())
+	_make_pill_button("HOME", "home", Color(0.40, 0.58, 1.0), false,
+		Vector2(cx - btn_total * 0.5, btn_y),
+		func() -> void: game_manager.show_home())
+	_make_pill_button("PLAY AGAIN", "replay", Color(0.30, 0.80, 0.52), true,
+		Vector2(cx - btn_total * 0.5 + BTN_W + BTN_GAP, btn_y),
+		func() -> void: game_manager.show_difficulty())
 
 # ---------------- rank pill (new-high celebration payoff) ----------------
 

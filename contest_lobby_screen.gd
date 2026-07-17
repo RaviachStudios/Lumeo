@@ -1,10 +1,10 @@
 extends Control
 
-# Public Contests Lobby — a full-screen table of up to 10 open (still-in-lobby),
-# public contests that anyone can join without a request. The 10 rooms are a random
+# Public Rooms Lobby — a full-screen table of up to 10 open (still-in-lobby),
+# public rooms that anyone can join without a request. The 10 rooms are a random
 # slice pulled with a SINGLE cheap read (see ContestManager.load_lobby_contests);
-# "Reshuffle" just re-rolls that slice. Each row shows the contest's title, mode,
-# difficulty and how many players are already registered, with a Join button.
+# "Reshuffle" just re-rolls that slice. Each row shows the room's title, difficulty
+# and how many players are already registered, with a Join button.
 #
 # Reads happen on open and on explicit Reshuffle only (Firebase I/O is expensive —
 # no background polling), matching the rest of the Arena screens.
@@ -37,7 +37,6 @@ var _busy := false
 const JOIN_W := 108.0
 const REG_W := 96.0
 const LEVEL_W := 92.0
-const MODE_W := 96.0
 const ROW_H := 58.0
 const ROW_SEP := 8.0
 const HEADER_H := 34.0
@@ -161,16 +160,14 @@ func _columns(row_w: float) -> Dictionary:
 	var join_x := row_w - JOIN_W - 12.0
 	var reg_x := join_x - REG_W
 	var level_x := reg_x - LEVEL_W
-	var mode_x := level_x - MODE_W
-	return {"join": join_x, "reg": reg_x, "level": level_x, "mode": mode_x,
-		"title_x": 16.0, "title_w": maxf(60.0, mode_x - 16.0 - 8.0)}
+	return {"join": join_x, "reg": reg_x, "level": level_x,
+		"title_x": 16.0, "title_w": maxf(60.0, level_x - 16.0 - 8.0)}
 
 func _relabel_header(tw: float) -> void:
 	for c in _header.get_children():
 		c.queue_free()
 	var cols := _columns(tw)
-	_header_cap("CONTEST", cols["title_x"], cols["title_w"], HORIZONTAL_ALIGNMENT_LEFT)
-	_header_cap("MODE", cols["mode"], MODE_W, HORIZONTAL_ALIGNMENT_CENTER)
+	_header_cap("ROOM", cols["title_x"], cols["title_w"], HORIZONTAL_ALIGNMENT_LEFT)
 	_header_cap("LEVEL", cols["level"], LEVEL_W, HORIZONTAL_ALIGNMENT_CENTER)
 	_header_cap("PLAYERS", cols["reg"], REG_W, HORIZONTAL_ALIGNMENT_CENTER)
 
@@ -245,8 +242,6 @@ func _make_row(c: Dictionary, row_w: float) -> Control:
 	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(nm)
 
-	_cell(row, ContestManager.type_label(String(c.get("type", ""))), cols["mode"], MODE_W,
-		Color(0.82, 0.86, 1.0), 16)
 	_cell(row, ContestManager.diff_label(String(c.get("difficulty", "easy"))), cols["level"], LEVEL_W,
 		_diff_color(String(c.get("difficulty", "easy"))), 16)
 	_cell(row, "%d / %d" % [count, ContestManager.MAX_MEMBERS], cols["reg"], REG_W,
@@ -320,10 +315,9 @@ func _on_join(cid: String) -> void:
 		game_manager.show_contest_detail(cid)
 		return
 	match String(res.get("error", "")):
-		"not_found":     _show_toast("That contest just closed.")
-		"ended":         _show_toast("That contest has already ended.")
-		"full":          _show_toast("That contest is full.")
-		"at_join_limit": _show_toast("You've reached your join limit.")
+		"not_found":     _show_toast("That room just closed.")
+		"ended":         _show_toast("That race has already started.")
+		"full":          _show_toast("That room is full.")
 		"auth":          _show_toast("Sign in and pick a name first.")
 		_:               _show_toast("Couldn't join. Try again.")
 	# On a fatal state (gone/full/ended) drop the stale row so the list stays honest.

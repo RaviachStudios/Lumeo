@@ -1,11 +1,11 @@
 extends Node
 
 # Set by ContestManager.begin_contest_game when a game is launched from inside an
-# Arena contest; empty {} for normal play. Shape: {id, type, difficulty,
-# best_before, games_before}. game.gd reads it to switch to "Forfeit" framing;
-# game_over.gd captures + clears it, submits the contest result, and routes back
-# to the contest. Cleared on any return to home / difficulty so a stale context
-# can never make a normal game count toward a contest.
+# Arena room; empty {} for normal play. Shape: {id, difficulty, seed}. game.gd
+# reads it to seed the shared race sequence, enable the per-press timer, switch to
+# "Forfeit" framing, and — on game over — submit the score to the room and route
+# back to the live room (instead of the solo game-over screen). Cleared on any
+# return to home / difficulty so a stale context can't make a normal game count.
 var contest_context: Dictionary = {}
 
 var difficulty: String = "easy"

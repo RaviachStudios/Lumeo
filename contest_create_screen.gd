@@ -1,11 +1,11 @@
 extends Control
 
-# Create a contest — a small interactive 3-step wizard:
-#   1) Name your contest   (the field lifts above the on-screen keyboard)
-#   2) Choose a format     (1 Game / 1 Hour / 1 Day)
-#   3) Choose a difficulty → Create
-# On success we jump straight to the contest detail (lobby) where the ID is shared.
-# Wears the same "champions' antechamber" theme as the contest lobby.
+# Create a room — a small interactive 2-step wizard:
+#   1) Name your room       (the field lifts above the on-screen keyboard)
+#   2) Choose a difficulty + who can join (Public / Private) → Create
+# Every room is a single synchronous race, so there's no "format" to pick anymore.
+# On success we jump straight to the room lobby where the ID is shared.
+# Wears the same "champions' antechamber" theme as the public lobby.
 
 const ArenaUI := preload("res://arena_ui.gd")
 
@@ -19,7 +19,6 @@ var _dots: Control
 # Step containers (only one visible at a time).
 var _step1: Control
 var _step2: Control
-var _step3: Control
 
 # Step 1 (name).
 var _name_edit: LineEdit
@@ -29,10 +28,9 @@ var _suggest_row: Control        # funny-name suggestion chips + a 🎲 reshuffl
 var _sug_chips: Array[Button] = []
 var _sug_dice: Button
 
-# Step 2 / 3 selections.
-var _type_cards: Array[Dictionary] = []
+# Step 2 selections.
 var _diff_pills: Array[Dictionary] = []
-# Step 3 also picks visibility (public = listed in the browse-lobby / private = ID only).
+# Step 2 also picks visibility (public = listed in the browse-lobby / private = ID only).
 var _vis_cards: Array[Dictionary] = []
 var _selected_public := true
 
@@ -44,17 +42,15 @@ var _overlay: Panel
 var _overlay_lbl: Label
 
 var _step := 0
-var _selected_type := "one_game"
 var _selected_diff := "easy"
 var _busy := false
 
-const TYPE_ORDER: Array[String] = ["one_game", "one_hour", "one_day"]
-const STEP_COUNT := 3
+const STEP_COUNT := 2
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Match the contest lobby's room (the champions' antechamber).
+	# Match the public lobby's room (the champions' antechamber).
 	_bg = ArenaUI.make_lobby_bg()
 	add_child(_bg)
 
@@ -62,7 +58,7 @@ func _ready() -> void:
 	_back.pressed.connect(func() -> void: game_manager.show_arena())
 	add_child(_back)
 
-	_title = ArenaUI.title("CREATE CONTEST")
+	_title = ArenaUI.title("CREATE ROOM")
 	add_child(_title)
 
 	_dots = Control.new()
@@ -72,10 +68,8 @@ func _ready() -> void:
 
 	_step1 = _make_step()
 	_step2 = _make_step()
-	_step3 = _make_step()
 	_build_step1()
 	_build_step2()
-	_build_step3()
 
 	# Bottom nav.
 	_prev_btn = ArenaUI.pill_button("◀  Back", ArenaUI.SAND)
@@ -93,7 +87,6 @@ func _ready() -> void:
 	add_child(_msg)
 
 	_build_overlay()
-	_refresh_type_styles()
 	_refresh_diff_styles()
 	_refresh_vis_styles()
 	_show_step()
@@ -111,7 +104,7 @@ func _make_step() -> Control:
 func _build_step1() -> void:
 	var prompt := Label.new()
 	prompt.name = "prompt"
-	prompt.text = "Name your contest"
+	prompt.text = "Name your room"
 	prompt.add_theme_font_size_override("font_size", 32)
 	prompt.add_theme_color_override("font_color", Color.WHITE)
 	prompt.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.4))
@@ -242,66 +235,7 @@ func _position_suggestions() -> void:
 		_sug_dice.position = Vector2(x, 0)
 		_sug_dice.size = Vector2(dice_w, h)
 
-# ---------------- step 2: format ----------------
-
-func _build_step2() -> void:
-	var cap := _section_caption("Choose a format")
-	cap.name = "cap"
-	_step2.add_child(cap)
-
-	for t in TYPE_ORDER:
-		var card := Button.new()
-		card.focus_mode = Control.FOCUS_NONE
-		var sb_off := StyleBoxFlat.new()
-		sb_off.bg_color = Color(0.09, 0.10, 0.22, 0.72)
-		sb_off.set_corner_radius_all(18)
-		sb_off.border_color = Color(0.55, 0.60, 0.95, 0.32)
-		sb_off.set_border_width_all(1)
-		var sb_on := StyleBoxFlat.new()
-		sb_on.bg_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.22)
-		sb_on.set_corner_radius_all(18)
-		sb_on.border_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.95)
-		sb_on.set_border_width_all(2)
-		sb_on.shadow_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.4)
-		sb_on.shadow_size = 14
-		for st in ["normal", "hover", "pressed", "focus"]:
-			card.add_theme_stylebox_override(st, sb_off)
-		_step2.add_child(card)
-
-		var name_lbl := Label.new()
-		name_lbl.text = ContestManager.type_label(t)
-		name_lbl.add_theme_font_size_override("font_size", 24)
-		name_lbl.add_theme_color_override("font_color", Color.WHITE)
-		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(name_lbl)
-
-		var rule_lbl := Label.new()
-		rule_lbl.text = ContestManager.type_rule(t)
-		rule_lbl.add_theme_font_size_override("font_size", 13)
-		rule_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
-		rule_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		rule_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		rule_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(rule_lbl)
-
-		var def := {"btn": card, "type": t, "sb_on": sb_on, "sb_off": sb_off,
-			"name_lbl": name_lbl, "rule_lbl": rule_lbl}
-		card.pressed.connect(func() -> void:
-			_selected_type = t
-			_refresh_type_styles())
-		_type_cards.append(def)
-
-func _refresh_type_styles() -> void:
-	for d in _type_cards:
-		var on: bool = d["type"] == _selected_type
-		var sb: StyleBoxFlat = d["sb_on"] if on else d["sb_off"]
-		for st in ["normal", "hover", "pressed", "focus"]:
-			(d["btn"] as Button).add_theme_stylebox_override(st, sb)
-		(d["name_lbl"] as Label).add_theme_color_override("font_color",
-			ArenaUI.ACCENT.lightened(0.45) if on else Color.WHITE)
-
-# ---------------- step 3: difficulty ----------------
+# ---------------- step 2: difficulty + visibility ----------------
 
 const DIFF_ORDER: Array[String] = ["easy", "moderate", "hard"]
 const DIFF_ACCENT := {
@@ -310,10 +244,10 @@ const DIFF_ACCENT := {
 	"hard": Color(0.95, 0.32, 0.40),
 }
 
-func _build_step3() -> void:
+func _build_step2() -> void:
 	var cap := _section_caption("Choose a difficulty")
 	cap.name = "cap"
-	_step3.add_child(cap)
+	_step2.add_child(cap)
 
 	for diff in DIFF_ORDER:
 		var accent: Color = DIFF_ACCENT[diff]
@@ -333,7 +267,7 @@ func _build_step3() -> void:
 		sb_on.shadow_size = 12
 		for st in ["normal", "hover", "pressed", "focus"]:
 			btn.add_theme_stylebox_override(st, sb_off)
-		_step3.add_child(btn)
+		_step2.add_child(btn)
 
 		var lbl := Label.new()
 		lbl.text = ContestManager.diff_label(diff)
@@ -354,7 +288,7 @@ func _build_step3() -> void:
 	# Visibility picker (public listed in the browse-lobby / private = ID only).
 	var vcap := _section_caption("Who can join?")
 	vcap.name = "vcap"
-	_step3.add_child(vcap)
+	_step2.add_child(vcap)
 	var vis_opts := [
 		{"public": true, "title": "Public", "desc": "Listed in the lobby —\nanyone can find & join"},
 		{"public": false, "title": "Private", "desc": "Hidden — only people\nwith the ID can join"},
@@ -378,7 +312,7 @@ func _build_step3() -> void:
 		sb_on.shadow_size = 12
 		for st in ["normal", "hover", "pressed", "focus"]:
 			card.add_theme_stylebox_override(st, sb_off)
-		_step3.add_child(card)
+		_step2.add_child(card)
 
 		var title_lbl := Label.new()
 		title_lbl.text = String(opt["title"])
@@ -438,9 +372,8 @@ func _section_caption(text: String) -> Label:
 func _show_step() -> void:
 	_step1.visible = _step == 0
 	_step2.visible = _step == 1
-	_step3.visible = _step == 2
 	_prev_btn.visible = _step > 0
-	_primary_btn.text = "Create Contest" if _step == STEP_COUNT - 1 else "Next  ▶"
+	_primary_btn.text = "Create Room" if _step == STEP_COUNT - 1 else "Next  ▶"
 	_msg.text = ""
 	_dots.queue_redraw()
 	if _step == 0 and _name_edit:
@@ -477,7 +410,7 @@ func _layout() -> void:
 		_dots.size = Vector2(180, 22)
 		_dots.queue_redraw()
 
-	for c in [_step1, _step2, _step3]:
+	for c in [_step1, _step2]:
 		c.position = Vector2.ZERO
 		c.size = sz
 
@@ -500,29 +433,12 @@ func _layout() -> void:
 		_suggest_row.size = Vector2(name_w, 34)
 		_position_suggestions()
 
-	# Step 2 — format cards.
+	var gap := 16.0
+
+	# Step 2 — difficulty pills.
 	var cap2: Label = _step2.get_node("cap")
 	cap2.size = Vector2(sz.x, 30); cap2.position = Vector2(0, 150)
-	var cards_top := 210.0
-	var card_w: float = clampf((sz.x - 100.0) / 3.0 - 16.0, 150.0, 240.0)
-	var card_h := 168.0
-	var gap := 16.0
-	var total := card_w * 3.0 + gap * 2.0
-	var x := cx - total * 0.5
-	for d in _type_cards:
-		var card: Button = d["btn"]
-		card.size = Vector2(card_w, card_h)
-		card.position = Vector2(x, cards_top)
-		var name_lbl: Label = d["name_lbl"]
-		name_lbl.position = Vector2(0, 26); name_lbl.size = Vector2(card_w, 30)
-		var rule_lbl: Label = d["rule_lbl"]
-		rule_lbl.position = Vector2(12, 70); rule_lbl.size = Vector2(card_w - 24, card_h - 84)
-		x += card_w + gap
-
-	# Step 3 — difficulty pills.
-	var cap3: Label = _step3.get_node("cap")
-	cap3.size = Vector2(sz.x, 30); cap3.position = Vector2(0, 150)
-	var diff_top := 230.0
+	var diff_top := 210.0
 	var dw: float = clampf((sz.x - 100.0) / 3.0 - 16.0, 150.0, 190.0)
 	var dh := 58.0
 	var dtotal := dw * 3.0 + gap * 2.0
@@ -532,8 +448,8 @@ func _layout() -> void:
 		(d["btn"] as Button).position = Vector2(dx, diff_top)
 		dx += dw + gap
 
-	# Step 3 — visibility cards, under the difficulty pills.
-	var vcap: Label = _step3.get_node("vcap")
+	# Step 2 — visibility cards, under the difficulty pills.
+	var vcap: Label = _step2.get_node("vcap")
 	var vis_top := diff_top + dh + 34.0
 	vcap.size = Vector2(sz.x, 30); vcap.position = Vector2(0, vis_top)
 	var vcard_top := vis_top + 44.0
@@ -569,7 +485,7 @@ func _layout() -> void:
 
 func _draw_dots() -> void:
 	var gap := 30.0
-	var x := _dots.size.x * 0.5 - gap
+	var x := _dots.size.x * 0.5 - gap * 0.5
 	var y := _dots.size.y * 0.5
 	for i in STEP_COUNT:
 		var on: bool = i == _step
@@ -609,7 +525,7 @@ func _on_create() -> void:
 	if _name_edit.text.strip_edges().is_empty():
 		_name_edit.text = ContestManager.random_title()
 	_set_overlay(true, "Creating…")
-	var res: Dictionary = await ContestManager.create_contest(_selected_type, _selected_diff,
+	var res: Dictionary = await ContestManager.create_contest(_selected_diff,
 		_name_edit.text, _selected_public)
 	if not is_inside_tree():
 		return
@@ -619,10 +535,9 @@ func _on_create() -> void:
 		game_manager.show_contest_detail(String(res.get("id", "")))
 		return
 	match String(res.get("error", "")):
-		"at_create_limit": _msg.text = "You can only create one contest at a time."
-		"auth":            _msg.text = "Sign in and pick a name first."
-		"id_collision":    _msg.text = "Couldn't allocate an ID. Try again."
-		_:                 _msg.text = "Couldn't create the contest. Try again."
+		"auth":         _msg.text = "Sign in and pick a name first."
+		"id_collision": _msg.text = "Couldn't allocate an ID. Try again."
+		_:              _msg.text = "Couldn't create the room. Try again."
 
 func _build_overlay() -> void:
 	_overlay = Panel.new()

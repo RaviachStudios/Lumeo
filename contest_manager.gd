@@ -1,56 +1,64 @@
 extends Node
 
-# Arena contests. A player creates a contest (a TYPE + a DIFFICULTY), shares its
-# short ID, friends join, the creator starts it, everyone plays *inside the
-# contest*, and at the end a frozen podium + standings table is shown. Contests
-# are cleaned up once finished and abandoned.
+# Arena rooms. A player CREATES a room (a name + difficulty + public/private),
+# shares its short ID (or lists it publicly), friends JOIN, everyone sits in a
+# LIVE lobby, the creator presses PLAY, and then ALL players race the SAME Simon
+# sequence at once (one attempt each). As players finish they land on a live
+# "who's still playing / who finished" screen; once everyone is done the frozen
+# final leaderboard is shown.
 #
 # --- Storage model (why it looks like this) --------------------------------
-# There is NO server (no Cloud Functions). So there is no trusted clock/compute
-# to end a timed contest, freeze scores, or delete abandoned docs. Everything is
-# done cooperatively by clients, guarded by firestore.rules + Firestore TTL.
+# There is NO server (no Cloud Functions), and the Android Firebase plugin can
+# only listen to a SINGLE document (not a query). So the entire room lives in ONE
+# document and every client attaches a document listener to it:
 #
-#   contests/{CID}                    -> meta (public read; owner/member writes)
-#   contest_members/{CID__uid}        -> one row per participant (public read;
-#                                        each user writes only their own row;
-#                                        the creator may delete any row = kick)
+#   contests/{CID} -> {
+#       id, title, creator_uid, creator_name, difficulty, is_public,
+#       status: "lobby" | "playing" | "finished",
+#       seed,                       # shared RNG seed for the race (0 until start)
+#       member_count,               # derived (non-"left" players); browse/rules hint
+#       created_at, started_at, finished_at, expires_at (TTL),
+#       lobby_key,                  # public+lobby only; ranged browse query key
+#       players: { <uid>: { name, is_creator, joined_at,
+#                           state: "lobby"|"playing"|"done"|"left",
+#                           score, finished_at } }
+#   }
 #
-# "Which contests am I in" is answered by querying contest_members where
-# uid == me (NOT by a list on the user doc). A list-on-user-doc would need
-# set(merge:true) to *remove* a map key on leave, which Firestore's deep-merge
-# cannot do — the query model sidesteps that entirely and keeps writes minimal.
+# Each client writes ONLY its own player key via set_document(merge:true) — a
+# Firestore deep-merge preserves sibling keys, so concurrent joins/score writes
+# never clobber each other. "Leaving" tombstones the key (state="left") because a
+# merge can't delete a map key; the UI filters tombstones out. The whole doc is
+# deleted when the creator cancels in lobby, or the last real player leaves.
 #
-# Reads: public collections are read over Firestore's REST endpoints (the
-# plugin's collection-read callbacks are unreliable on Android — same reason the
-# leaderboard uses REST). Writes/deletes go through the plugin so the native
-# FirebaseAuth context is applied and the rules see request.auth.
+# Reads (initial fetch + lobby browse) use Firestore's REST endpoints (the
+# plugin's collection callbacks are unreliable on Android — same as the
+# leaderboard). Writes/deletes and the live listener go through the plugin so the
+# native FirebaseAuth context is applied and rules see request.auth.
 #
-# Editor (non-Android) runs an in-memory sim mirroring the live shapes so the
-# whole create -> join -> start -> play -> finalize -> leave -> delete lifecycle
-# is testable without a device.
+# Editor (non-Android) runs an in-memory sim mirroring the live shape so the whole
+# create -> join -> start -> play -> finish lifecycle is testable without a device;
+# watch_room() re-emits the sim room after every local write.
+#
+# Trust model: scores/standings are client-trusted (same posture as the
+# leaderboards). Rules bound structure only — a shared room doc can't be defended
+# key-by-key.
 
-signal my_contests_changed
-signal contest_updated(contest_id: String)
+# Live snapshot of a watched room. `room` is a shaped dict (see _shape_room); an
+# empty {} means the room is gone (deleted / not found).
+signal room_changed(cid: String, room: Dictionary)
 
-# ---- caps (v1; shop upgrades add to the base later) ----
-const JOIN_LIMIT_BASE := 2
-const CREATE_LIMIT_BASE := 1
+# ---- caps / limits ----
 const MAX_MEMBERS := 45
-# How many public lobby contests the browse-lobby screen pulls per (single) fetch.
+# How many public lobby rooms the browse screen pulls per (single) fetch.
 const LOBBY_FETCH := 10
-# Contest titles are player-authored; displayed big and clamped to this length
-# everywhere (mirrors ArenaUI.TITLE_MAX + titleOk() in firestore.rules).
+# Room titles are player-authored; displayed big and clamped everywhere
+# (mirrors ArenaUI.TITLE_MAX + titleOk() in firestore.rules).
 const TITLE_MAX := 15
 
-const TYPES: Array[String] = ["one_game", "one_hour", "one_day", "daily"]
 const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 
-# Grace after a timed deadline before we finalize past a member who is still
-# mid-game (someone playing at the buzzer gets to finish; a crashed player can't
-# wedge the contest forever).
-const GRACE_SECS := 300
-# TTL horizon written to `expires_at` on every contest + member write. Firestore
-# TTL policies on these fields reap orphans if a client never runs cleanup.
+# TTL horizon written to `expires_at` on every write. Firestore TTL reaps orphans
+# if a client never runs cleanup.
 const TTL_SECS := 3 * 86400
 
 const ID_LEN := 6
@@ -59,17 +67,24 @@ const ID_ALPHABET := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 const MAX_SCORE := 9999   # mirror scoreOk() in firestore.rules
 
 const _COLL := "contests"
-const _MEMBERS := "contest_members"
 const _FB_BASE := "https://firestore.googleapis.com/v1/projects/simon-6bc39/databases/(default)/documents"
 
 var _is_editor := OS.get_name() != "Android"
 
-# ---- editor sim stores (shape mirrors Firestore) ----
-var _sim_contests: Dictionary = {}    # cid -> meta dict
-var _sim_members: Dictionary = {}     # "CID__uid" -> member dict
+# ---- editor sim store (shape mirrors Firestore) ----
+var _sim_rooms: Dictionary = {}       # cid -> room dict
+
+# Rooms this client currently has a live listener attached to (so document_changed
+# only re-emits for docs a screen actually asked to watch).
+var _watching: Dictionary = {}        # cid -> true
+
+# The room this client is currently participating in (set on create/join, cleared
+# on leave). Lets a screen re-enter and guards accidental double-joins.
+var current_room_id: String = ""
 
 func _ready() -> void:
-	FirebaseManager.display_name_changed.connect(_on_display_name_changed)
+	if not _is_editor:
+		Firebase.firestore.document_changed.connect(_on_document_changed)
 
 func _uid() -> String:  return FirebaseManager.uid
 func _name() -> String:
@@ -78,56 +93,19 @@ func _name() -> String:
 
 func _now() -> int: return int(Time.get_unix_time_from_system())
 
-func _member_id(cid: String, uid: String) -> String:
-	return cid + "__" + uid
-
 func _expires_iso(base_now: int) -> String:
 	return Time.get_datetime_string_from_unix_time(base_now + TTL_SECS) + "Z"
 
 # ---- static display helpers (screens reuse these) ----
 
-static func type_label(t: String) -> String:
-	match t:
-		"one_game": return "1 Game"
-		"one_hour": return "1 Hour"
-		"one_day":  return "1 Day"
-		"daily":    return "Daily"
-	return t
-
-static func type_rule(t: String) -> String:
-	match t:
-		"one_game": return "Everyone plays one game — highest score wins."
-		"one_hour": return "Highest score within 1 hour of the start."
-		"one_day":  return "Highest score within 24 hours of the start."
-		"daily":    return "Highest score before the day ends (00:00 UTC)."
-	return ""
-
 static func diff_label(d: String) -> String:
 	return d.capitalize()
-
-# =====================================================================
-#  CAPS
-# =====================================================================
-
-func join_limit() -> int:  return JOIN_LIMIT_BASE
-func create_limit() -> int: return CREATE_LIMIT_BASE
-
-# {join: <#contests I'm in>, create: <#I created>, join_limit, create_limit}.
-# Source of truth = my member rows (one query), so it can't drift from reality.
-func get_my_counts() -> Dictionary:
-	var mine := await _load_my_memberships()
-	var created := 0
-	for m in mine:
-		if bool(m.get("is_creator", false)):
-			created += 1
-	return {"join": mine.size(), "create": created,
-		"join_limit": join_limit(), "create_limit": create_limit()}
 
 # =====================================================================
 #  CREATE
 # =====================================================================
 
-# Funny fallback contest names (all within TITLE_MAX). Offered as suggestions on the
+# Funny fallback room names (all within TITLE_MAX). Offered as suggestions on the
 # create screen and used when a player leaves the name blank.
 const FUNNY_NAMES: Array[String] = [
 	"Thumb Wars", "Combo Chaos", "Brain Freeze", "Simon Smackdown",
@@ -150,75 +128,63 @@ static func clean_title(raw: String) -> String:
 	return s
 
 # Returns {ok, id} or {ok:false, error}.
-# `is_public` contests are discoverable in the browse-lobby (see load_lobby_contests);
+# `is_public` rooms are discoverable in the browse-lobby (see load_lobby_contests);
 # private ones can only be joined with the shared ID.
-func create_contest(type: String, difficulty: String, title: String = "",
+func create_contest(difficulty: String, title: String = "",
 		is_public: bool = true) -> Dictionary:
 	if _uid().is_empty() or not FirebaseManager.has_display_name():
 		return {"ok": false, "error": "auth"}
-	if not TYPES.has(type) or not DIFFS.has(difficulty):
+	if not DIFFS.has(difficulty):
 		return {"ok": false, "error": "bad_args"}
-	var counts := await get_my_counts()
-	if int(counts["create"]) >= create_limit():
-		return {"ok": false, "error": "at_create_limit"}
 
 	var now := _now()
 	for _attempt in 6:
 		var cid := _gen_id()
-		if await _contest_exists(cid):
+		if await _room_exists(cid):
 			continue
-		var meta := {
+		var room := {
 			"id": cid,
 			"title": clean_title(title),
 			"creator_uid": _uid(),
 			"creator_name": _name(),
-			"type": type,
 			"difficulty": difficulty,
 			"status": "lobby",
 			"is_public": is_public,
+			"seed": 0,
 			"member_count": 1,
 			"created_at": now,
 			"started_at": 0,
-			"deadline_at": 0,
 			"finished_at": 0,
 			"expires_at": _expires_iso(now),
+			"players": {_uid(): _new_player(true, now)},
 		}
-		# A public, still-in-lobby contest carries a uniform random `lobby_key` in
-		# [0,1). The browse-lobby fetches a random slice with a single ranged query on
-		# this one field (see load_lobby_contests) — no composite index, one read.
-		# Private contests omit the field entirely, so they never surface there; on
-		# start we drop it below range (see start_contest) so started contests leave
-		# the lobby.
+		# A public, still-in-lobby room carries a uniform random `lobby_key` in
+		# [0,1). The browse-lobby fetches a random slice with a single ranged query
+		# on this one field (see load_lobby_contests). Private rooms omit it, so they
+		# never surface; on start we drop it below range so started rooms leave the lobby.
 		if is_public:
-			meta["lobby_key"] = randf()
-		await _write_contest(cid, meta, false)
-		await _write_member(cid, _new_member_row(cid, true, now))
-		emit_signal("my_contests_changed")
+			room["lobby_key"] = randf()
+		await _write_room(cid, room, false)
+		current_room_id = cid
 		BadgeManager.note_contest_hosted()   # "Host With Most" badge
 		return {"ok": true, "id": cid}
 	return {"ok": false, "error": "id_collision"}
 
-func _new_member_row(cid: String, is_creator: bool, now: int) -> Dictionary:
+func _new_player(is_creator: bool, now: int) -> Dictionary:
 	return {
-		"contest_id": cid,
-		"uid": _uid(),
 		"name": _name(),
 		"is_creator": is_creator,
 		"joined_at": now,
-		"best_score": 0,
-		"games_played": 0,
-		"last_played_at": 0,
-		"state": "joined",
-		"done": false,
-		"expires_at": _expires_iso(now),
+		"state": "lobby",
+		"score": 0,
+		"finished_at": 0,
 	}
 
 # =====================================================================
 #  JOIN
 # =====================================================================
 
-# Returns {ok} or {ok:false, error} with error in
-# {auth, not_found, ended, full, at_join_limit}.
+# Returns {ok} or {ok:false, error} with error in {auth, not_found, ended, full}.
 func join_contest(raw_id: String) -> Dictionary:
 	if _uid().is_empty() or not FirebaseManager.has_display_name():
 		return {"ok": false, "error": "auth"}
@@ -226,263 +192,332 @@ func join_contest(raw_id: String) -> Dictionary:
 	if not _valid_id(cid):
 		return {"ok": false, "error": "not_found"}
 
-	# Already a member? Treat join as a no-op success so the UI just opens it.
-	var mine := await _load_my_memberships()
-	for m in mine:
-		if String(m.get("contest_id", "")) == cid:
-			return {"ok": true, "already": true}
-	# Cap check uses the same freshly-loaded list.
-	var join_count := mine.size()
-
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
+	var room := await _load_room(cid)
+	if room.is_empty():
 		return {"ok": false, "error": "not_found"}
-	if String(meta.get("status", "")) == "finished":
+	if String(room.get("status", "")) != "lobby":
 		return {"ok": false, "error": "ended"}
-	if join_count >= join_limit():
-		return {"ok": false, "error": "at_join_limit"}
-	var members := await _load_members(cid)
-	if members.size() >= MAX_MEMBERS:
+
+	var players: Dictionary = room.get("players", {})
+	# Already an active member? Treat join as a no-op success so the UI just opens it.
+	var mine: Dictionary = players.get(_uid(), {})
+	if not mine.is_empty() and String(mine.get("state", "")) != "left":
+		current_room_id = cid
+		return {"ok": true, "already": true}
+	if _count_active(players) >= MAX_MEMBERS:
 		return {"ok": false, "error": "full"}
 
 	var now := _now()
-	await _write_member(cid, _new_member_row(cid, false, now))
-	# member_count is a display/delete hint; recomputed authoritatively on leave.
-	# Derive it from the pre-write roster deduped by uid, counting myself exactly
-	# once — a plain members.size()+1 double-counts me (→ "3 registered" for 2
-	# players) whenever the read already saw my own row: Firestore's REST reads are
-	# eventually consistent, and a re-tapped/retried join can slip my just-written
-	# row into the contest_id query before the uid "already a member" check sees it.
-	await _write_contest(cid, {
-		"member_count": _distinct_member_count(members, _uid()),
+	await _write_player(cid, _uid(), _new_player(false, now))
+	# Recompute the count from the roster we already read, counting myself once.
+	players[_uid()] = _new_player(false, now)
+	await _write_room(cid, {
+		"member_count": _count_active(players),
 		"expires_at": _expires_iso(now),
 	}, true)
-	emit_signal("my_contests_changed")
+	current_room_id = cid
 	BadgeManager.note_contest_joined()   # "Challenger" / "Regular" badges
 	return {"ok": true}
 
-# Number of distinct participants given a roster read + the caller's own uid
-# (always counted, even if the read didn't return my row yet). De-duping by uid
-# makes the count idempotent, so a stale/racey read can never inflate it.
-func _distinct_member_count(members: Array, self_uid: String) -> int:
-	var uids := {}
-	for m in members:
-		var u := String(m.get("uid", ""))
-		if not u.is_empty():
-			uids[u] = true
-	if not self_uid.is_empty():
-		uids[self_uid] = true
-	return uids.size()
+# Count of participants whose row isn't a "left" tombstone.
+func _count_active(players: Dictionary) -> int:
+	var n := 0
+	for uid in players:
+		var p: Dictionary = players[uid]
+		if String(p.get("state", "")) != "left":
+			n += 1
+	return n
+
+# =====================================================================
+#  LEAVE / CANCEL
+# =====================================================================
+
+# A normal participant leaves (also used when the creator leaves a lobby, which
+# tears the whole room down for everyone).
+func leave_contest(cid: String) -> void:
+	var room := await _load_room(cid)
+	if current_room_id == cid:
+		current_room_id = ""
+	if room.is_empty():
+		return
+	var is_creator := String(room.get("creator_uid", "")) == _uid()
+	var status := String(room.get("status", ""))
+
+	# Creator abandoning a lobby cancels the room entirely.
+	if is_creator and status == "lobby":
+		await _delete_room(cid)
+		return
+
+	# Tombstone my own row, then republish the active count. The delete rule keys on
+	# member_count <= 0, so a last-leaver must lower it before the doc can be removed.
+	await _write_player(cid, _uid(), {"state": "left"})
+	var players: Dictionary = room.get("players", {})
+	if players.has(_uid()):
+		players[_uid()]["state"] = "left"
+	var remaining := _count_active(players)
+	await _write_room(cid, {
+		"member_count": remaining,
+		"expires_at": _expires_iso(_now()),
+	}, true)
+	if remaining <= 0:
+		await _delete_room(cid)
+
+# Best-effort cleanup on account deletion: leave whatever room we're currently in.
+# The single-doc model has no per-uid query, so we can only reach the active room;
+# any earlier orphan rows are reaped by Firestore TTL.
+func leave_all() -> void:
+	if not current_room_id.is_empty():
+		await leave_contest(current_room_id)
+
+# Creator explicitly deletes the whole room (any status).
+func cancel_room(cid: String) -> Dictionary:
+	var room := await _load_room(cid)
+	if current_room_id == cid:
+		current_room_id = ""
+	if room.is_empty():
+		return {"ok": true}
+	if String(room.get("creator_uid", "")) != _uid():
+		return {"ok": false, "error": "not_creator"}
+	# Drop member_count to 0 first so the empty-delete rule path also covers us.
+	await _write_room(cid, {"member_count": 0}, true)
+	await _delete_room(cid)
+	return {"ok": true}
+
+# Creator removes a member (tombstones their row).
+func kick_member(cid: String, target_uid: String) -> Dictionary:
+	var room := await _load_room(cid)
+	if room.is_empty():
+		return {"ok": false, "error": "not_found"}
+	if String(room.get("creator_uid", "")) != _uid():
+		return {"ok": false, "error": "not_creator"}
+	if target_uid == _uid():
+		return {"ok": false, "error": "cant_kick_self"}
+	await _write_player(cid, target_uid, {"state": "left"})
+	var players: Dictionary = room.get("players", {})
+	if players.has(target_uid):
+		players[target_uid]["state"] = "left"
+	await _write_room(cid, {"member_count": _count_active(players)}, true)
+	return {"ok": true}
 
 # =====================================================================
 #  START  (creator only)
 # =====================================================================
 
-func start_contest(cid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
+# Flips the room to "playing" and stamps a shared RNG seed so every client
+# generates the identical Simon sequence. Returns {ok, seed} or {ok:false,error}.
+func start_room(cid: String) -> Dictionary:
+	var room := await _load_room(cid)
+	if room.is_empty():
 		return {"ok": false, "error": "not_found"}
-	if String(meta.get("creator_uid", "")) != _uid():
+	if String(room.get("creator_uid", "")) != _uid():
 		return {"ok": false, "error": "not_creator"}
-	if String(meta.get("status", "")) != "lobby":
+	if String(room.get("status", "")) != "lobby":
 		return {"ok": false, "error": "already_started"}
 
 	var now := _now()
-	var deadline := _compute_deadline(String(meta.get("type", "")), now)
-	await _write_contest(cid, {
-		"status": "active",
+	var seed := randi()
+	if seed == 0:
+		seed = 1   # 0 is our "not started yet" sentinel
+	await _write_room(cid, {
+		"status": "playing",
 		"started_at": now,
-		"deadline_at": deadline,
-		# Drop below the [0,1) key range so a started contest disappears from the
-		# browse-lobby query (harmless no-op for contests that were never public).
+		"seed": seed,
+		# Drop below the [0,1) key range so a started room disappears from browse.
 		"lobby_key": -1.0,
 		"expires_at": _expires_iso(now),
 	}, true)
-	emit_signal("contest_updated", cid)
-	return {"ok": true}
-
-func _compute_deadline(type: String, now: int) -> int:
-	match type:
-		"one_hour": return now + 3600
-		"one_day":  return now + 86400
-		"daily":    return _next_utc_midnight(now)
-		_:          return 0    # one_game is event-driven
-
-func _next_utc_midnight(now: int) -> int:
-	var day_index := int(floor(float(now) / 86400.0))
-	return (day_index + 1) * 86400
+	return {"ok": true, "seed": seed}
 
 # =====================================================================
 #  GAMEPLAY HAND-OFF
 # =====================================================================
 
-# Sets the contest context on GameState, applies the contest difficulty, and
-# marks this member in_progress. The SCREEN navigates to the game afterwards.
-# best_before/games_before are passed from the already-loaded detail data so we
-# don't spend a read to learn them.
-func begin_contest_game(cid: String, type: String, difficulty: String,
-		best_before: int, games_before: int) -> void:
-	GameState.contest_context = {
-		"id": cid, "type": type, "difficulty": difficulty,
-		"best_before": best_before, "games_before": games_before,
-	}
+# Sets the contest context on GameState, applies the difficulty, and marks this
+# player in-progress. The SCREEN navigates to the game afterwards.
+func begin_contest_game(cid: String, difficulty: String, seed: int) -> void:
+	GameState.contest_context = {"id": cid, "difficulty": difficulty, "seed": seed}
 	GameState.set_difficulty(difficulty)
-	var now := _now()
-	await _write_member(cid, {
-		"contest_id": cid, "uid": _uid(), "state": "in_progress",
-		"expires_at": _expires_iso(now),
-	}, true)
+	await _write_player(cid, _uid(), {"state": "playing"})
 
-# Records a finished contest game. `ctx` is the captured GameState.contest_context
-# (game_over.gd clears the global one and passes a copy here). Returns the
-# (possibly finalized) meta.
-func submit_contest_result(ctx: Dictionary, score: int) -> Dictionary:
-	var cid := String(ctx.get("id", ""))
+# Records this player's finished match (single attempt). `score` = rounds cleared.
+# If every active player is now done, flips the room to "finished". Returns the
+# (possibly finalized) shaped room.
+func submit_result(cid: String, score: int) -> Dictionary:
 	if cid.is_empty() or _uid().is_empty():
 		return {}
-	var type := String(ctx.get("type", ""))
-	var best_before := int(ctx.get("best_before", 0))
-	var games_before := int(ctx.get("games_before", 0))
 	var s := clampi(score, 0, MAX_SCORE)
 	var now := _now()
-	var new_best := maxi(best_before, s)
-	var is_done := type == "one_game"
-	await _write_member(cid, {
-		"contest_id": cid, "uid": _uid(), "name": _name(),
-		"best_score": new_best, "games_played": games_before + 1,
-		"last_played_at": now, "state": "playing_done", "done": is_done,
-		"expires_at": _expires_iso(now),
-	}, true)
+	await _write_player(cid, _uid(), {
+		"name": _name(), "state": "done", "score": s, "finished_at": now,
+	})
 
-	var meta := await _load_meta(cid)
-	# Only one_game resolves on submit (all-played condition). Timed contests
-	# resolve when a client's countdown hits 0 — no read spent here.
-	if type == "one_game":
-		var members := await _load_members(cid)
-		# Guard against read-after-write staleness for OUR row: the plugin's
-		# write_task_completed is shared, so our await above can resume before our
-		# write is visible to the REST read. Force our just-written values in so the
-		# "everyone is done" check can't miss the write that triggered it.
-		members = _patch_self_row(members, cid, new_best, games_before + 1, now, is_done)
-		meta = await _finalize_if_ended(cid, meta, members)
-	emit_signal("contest_updated", cid)
-	return meta
+	var room := await _load_room(cid)
+	if room.is_empty() or String(room.get("status", "")) != "playing":
+		return room
+	var players: Dictionary = room.get("players", {})
+	# Guard read-after-write staleness for OUR row (REST reads are eventually
+	# consistent): force our just-written done values in before the all-done check.
+	if not players.has(_uid()):
+		players[_uid()] = _new_player(false, now)
+	players[_uid()]["state"] = "done"
+	players[_uid()]["score"] = s
+	players[_uid()]["finished_at"] = now
 
-# Returns `members` with the current user's row set to the given freshly-written
-# values (added if the read didn't return it yet).
-func _patch_self_row(members: Array, cid: String, best: int, games: int,
-		now: int, done: bool) -> Array:
-	var out := members.duplicate(true)
-	var found := false
-	for m in out:
-		if String(m.get("uid", "")) == _uid():
-			m["best_score"] = best
-			m["games_played"] = games
-			m["last_played_at"] = now
-			m["state"] = "playing_done"
-			m["done"] = done
-			found = true
-			break
-	if not found:
-		out.append({
-			"contest_id": cid, "uid": _uid(), "name": _name(),
-			"is_creator": false, "joined_at": now,
-			"best_score": best, "games_played": games, "last_played_at": now,
-			"state": "playing_done", "done": done,
-		})
-	return out
+	if _all_done(players):
+		await _write_room(cid, {
+			"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+		}, true)
+		room["status"] = "finished"
+		room["finished_at"] = now
+	room["players"] = players
+	return room
 
-# =====================================================================
-#  LOAD  (detail screen)
-# =====================================================================
+# True when there's at least one active player and every active player is "done".
+func _all_done(players: Dictionary) -> bool:
+	var any := false
+	for uid in players:
+		var st := String((players[uid] as Dictionary).get("state", ""))
+		if st == "left":
+			continue
+		any = true
+		if st != "done":
+			return false
+	return any
 
-# Returns {ok, meta, members, my_member, i_am_member, standings} or
-# {ok:false, error:"not_found"}. Runs an opportunistic finalize. Members are
-# read at most once.
-func load_contest(cid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
+# Any participant may finalize once every active player is done (idempotent — a
+# stale read on the last finisher, or a client that only observed all-done from the
+# results board, still converges the room to "finished").
+func finalize_if_done(cid: String) -> void:
+	var room := await _load_room(cid)
+	if room.is_empty() or String(room.get("status", "")) != "playing":
+		return
+	if _all_done(room.get("players", {})):
+		var now := _now()
+		await _write_room(cid, {
+			"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+		}, true)
+
+# Creator forces the room to end now with current scores.
+func finish_now(cid: String) -> Dictionary:
+	var room := await _load_room(cid)
+	if room.is_empty():
 		return {"ok": false, "error": "not_found"}
-	# Already finished: the frozen standings are the source of truth (live member
-	# rows may already be partly deleted as players exit), so don't read them.
-	if String(meta.get("status", "")) == "finished":
-		return {
-			"ok": true, "meta": meta,
-			"standings": _parse_standings(meta),
-			"members": [], "my_member": {}, "i_am_member": false,
-		}
-
-	var members := await _load_members(cid)
-	if String(meta.get("status", "")) == "active":
-		meta = await _finalize_if_ended(cid, meta, members)
-		if String(meta.get("status", "")) == "finished":
-			return {
-				"ok": true, "meta": meta,
-				"standings": _parse_standings(meta),
-				"members": [], "my_member": {}, "i_am_member": false,
-			}
-
-	var my_member := {}
-	for m in members:
-		if String(m.get("uid", "")) == _uid():
-			my_member = m
-			break
-	return {
-		"ok": true, "meta": meta, "members": members,
-		"my_member": my_member, "i_am_member": not my_member.is_empty(),
-		"standings": [],
-	}
+	if String(room.get("creator_uid", "")) != _uid():
+		return {"ok": false, "error": "not_creator"}
+	if String(room.get("status", "")) != "playing":
+		return {"ok": false, "error": "not_active"}
+	var now := _now()
+	await _write_room(cid, {
+		"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+	}, true)
+	room["status"] = "finished"
+	room["finished_at"] = now
+	return {"ok": true, "room": room}
 
 # =====================================================================
-#  MY CONTESTS  (hub list)
+#  STANDINGS
 # =====================================================================
 
-func load_my_contests() -> Array:
-	if _uid().is_empty():
-		return []
-	var mine := await _load_my_memberships()
+# Ordered Array of {uid, name, score, rank, is_me} from a room's players map.
+# Sort: highest score first; tie -> whoever finished earlier; then join order.
+# "left" tombstones and players who never finished sink appropriately.
+func standings_from_room(room: Dictionary) -> Array:
+	var players: Dictionary = room.get("players", {})
+	var arr: Array = []
+	for uid in players:
+		var p: Dictionary = players[uid]
+		if String(p.get("state", "")) == "left":
+			continue
+		arr.append({
+			"uid": uid,
+			"name": String(p.get("name", "Player")),
+			"score": int(p.get("score", 0)),
+			"finished_at": int(p.get("finished_at", 0)),
+			"joined_at": int(p.get("joined_at", 0)),
+		})
+	arr.sort_custom(func(a, b):
+		if a["score"] != b["score"]:
+			return a["score"] > b["score"]
+		var fa := int(a["finished_at"]) if int(a["finished_at"]) > 0 else 0x7FFFFFFF
+		var fb := int(b["finished_at"]) if int(b["finished_at"]) > 0 else 0x7FFFFFFF
+		if fa != fb:
+			return fa < fb
+		return int(a["joined_at"]) < int(b["joined_at"])
+	)
 	var out: Array = []
-	for m in mine:
-		var cid := String(m.get("contest_id", ""))
-		if cid.is_empty():
-			continue
-		var meta := await _load_meta(cid)
-		if meta.is_empty():
-			# Contest gone (deleted/expired) — drop my orphan row.
-			await _delete_member(cid, _uid())
-			continue
+	for i in arr.size():
+		var e: Dictionary = arr[i]
 		out.append({
-			"id": cid,
-			"title": String(meta.get("title", "Contest")),
-			"type": String(meta.get("type", "")),
-			"difficulty": String(meta.get("difficulty", "easy")),
-			"status": String(meta.get("status", "lobby")),
-			"is_creator": String(meta.get("creator_uid", "")) == _uid(),
-			"member_count": int(meta.get("member_count", 1)),
-			"deadline_at": int(meta.get("deadline_at", 0)),
-			"my_state": String(m.get("state", "joined")),
-			"my_done": bool(m.get("done", false)),
-			"my_best": int(m.get("best_score", 0)),
+			"uid": e["uid"], "name": e["name"], "score": e["score"],
+			"rank": i + 1, "is_me": String(e["uid"]) == _uid(),
 		})
 	return out
 
 # =====================================================================
-#  BROWSE LOBBY  (public, still-in-lobby contests)
+#  LOAD / LIVE WATCH
 # =====================================================================
 
-# Up to LOBBY_FETCH public contests that are open (status == lobby) and not yet
-# started, chosen (pseudo-)randomly with a SINGLE cheap read.
-#
-# How the randomness is cheap: every public lobby contest owns a uniform random
-# `lobby_key` in [0,1). We pick a random pivot and fetch the next slice ascending
-# from it (`lobby_key >= pivot`, ordered, limited). That's one ranged query on a
-# single auto-indexed field — no per-contest reads, no composite index. Each
-# "Reshuffle" is just a new pivot => a fresh random slice. If the pivot lands high
-# in the key space the slice can be short; that's fine (the screen re-rolls), and
-# it's the price of honouring the one-read constraint.
-#
-# Each row is returned already-decoded from the query result, so the caller shows
-# title / mode / difficulty / member_count without spending another read.
+# One-shot fetch of a room's current state (shaped, or {} if gone). Screens use it
+# for an immediate paint; watch_room() then keeps it live.
+func load_room(cid: String) -> Dictionary:
+	return await _load_room(cid)
+
+# Attach a live listener for `cid`. Fires room_changed(cid, room) with the current
+# state immediately and on every subsequent change (an empty room = deleted).
+func watch_room(cid: String) -> void:
+	if cid.is_empty():
+		return
+	_watching[cid] = true
+	if _is_editor:
+		call_deferred("_sim_emit", cid)
+	else:
+		Firebase.firestore.listen_to_document(_COLL + "/" + cid)
+
+func unwatch_room(cid: String) -> void:
+	if not _watching.has(cid):
+		return
+	_watching.erase(cid)
+	if not _is_editor:
+		Firebase.firestore.stop_listening_to_document(_COLL + "/" + cid)
+
+# Android live-listener callback. `data` is the changed document (decoded by the
+# plugin, or REST-style with a "fields" wrapper). An empty / identity-less payload
+# means the doc was deleted.
+func _on_document_changed(document_path: String, data: Dictionary) -> void:
+	var prefix := _COLL + "/"
+	var cid := document_path
+	if document_path.begins_with(prefix):
+		cid = document_path.substr(prefix.length())
+	if not _watching.has(cid):
+		return
+	var raw: Dictionary = data
+	if data.has("fields"):
+		raw = _fields(data["fields"])
+	if raw.is_empty() or not raw.has("creator_uid"):
+		emit_signal("room_changed", cid, {})   # deleted / gone
+		return
+	emit_signal("room_changed", cid, _shape_room(raw, cid))
+
+# Editor-sim emit for a watched room.
+func _sim_emit(cid: String) -> void:
+	if not _watching.has(cid):
+		return
+	var r: Variant = _sim_rooms.get(cid, null)
+	emit_signal("room_changed", cid, _shape_room(r, cid) if r is Dictionary else {})
+
+# Called after every sim write so watchers see the change live.
+func _sim_touch(cid: String) -> void:
+	if _watching.has(cid):
+		_sim_emit(cid)
+
+# =====================================================================
+#  BROWSE LOBBY  (public, still-in-lobby rooms)
+# =====================================================================
+
+# Up to LOBBY_FETCH public rooms that are open (status == lobby), chosen
+# (pseudo-)randomly with a SINGLE cheap ranged read on `lobby_key`. Each row is
+# returned already-decoded so the screen shows title / difficulty / member_count
+# without another read.
 func load_lobby_contests() -> Array:
 	var pivot := randf()
 	var rows: Array
@@ -490,256 +525,33 @@ func load_lobby_contests() -> Array:
 		rows = _sim_lobby(pivot)
 	else:
 		rows = await _rest_query_lobby(pivot)
-	# Defensive client-side filter: only truly-open public rooms (guards races where a
-	# contest started between indexing and our read).
 	var out: Array = []
-	for meta in rows:
-		if not (meta is Dictionary):
+	for raw in rows:
+		if not (raw is Dictionary):
 			continue
-		if String(meta.get("status", "")) != "lobby":
+		if String(raw.get("status", "")) != "lobby":
 			continue
-		if not bool(meta.get("is_public", false)):
+		if not bool(raw.get("is_public", false)):
 			continue
 		out.append({
-			"id": String(meta.get("id", "")),
-			"title": String(meta.get("title", "Contest")),
-			"type": String(meta.get("type", "")),
-			"difficulty": String(meta.get("difficulty", "easy")),
-			"member_count": int(meta.get("member_count", 1)),
-			"is_creator": String(meta.get("creator_uid", "")) == _uid(),
+			"id": String(raw.get("id", "")),
+			"title": String(raw.get("title", "Contest")),
+			"difficulty": String(raw.get("difficulty", "easy")),
+			"member_count": int(raw.get("member_count", 1)),
+			"is_creator": String(raw.get("creator_uid", "")) == _uid(),
 		})
 	return out
 
 func _sim_lobby(pivot: float) -> Array:
 	var out: Array = []
-	for cid in _sim_contests:
-		var m: Dictionary = _sim_contests[cid]
+	for cid in _sim_rooms:
+		var m: Dictionary = _sim_rooms[cid]
 		if not m.has("lobby_key"):
 			continue
 		if float(m.get("lobby_key", -1.0)) >= pivot:
 			out.append(m.duplicate(true))
 	out.sort_custom(func(a, b): return float(a.get("lobby_key", 0.0)) < float(b.get("lobby_key", 0.0)))
 	return out.slice(0, LOBBY_FETCH)
-
-# =====================================================================
-#  KICK / FINALIZE-NOW  (creator)
-# =====================================================================
-
-func kick_member(cid: String, target_uid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
-		return {"ok": false, "error": "not_found"}
-	if String(meta.get("creator_uid", "")) != _uid():
-		return {"ok": false, "error": "not_creator"}
-	if target_uid == _uid():
-		return {"ok": false, "error": "cant_kick_self"}
-	await _delete_member(cid, target_uid)
-	var members := await _load_members(cid)
-	await _write_contest(cid, {"member_count": members.size()}, true)
-	emit_signal("contest_updated", cid)
-	return {"ok": true}
-
-# Creator forces a one_game (or any) contest to end now with current scores.
-func finalize_now(cid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
-		return {"ok": false, "error": "not_found"}
-	if String(meta.get("creator_uid", "")) != _uid():
-		return {"ok": false, "error": "not_creator"}
-	if String(meta.get("status", "")) != "active":
-		return {"ok": false, "error": "not_active"}
-	var members := await _load_members(cid)
-	meta = await _do_finalize(cid, meta, members)
-	emit_signal("contest_updated", cid)
-	return {"ok": true, "meta": meta}
-
-# Creator explicitly deletes the whole contest (any status). Tears down every
-# member row first (each rule-allowed as the creator), then the contest doc.
-# member_count is dropped to 0 before the contest delete so the rule's
-# empty-delete path also covers us if the creator lookup is momentarily stale.
-func delete_contest(cid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
-		await _delete_member(cid, _uid())
-		emit_signal("my_contests_changed")
-		return {"ok": true}
-	if String(meta.get("creator_uid", "")) != _uid():
-		return {"ok": false, "error": "not_creator"}
-	var members := await _load_members(cid)
-	for m in members:
-		await _delete_member(cid, String(m.get("uid", "")))
-	await _write_contest(cid, {"member_count": 0}, true)
-	await _delete_contest(cid)
-	emit_signal("my_contests_changed")
-	emit_signal("contest_updated", cid)
-	return {"ok": true}
-
-# =====================================================================
-#  LEAVE  (+ cleanup / deletion)
-# =====================================================================
-
-func leave_contest(cid: String) -> void:
-	var meta := await _load_meta(cid)
-	if meta.is_empty():
-		# Already gone — nothing to leave; drop any orphan row.
-		await _delete_member(cid, _uid())
-		emit_signal("my_contests_changed")
-		return
-
-	var is_creator := String(meta.get("creator_uid", "")) == _uid()
-	var status := String(meta.get("status", ""))
-
-	# Creator leaving a live/lobby contest cancels it for everyone.
-	if is_creator and status != "finished":
-		if status == "lobby":
-			# Tear the whole contest down (members self-heal their orphan rows).
-			var members_l := await _load_members(cid)
-			for m in members_l:
-				await _delete_member(cid, String(m.get("uid", "")))
-			await _delete_contest(cid)
-			emit_signal("my_contests_changed")
-			emit_signal("contest_updated", cid)
-			return
-		else:
-			# Active: freeze standings first so far-along members still get a
-			# podium, then fall through to a normal member-leave below.
-			var members_f := await _load_members(cid)
-			meta = await _do_finalize(cid, meta, members_f)
-
-	# Normal member leave.
-	await _delete_member(cid, _uid())
-	var members := await _load_members(cid)
-	# Always publish the new count FIRST (even 0). The contest-delete rule keys on
-	# member_count <= 0, so a non-creator last-leaver must lower it before the
-	# delete, or the delete would be denied.
-	await _write_contest(cid, {
-		"member_count": members.size(),
-		"expires_at": _expires_iso(_now()),
-	}, true)
-	if members.is_empty():
-		await _delete_contest(cid)
-	emit_signal("my_contests_changed")
-	emit_signal("contest_updated", cid)
-
-# =====================================================================
-#  FINALIZATION
-# =====================================================================
-
-# Finalizes only if the end condition is met; otherwise returns meta unchanged.
-func maybe_finalize(cid: String) -> Dictionary:
-	var meta := await _load_meta(cid)
-	if meta.is_empty() or String(meta.get("status", "")) != "active":
-		return meta
-	var members := await _load_members(cid)
-	return await _finalize_if_ended(cid, meta, members)
-
-func _finalize_if_ended(cid: String, meta: Dictionary, members: Array) -> Dictionary:
-	if meta.is_empty() or String(meta.get("status", "")) != "active":
-		return meta
-	var type := String(meta.get("type", ""))
-	var ended := false
-	if type == "one_game":
-		if members.size() > 0:
-			ended = true
-			for m in members:
-				if not bool(m.get("done", false)):
-					ended = false
-					break
-	else:
-		var deadline := int(meta.get("deadline_at", 0))
-		var now := _now()
-		if deadline > 0 and now >= deadline:
-			var any_in_progress := false
-			for m in members:
-				if String(m.get("state", "")) == "in_progress":
-					any_in_progress = true
-					break
-			ended = (not any_in_progress) or (now >= deadline + GRACE_SECS)
-	if not ended:
-		return meta
-	return await _do_finalize(cid, meta, members)
-
-# Writes the frozen result. Idempotent + deterministic, so two clients racing to
-# finalize converge on the same standings.
-func _do_finalize(cid: String, meta: Dictionary, members: Array) -> Dictionary:
-	var ranked := _rank_members(members)
-	var standings := {}
-	for i in ranked.size():
-		var m: Dictionary = ranked[i]
-		standings[str(i + 1)] = {
-			"uid": String(m.get("uid", "")),
-			"name": String(m.get("name", "Player")),
-			"score": int(m.get("best_score", 0)),
-			"games": int(m.get("games_played", 0)),
-		}
-	var now := _now()
-	var patch := {
-		"status": "finished", "finished_at": now,
-		"standings": standings, "expires_at": _expires_iso(now),
-	}
-	await _write_contest(cid, patch, true)
-	var out := meta.duplicate(true)
-	for k in patch:
-		out[k] = patch[k]
-	return out
-
-# Sort: highest score first; tie -> whoever reached it earlier; then join order.
-# Members who never played (best 0 / last_played 0) sink to the bottom.
-func _rank_members(members: Array) -> Array:
-	var arr := members.duplicate(true)
-	arr.sort_custom(func(a, b):
-		var sa := int(a.get("best_score", 0))
-		var sb := int(b.get("best_score", 0))
-		if sa != sb:
-			return sa > sb
-		var la := int(a.get("last_played_at", 0))
-		var lb := int(b.get("last_played_at", 0))
-		var na := la if la > 0 else 0x7FFFFFFF
-		var nb := lb if lb > 0 else 0x7FFFFFFF
-		if na != nb:
-			return na < nb
-		return int(a.get("joined_at", 0)) < int(b.get("joined_at", 0))
-	)
-	return arr
-
-# Frozen standings (meta.standings map) -> ordered Array of
-# {uid, name, score, games, rank, is_me}.
-func _parse_standings(meta: Dictionary) -> Array:
-	var raw: Variant = meta.get("standings", {})
-	var out: Array = []
-	if not (raw is Dictionary):
-		return out
-	var keys := (raw as Dictionary).keys()
-	keys.sort_custom(func(a, b): return int(a) < int(b))
-	for k in keys:
-		var e: Dictionary = raw[k]
-		out.append({
-			"uid": String(e.get("uid", "")),
-			"name": String(e.get("name", "Player")),
-			"score": int(e.get("score", 0)),
-			"games": int(e.get("games", 0)),
-			"rank": int(k),
-			"is_me": String(e.get("uid", "")) == _uid(),
-		})
-	return out
-
-# =====================================================================
-#  RENAME PROPAGATION
-# =====================================================================
-
-# Keep my name fresh on my active member rows (mirrors LeaderboardManager's
-# rename propagation). Rare event, so a handful of writes is fine.
-func _on_display_name_changed(new_name: String) -> void:
-	if _uid().is_empty() or new_name.is_empty():
-		return
-	var mine := await _load_my_memberships()
-	for m in mine:
-		var cid := String(m.get("contest_id", ""))
-		if cid.is_empty():
-			continue
-		await _write_member(cid, {
-			"contest_id": cid, "uid": _uid(), "name": new_name,
-		}, true)
 
 # =====================================================================
 #  ID helpers
@@ -763,86 +575,95 @@ func _valid_id(cid: String) -> bool:
 #  STORAGE ADAPTER  (editor sim  <->  live Firestore)
 # =====================================================================
 
-func _contest_exists(cid: String) -> bool:
+func _room_exists(cid: String) -> bool:
 	if _is_editor:
-		return _sim_contests.has(cid)
+		return _sim_rooms.has(cid)
 	var r := await _rest_get(_COLL, cid)
 	return bool(r.get("exists", false))
 
-func _load_meta(cid: String) -> Dictionary:
+func _load_room(cid: String) -> Dictionary:
 	if not _valid_id(cid):
 		return {}
 	if _is_editor:
-		var m: Variant = _sim_contests.get(cid, null)
-		return (m as Dictionary).duplicate(true) if m is Dictionary else {}
-	var r := await _rest_get(_COLL, cid)
-	if not bool(r.get("exists", false)):
+		var r: Variant = _sim_rooms.get(cid, null)
+		return _shape_room(r, cid) if r is Dictionary else {}
+	var res := await _rest_get(_COLL, cid)
+	if not bool(res.get("exists", false)):
 		return {}
-	return r.get("data", {})
+	return _shape_room(res.get("data", {}), cid)
 
-func _load_members(cid: String) -> Array:
+# Merge-write on the room doc. In the sim, `merge` deep-merges (including a nested
+# `players` map) so a partial write never drops sibling fields/players.
+func _write_room(cid: String, data: Dictionary, merge: bool) -> void:
 	if _is_editor:
-		var out: Array = []
-		for key in _sim_members:
-			var m: Dictionary = _sim_members[key]
-			if String(m.get("contest_id", "")) == cid:
-				out.append(m.duplicate(true))
-		return out
-	return await _rest_query_members("contest_id", cid)
-
-func _load_my_memberships() -> Array:
-	if _uid().is_empty():
-		return []
-	if _is_editor:
-		var out: Array = []
-		for key in _sim_members:
-			var m: Dictionary = _sim_members[key]
-			if String(m.get("uid", "")) == _uid():
-				out.append(m.duplicate(true))
-		return out
-	return await _rest_query_members("uid", _uid())
-
-func _write_contest(cid: String, data: Dictionary, merge: bool) -> void:
-	if _is_editor:
-		var cur: Dictionary = _sim_contests.get(cid, {})
-		if merge and not cur.is_empty():
+		if merge and _sim_rooms.has(cid):
+			var room: Dictionary = _sim_rooms[cid]
 			for k in data:
-				cur[k] = data[k]
-			_sim_contests[cid] = cur
+				if k == "players" and room.has("players") and data["players"] is Dictionary:
+					for uid in data["players"]:
+						var cur: Dictionary = room["players"].get(uid, {})
+						for kk in data["players"][uid]:
+							cur[kk] = data["players"][uid][kk]
+						room["players"][uid] = cur
+				else:
+					room[k] = data[k]
+			_sim_rooms[cid] = room
 		else:
-			_sim_contests[cid] = data.duplicate(true)
+			_sim_rooms[cid] = data.duplicate(true)
+		_sim_touch(cid)
 		return
 	Firebase.firestore.set_document(_COLL, cid, data, merge)
 	await Firebase.firestore.write_task_completed
 
-func _write_member(cid: String, data: Dictionary, merge: bool = false) -> void:
-	var doc_id := _member_id(cid, String(data.get("uid", _uid())))
-	if _is_editor:
-		var cur: Dictionary = _sim_members.get(doc_id, {})
-		if merge and not cur.is_empty():
-			for k in data:
-				cur[k] = data[k]
-			_sim_members[doc_id] = cur
-		else:
-			_sim_members[doc_id] = data.duplicate(true)
-		return
-	Firebase.firestore.set_document(_MEMBERS, doc_id, data, merge)
-	await Firebase.firestore.write_task_completed
+# Merge-write a single player's record (only touches players.<uid>).
+func _write_player(cid: String, uid: String, rec: Dictionary) -> void:
+	await _write_room(cid, {"players": {uid: rec}}, true)
 
-func _delete_member(cid: String, uid: String) -> void:
-	var doc_id := _member_id(cid, uid)
+func _delete_room(cid: String) -> void:
 	if _is_editor:
-		_sim_members.erase(doc_id)
-		return
-	Firebase.firestore.delete_document(_MEMBERS, doc_id)
-	await Firebase.firestore.delete_task_completed
-
-func _delete_contest(cid: String) -> void:
-	if _is_editor:
-		_sim_contests.erase(cid)
+		_sim_rooms.erase(cid)
+		if _watching.has(cid):
+			emit_signal("room_changed", cid, {})
 		return
 	Firebase.firestore.delete_document(_COLL, cid)
 	await Firebase.firestore.delete_task_completed
+
+# Normalize a raw room (sim dict or REST-decoded) into a guaranteed-key shape so
+# screens never have to guard missing/mistyped fields. Returns {} for null.
+func _shape_room(raw: Variant, cid: String) -> Dictionary:
+	if not (raw is Dictionary):
+		return {}
+	var src: Dictionary = raw
+	var players_raw: Variant = src.get("players", {})
+	var players: Dictionary = {}
+	if players_raw is Dictionary:
+		for uid in players_raw:
+			var p: Variant = players_raw[uid]
+			if not (p is Dictionary):
+				continue
+			players[uid] = {
+				"name": String(p.get("name", "Player")),
+				"is_creator": bool(p.get("is_creator", false)),
+				"joined_at": int(p.get("joined_at", 0)),
+				"state": String(p.get("state", "lobby")),
+				"score": int(p.get("score", 0)),
+				"finished_at": int(p.get("finished_at", 0)),
+			}
+	return {
+		"id": cid,
+		"title": String(src.get("title", "Contest")),
+		"creator_uid": String(src.get("creator_uid", "")),
+		"creator_name": String(src.get("creator_name", "")),
+		"difficulty": String(src.get("difficulty", "easy")),
+		"is_public": bool(src.get("is_public", false)),
+		"status": String(src.get("status", "lobby")),
+		"seed": int(src.get("seed", 0)),
+		"member_count": int(src.get("member_count", players.size())),
+		"created_at": int(src.get("created_at", 0)),
+		"started_at": int(src.get("started_at", 0)),
+		"finished_at": int(src.get("finished_at", 0)),
+		"players": players,
+	}
 
 # =====================================================================
 #  REST (public reads)  — copied pattern from LeaderboardManager
@@ -881,41 +702,10 @@ func _rest_get(collection: String, doc_id: String) -> Dictionary:
 		return {"exists": false}
 	return {"exists": true, "data": _fields(j.data.get("fields", {}))}
 
-# runQuery on contest_members with a single equality filter (auto-indexed; no
-# composite index needed). Returns Array of decoded member dicts.
-func _rest_query_members(field: String, value: String) -> Array:
-	var body := {"structuredQuery": {
-		"from": [{"collectionId": _MEMBERS}],
-		"where": {"fieldFilter": {
-			"field": {"fieldPath": field},
-			"op": "EQUAL",
-			"value": {"stringValue": value},
-		}},
-		"limit": MAX_MEMBERS,
-	}}
-	for attempt in 3:
-		var r := await _http_post(_FB_BASE + ":runQuery", body)
-		if r[1] == 200:
-			var j := JSON.new()
-			j.parse((r[3] as PackedByteArray).get_string_from_utf8())
-			var out: Array = []
-			if j.data is Array:
-				for env in j.data:
-					if not (env is Dictionary):
-						continue
-					var doc: Variant = env.get("document", null)
-					if not (doc is Dictionary):
-						continue
-					out.append(_fields(doc.get("fields", {})))
-			return out
-		if attempt < 2:
-			await get_tree().create_timer(1.0).timeout
-	return []
-
 # runQuery on contests: a single ranged query for public lobby rooms. Filters on
 # `lobby_key >= pivot` and orders by it (one auto-indexed field, no composite index
-# needed — private/started contests carry no in-range key, so they're excluded).
-# Returns Array of decoded contest metas (id folded in from the doc name).
+# — private/started rooms carry no in-range key, so they're excluded). Returns
+# Array of decoded room dicts (id folded in from the doc name is already a field).
 func _rest_query_lobby(pivot: float) -> Array:
 	var body := {"structuredQuery": {
 		"from": [{"collectionId": _COLL}],

@@ -158,27 +158,23 @@ service cloud.firestore {
                 && request.resource.data.last_daily_reward_date.size() <= 10));
     }
 
-    // ---- Arena contests ----------------------------------------------------
-    // There is no server (no Cloud Functions), so finalization/standings are
-    // written by clients. Rules bound what they can (types, enums, counts, the
-    // status transition space, per-user row ownership); the score/standings
-    // values themselves are trusted, exactly like the leaderboard scores above.
+    // ---- Arena rooms -------------------------------------------------------
+    // There is no server (no Cloud Functions), and the Android Firebase plugin
+    // can only listen to a SINGLE document — so an entire room (lobby -> race ->
+    // results) lives in ONE doc and every client attaches a document listener to
+    // it. Each client merge-writes only its own entry under `players.<uid>`.
     //
-    // contests/{CID}                -> meta (public read; short random ID is the
-    //                                  share token). expires_at is the TTL field.
-    // contest_members/{CID__uid}    -> one row per participant. Each user writes
-    //                                  only their own row; the creator may delete
-    //                                  any row (kick). expires_at is the TTL field.
+    // contests/{CID} -> { creator_uid, difficulty, is_public, status, seed,
+    //                     member_count, players:{ uid:{ name, state, score, ... } },
+    //                     ... } ; expires_at is the TTL field.
+    //
+    // Trust model: scores/standings are client-trusted (same posture as the
+    // leaderboards above). Rules bound STRUCTURE only — immutable identity fields,
+    // the status enum, member_count range, players is a bounded map, and the
+    // writer must appear in the resulting players map. A shared room doc cannot be
+    // defended key-by-key, which is an accepted, pre-existing trade-off.
 
-    function contestData(cid) {
-      return get(/databases/$(database)/documents/contests/$(cid)).data;
-    }
-    function memberScoreOk() {
-      return request.resource.data.best_score is int
-          && request.resource.data.best_score >= 0
-          && request.resource.data.best_score <= 9999;
-    }
-    // Player-authored contest title: validated only when present so merge writes
+    // Player-authored room title: validated only when present so merge writes
     // (member_count bumps, start, finalize) don't have to resend it.
     function titleOk() {
       return !('title' in request.resource.data)
@@ -187,14 +183,26 @@ service cloud.firestore {
               && request.resource.data.title.size() <= 15);
     }
     // Lobby discoverability fields (validated only when present, so merge writes
-    // that don't touch them still pass). `is_public` marks a contest listed in the
-    // browse-lobby; `lobby_key` is the uniform random sort key the lobby query ranges
-    // over (public+lobby only; started contests drop it below the [0,1) range).
+    // that don't touch them still pass). `is_public` marks a room listed in the
+    // browse-lobby; `lobby_key` is the uniform random sort key the lobby query
+    // ranges over (public+lobby only; started rooms drop it below the [0,1) range).
     function lobbyFieldsOk() {
       return (!('is_public' in request.resource.data)
               || request.resource.data.is_public is bool)
           && (!('lobby_key' in request.resource.data)
               || request.resource.data.lobby_key is number);
+    }
+    // The players roster is a map capped at the room size; validated only when
+    // present so writes that don't touch it (e.g. member_count bump) still pass.
+    function playersOk() {
+      return !('players' in request.resource.data)
+          || (request.resource.data.players is map
+              && request.resource.data.players.size() <= 45);
+    }
+    // `seed` (shared RNG for the race) is an int when present.
+    function seedOk() {
+      return !('seed' in request.resource.data)
+          || request.resource.data.seed is int;
     }
 
     match /contests/{cid} {
@@ -203,55 +211,33 @@ service cloud.firestore {
       allow create: if request.auth != null
         && request.resource.data.creator_uid == request.auth.uid
         && request.resource.data.status == 'lobby'
-        && request.resource.data.type in ['one_game', 'one_hour', 'one_day', 'daily']
         && request.resource.data.difficulty in ['easy', 'moderate', 'hard']
         && request.resource.data.member_count is int
-        && titleOk()
-        && lobbyFieldsOk();
+        && playersOk() && seedOk()
+        && titleOk() && lobbyFieldsOk();
 
-      // Any signed-in participant may update the meta (join bumps member_count;
-      // the creator starts it; anyone may write the finalized standings). The
-      // immutable identity fields must not change, member_count stays in range,
-      // and status only ever sits in the known set.
+      // Any signed-in participant may update the room (join adds their player key;
+      // the creator starts it and stamps the seed; anyone racing writes their own
+      // score; whoever observes all-done writes status:finished). Immutable identity
+      // fields must not change, status stays in the known set, member_count stays in
+      // range, and the writer must appear in the resulting players map.
       allow update: if request.auth != null
         && request.resource.data.creator_uid == resource.data.creator_uid
-        && request.resource.data.type == resource.data.type
         && request.resource.data.difficulty == resource.data.difficulty
-        && request.resource.data.status in ['lobby', 'active', 'finished']
+        && request.resource.data.status in ['lobby', 'playing', 'finished']
         && request.resource.data.member_count is int
         && request.resource.data.member_count >= 0
         && request.resource.data.member_count <= 45
-        && titleOk()
-        && lobbyFieldsOk();
+        && request.auth.uid in request.resource.data.players
+        && playersOk() && seedOk()
+        && titleOk() && lobbyFieldsOk();
 
-      // The creator can delete anytime (cancel); anyone can delete an empty
-      // contest (last member out). member_count is lowered to 0 before that
-      // delete, so the empty-delete path is reachable by a non-creator.
+      // The creator can delete anytime (cancel); anyone can delete an empty room
+      // (last member out). member_count is lowered to 0 before that delete, so the
+      // empty-delete path is reachable by a non-creator.
       allow delete: if request.auth != null
         && (resource.data.creator_uid == request.auth.uid
             || resource.data.member_count <= 0);
-    }
-
-    match /contest_members/{docId} {
-      allow read: if true;
-
-      allow create: if request.auth != null
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.contest_id is string
-        && memberScoreOk();
-
-      // Only the owner edits their own row; best_score stays sane.
-      allow update: if request.auth != null
-        && resource.data.uid == request.auth.uid
-        && request.resource.data.uid == request.auth.uid
-        && memberScoreOk();
-
-      // Owner leaves, OR the contest's creator kicks. The creator lookup only
-      // runs for a non-owner delete (|| short-circuits) so a normal self-leave
-      // never depends on the contest doc still existing.
-      allow delete: if request.auth != null
-        && (resource.data.uid == request.auth.uid
-            || request.auth.uid == contestData(resource.data.contest_id).creator_uid);
     }
   }
 }

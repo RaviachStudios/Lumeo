@@ -81,8 +81,7 @@ func sign_out_user() -> void:
 func delete_account() -> Dictionary:
 	if not is_signed_in():
 		return {"ok": false, "error": "not_signed_in"}
-	for c in await ContestManager.load_my_contests():
-		await ContestManager.leave_contest(String(c.get("id", "")))
+	await ContestManager.leave_all()
 	await LeaderboardManager.delete_all_my_rows()
 	await CoinsManager.delete_wallet_doc()
 

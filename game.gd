@@ -48,9 +48,19 @@ var _coin_lbl: Label
 var _coin_icon: Control
 var _earn_indicator: Label
 
+# Arena race extras (only active when _is_contest).
+const PRESS_LIMIT := 10.0          # seconds allowed to make each next press
+var _rng := RandomNumberGenerator.new()   # room-seeded so all racers share the sequence
+var _press_active := false          # is the per-press timer currently counting?
+var _press_deadline := 0.0          # ticks-seconds by which the next press must land
+var _countdown_lbl: Label           # big side 3-2-1 shown in the final seconds
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_is_contest = GameState.contest_context.has("id")
+	# Seed the sequence RNG from the room so every racer sees the identical pattern.
+	if _is_contest:
+		_rng.seed = int(GameState.contest_context.get("seed", 0))
 	num_buttons = GameState.num_colors
 	flash_time = GameState.flash_time
 	flash_gap = GameState.flash_gap
@@ -71,6 +81,20 @@ func _process(_dt: float) -> void:
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
 		_watch_ad_btn.visible = AdManager.rewarded_ready
+	# Arena race: per-press 10s window with a 3-2-1 side countdown; miss it -> over.
+	if _is_contest and _press_active and _state == "input":
+		var remaining := _press_deadline - _now_secs()
+		if remaining <= 0.0:
+			_on_press_timeout()
+		elif remaining <= 3.0:
+			if _countdown_lbl:
+				_countdown_lbl.visible = true
+				_countdown_lbl.text = str(int(ceil(remaining)))
+		elif _countdown_lbl:
+			_countdown_lbl.visible = false
+
+func _now_secs() -> float:
+	return Time.get_ticks_msec() / 1000.0
 
 func _draw() -> void:
 	# When a shop theme is equipped, BackgroundManager fills the viewport;
@@ -98,6 +122,14 @@ func _layout_wheel() -> void:
 	# Raise the wheel a little now that the coins HUD has moved out of the top
 	# centre — fills the space the balance pill used to occupy.
 	_wheel.position = Vector2((sz.x - s) * 0.5, (sz.y - s) * 0.5 - sz.y * 0.07)
+	_layout_countdown(sz)
+
+# Position the big 3-2-1 side countdown on the right edge, vertically centred.
+func _layout_countdown(sz: Vector2) -> void:
+	if _countdown_lbl == null:
+		return
+	_countdown_lbl.size = Vector2(140, 140)
+	_countdown_lbl.position = Vector2(sz.x - 160.0, sz.y * 0.5 - 70.0)
 
 # Apply the player's equipped Simon customization (shop "SIMON" tab or SPECIAL
 # SKINS tab) to the wheel. CoinsManager is already loaded by the time a game
@@ -191,6 +223,21 @@ func _build_hud() -> void:
 	if FirebaseManager.is_signed_in():
 		_build_coin_hud(sz)
 	_build_quit_dialog(sz)
+
+	# Arena race: a big glowing 3-2-1 that appears on the side in the last 3s of a
+	# press window. Hidden by default; _process toggles + updates it.
+	if _is_contest:
+		_countdown_lbl = Label.new()
+		_countdown_lbl.add_theme_font_size_override("font_size", 96)
+		_countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+		_countdown_lbl.add_theme_color_override("font_outline_color", Color(0.3, 0.08, 0.0))
+		_countdown_lbl.add_theme_constant_override("outline_size", 10)
+		_countdown_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_countdown_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_countdown_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_countdown_lbl.visible = false
+		add_child(_countdown_lbl)
+		_layout_countdown(sz)
 
 # Modern rounded-glass button: dark translucent body, a soft accent rim/glow and
 # light label. Replaces the old flat fills on the gameplay HUD buttons.
@@ -410,10 +457,17 @@ func _start_game() -> void:
 	_update_hud()
 	_next_round()
 
+# Next colour in the sequence. Arena races draw from a room-seeded RNG so every
+# player sees the identical pattern; solo play stays fully random.
+func _next_color() -> int:
+	if _is_contest:
+		return _rng.randi() % num_buttons
+	return randi() % num_buttons
+
 func _next_round() -> void:
 	level += 1
 	player_seq = []
-	sequence.append(randi() % num_buttons)
+	sequence.append(_next_color())
 	flash_time = maxf(0.18, GameState.flash_time - (level - 1) * speed_inc)
 	flash_gap = maxf(0.08, GameState.flash_gap - (level - 1) * speed_inc * 0.5)
 	_update_hud()
@@ -435,6 +489,7 @@ func _next_round() -> void:
 	await _play_sequence()
 	_state = "input"
 	_set_status("Your turn!")
+	_arm_press_timer()
 
 # True when the equipped Simon look is the Volcano ("inferno") special skin — the
 # same resolution _apply_simon_skin uses (a manual per-part look never counts).
@@ -720,6 +775,7 @@ func _player_pressed(idx: int) -> void:
 	player_seq.append(idx)
 	var step := player_seq.size() - 1
 	if player_seq[step] != sequence[step]:
+		_disarm_press_timer()
 		_state = "showing"
 		var correct := sequence[step]
 		_set_status("The correct button was...")
@@ -729,7 +785,11 @@ func _player_pressed(idx: int) -> void:
 			await get_tree().create_timer(0.14).timeout
 		_game_over()
 		return
+	if player_seq.size() != sequence.size():
+		# Correct, but more presses to go — reset the per-press window.
+		_arm_press_timer()
 	if player_seq.size() == sequence.size():
+		_disarm_press_timer()
 		_state = "idle"
 		_set_status("Correct! Get ready...")
 		# Award coins for this completed level and float a "+ N" indicator
@@ -787,13 +847,14 @@ func _on_replay() -> void:
 	await _play_sequence()
 	_state = "input"
 	_set_status("Your turn!")
+	_arm_press_timer()
 
 func _on_quit() -> void:
 	get_node("QuitDialog").visible = true
 
-# "Yes" in the quit dialog. Normal play → home. Contest play → forfeit, which
-# runs the normal game-over flow so the current score is recorded for the
-# contest (game_over.gd sees GameState.contest_context and routes back).
+# "Yes" in the quit dialog. Normal play → home. Race play → forfeit, which runs
+# the game-over flow so the current score is submitted to the room and we route
+# back to the live room (see _game_over's _is_contest branch).
 func _on_quit_confirmed() -> void:
 	get_node("QuitDialog").visible = false
 	if _is_contest:
@@ -816,12 +877,61 @@ func _replay_after_countdown() -> void:
 	_state = "input"
 	_on_replay()
 
+# Arm the per-press countdown (Arena races only). Resets the 10s window to now.
+func _arm_press_timer() -> void:
+	if not _is_contest:
+		return
+	_press_active = true
+	_press_deadline = _now_secs() + PRESS_LIMIT
+	if _countdown_lbl:
+		_countdown_lbl.visible = false
+
+func _disarm_press_timer() -> void:
+	_press_active = false
+	if _countdown_lbl:
+		_countdown_lbl.visible = false
+
+# The 10s window elapsed before the player pressed — flash the button they missed,
+# then end the game (counts exactly like a wrong press at this step).
+func _on_press_timeout() -> void:
+	_disarm_press_timer()
+	if _state != "input":
+		return
+	_state = "showing"
+	var step := player_seq.size()
+	var correct := sequence[step] if step < sequence.size() else -1
+	_set_status("Time's up!")
+	await get_tree().create_timer(0.35).timeout
+	if correct >= 0:
+		for _i in 3:
+			await _flash(correct, 0.28)
+			await get_tree().create_timer(0.14).timeout
+	_game_over()
+
 func _game_over() -> void:
 	_state = "gameover"
+	_disarm_press_timer()
 	# Bank the coins earned this session into the persistent wallet.
 	CoinsManager.commit_session()
 	AudioManager.play_lose_sound()
 	_set_status("Game Over!")
+	# Arena race: record this attempt (rounds cleared = level - 1) on the room and
+	# hand back to the live room, which shows the results/waiting board then the
+	# final leaderboard once everyone's done. No replay — single attempt.
+	if _is_contest:
+		var ctx := GameState.contest_context.duplicate()
+		GameState.contest_context = {}   # clear so a later normal game can't inherit it
+		var cid := String(ctx.get("id", ""))
+		# Race games still count toward engagement/score badges (they don't touch the
+		# solo global/daily leaderboards — the timed race is its own mode).
+		BadgeManager.note_game_played(GameState.difficulty)
+		BadgeManager.note_score(GameState.difficulty, level - 1)
+		await get_tree().create_timer(1.2).timeout
+		await ContestManager.submit_result(cid, level - 1)
+		if not is_inside_tree():
+			return
+		game_manager.show_contest_detail(cid)
+		return
 	# Skip the post-game interstitial for players who bought the remove-ads
 	# entitlement. Rewarded ads (the in-game "watch ad to replay" button) are
 	# user-initiated and unaffected — the purchase only suppresses ads we'd
