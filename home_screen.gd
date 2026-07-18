@@ -1225,6 +1225,13 @@ func _draw_trophy(c: Control, bc: Vector2) -> void:
 	var bh := cup_bot - cup_top
 	var rw := 34.0   # rim half-width
 	var bw := 9.0    # base half-width
+
+	# Handles go down first, with their roots buried inside the bowl's silhouette;
+	# the cup is then painted over them, so each ear emerges from behind the metal
+	# instead of butting against it.
+	_draw_handle(c, bc.x, cup_top, bh, rw, bw, -1.0, g_edge, g_md, g_hi)
+	_draw_handle(c, bc.x, cup_top, bh, rw, bw, 1.0, g_edge, g_md.darkened(0.12), g_lt)
+
 	var rows := 22
 	for i in rows:
 		var t0 := float(i) / float(rows)
@@ -1259,10 +1266,6 @@ func _draw_trophy(c: Control, bc: Vector2) -> void:
 	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, cup_top - 1.0), 25, 5.5),
 		g_edge.darkened(0.25))
 
-	# --- rounded tube handles (ear-shaped, rooted to the tapering bowl) ---
-	_draw_handle(c, bc.x, cup_top, bh, rw, bw, -1.0, g_dk, g_lt)
-	_draw_handle(c, bc.x, cup_top, bh, rw, bw, 1.0, g_dk, g_lt)
-
 	# --- deluxe star glints ---
 	_star4(c, Vector2(bc.x + 27, cup_top + 1), 6.0, Color(1, 1, 1, 0.90))
 	_star4(c, Vector2(bc.x - 24, cup_top + 36), 4.0, Color(1, 1, 0.95, 0.70))
@@ -1296,34 +1299,74 @@ func _bowl_edge(c: Control, cx: float, top: float, bh: float, rw: float, bw: flo
 		cols.append(clear)
 	c.draw_polygon(pts, cols)
 
-# A rounded gold handle shaped like an ear: it springs off the bowl just below the
-# rim, bulges outward, then curves back to meet the bowl lower down. Both roots are
-# read off the exact same taper the bowl uses (same rw/bw/exponent), so the ends
-# always sit on the metal instead of floating past a narrower part of the cup.
+# A cast gold handle shaped like an ear: it grows out of the bowl just under the
+# rim, sweeps outward and around, then merges back into the bowl about two-thirds
+# of the way down. Both roots are read off the exact same taper the bowl uses (same
+# rw/bw/exponent) and pushed a few px *into* the metal, and the tube is built as a
+# variable-width polygon — fat where it meets the cup, slim around the outer arc —
+# so the ends read as welded on rather than as a wire laid beside the trophy.
 func _draw_handle(c: Control, cx: float, cup_top: float, bh: float,
-		rw: float, bw: float, side: float, dk: Color, lt: Color) -> void:
-	var top_t := 0.12   # upper root: high on the bowl, near the wide rim
-	var bot_t := 0.82   # lower root: down where the bowl has narrowed
-	# Bowl half-width at each root (matches the cup loop's taper), pulled in ~2px so
-	# the tube embeds into the metal rather than kissing the outer edge.
-	var top_w := bw + (rw - bw) * pow(1.0 - top_t, 0.72) - 2.0
-	var bot_w := bw + (rw - bw) * pow(1.0 - bot_t, 0.72) - 2.0
-	var p_top := Vector2(cx + side * top_w, cup_top + bh * top_t)
-	var p_bot := Vector2(cx + side * bot_w, cup_top + bh * bot_t)
-	var bulge := 20.0   # how far the ear swells out from the chord
-	var n := 18
-	var pts := PackedVector2Array()
+		rw: float, bw: float, side: float, dk: Color, md: Color, lt: Color) -> void:
+	var top_t := 0.06   # upper root: right under the rim
+	var bot_t := 0.66   # lower root: still on a reasonably wide part of the bowl
+	# Roots sit ~9px inside the bowl wall so the cup, drawn afterwards, hides them.
+	var top_w := bw + (rw - bw) * pow(1.0 - top_t, 0.72) - 9.0
+	var bot_w := bw + (rw - bw) * pow(1.0 - bot_t, 0.72) - 9.0
+	var p0 := Vector2(cx + side * top_w, cup_top + bh * top_t)
+	var p3 := Vector2(cx + side * bot_w, cup_top + bh * bot_t)
+	# Control points: leave the bowl heading out and slightly up, return into the
+	# lower root from outside and below, so the silhouette is a teardrop ear.
+	var p1 := p0 + Vector2(side * 36.0, -8.0)
+	var p2 := p3 + Vector2(side * 40.0, 10.0)
+
+	var n := 26
+	var mid := PackedVector2Array()
 	for i in n + 1:
+		mid.append(_bezier3(p0, p1, p2, p3, float(i) / float(n)))
+
+	# Sweep the tube: offset the spine by a half-width that swells at both roots.
+	# Each normal is flipped to agree with the previous one, so the two rails never
+	# swap sides and pinch the polygon into a notch part-way round the arc.
+	var outer := PackedVector2Array()
+	var inner := PackedVector2Array()
+	var norms := PackedVector2Array()
+	var prev := Vector2.ZERO
+	for i in mid.size():
 		var s := float(i) / float(n)
-		var base := p_top.lerp(p_bot, s)
-		base.x += side * sin(s * PI) * bulge     # swell outward, zero at both roots
-		pts.append(base)
-	c.draw_polyline(pts, dk, 7.0, true)
-	# Bright sheen along the upper side of the tube (light from upper-left).
-	var hi := PackedVector2Array()
-	for p in pts:
-		hi.append(p + Vector2(-0.8, -1.4))
-	c.draw_polyline(hi, lt, 2.5, true)
+		var hw := 3.0 + 2.6 * (1.0 - sin(s * PI))
+		var tang: Vector2 = (mid[mini(i + 1, n)] - mid[maxi(i - 1, 0)]).normalized()
+		var nor := Vector2(-tang.y, tang.x)
+		if i > 0 and nor.dot(prev) < 0.0:
+			nor = -nor
+		prev = nor
+		norms.append(nor)
+		outer.append(mid[i] + nor * hw)
+		inner.append(mid[i] - nor * hw)
+	var poly := outer
+	for i in range(inner.size() - 1, -1, -1):
+		poly.append(inner[i])
+	c.draw_colored_polygon(poly, md)
+	c.draw_polyline(poly, dk, 1.0, true)          # crisp cast edge
+
+	# Sheen along one flank of the tube, brightest where that flank turns to face the
+	# upper-left key light and fading to nothing at the roots and on the shaded side.
+	var light := Vector2(-0.6, -0.8)
+	var sheen := PackedVector2Array()
+	var sheen_cols := PackedColorArray()
+	for i in mid.size():
+		var s2 := float(i) / float(n)
+		var nor2: Vector2 = norms[i]
+		if nor2.dot(light) < 0.0:
+			nor2 = -nor2
+		sheen.append(mid[i] + nor2 * 2.0)
+		var a := clampf(nor2.dot(light), 0.0, 1.0) * sin(s2 * PI)
+		sheen_cols.append(Color(lt.r, lt.g, lt.b, a * 0.95))
+	c.draw_polyline_colors(sheen, sheen_cols, 1.8, true)
+
+# One point on a cubic Bezier.
+func _bezier3(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, s: float) -> Vector2:
+	var u := 1.0 - s
+	return u * u * u * p0 + 3.0 * u * u * s * p1 + 3.0 * u * s * s * p2 + s * s * s * p3
 
 # A four-point sparkle: two slim diamonds crossed over a bright core.
 func _star4(c: Control, ctr: Vector2, r: float, col: Color) -> void:

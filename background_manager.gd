@@ -7054,6 +7054,12 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 func is_prewarming() -> bool:
 	return _prewarming or not _prewarm_queue.is_empty()
 
+# How many shaders are still queued for compilation. The shop's loading bar divides
+# this against the queue's high-water mark to report real progress through the compile
+# wait — the longest stage of a first shop open — instead of sitting dead.
+func prewarm_pending() -> int:
+	return _prewarm_queue.size()
+
 # Pre-compile the scene shaders used by the shop's live theme previews, one per frame.
 # On the Mobile (GL compatibility) renderer a shader is compiled the first time it is
 # drawn on screen; without this warm-up each preview compiles as its card scrolls into

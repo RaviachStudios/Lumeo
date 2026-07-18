@@ -134,11 +134,23 @@ var _current_cat: String = "themes"
 
 # --- loading overlay ---
 # Covers the shop while its previews bake + its panels build, so the store is fully
-# seamless the moment it appears. Fully static "Loading…" caption (same still frame as
-# the leaderboards / boot loading screens). Lifted by _begin_load once everything is ready.
+# seamless the moment it appears. Fixed "Loading…" caption plus a milestone-driven
+# progress bar (same treatment as the boot loading screen). Lifted by _begin_load once
+# everything is ready.
 var _ov: Panel
 var _ov_caption: Label
+var _ov_bar: ProgressBar
+var _ov_progress := 0.0
 var _loaded := false
+
+# Loading-bar geometry + milestones. Values mark the END of each _begin_load stage, so
+# the bar steps only when real work actually finishes — see _set_load_progress.
+const OV_BAR_W := 260.0
+const OV_BAR_H := 10.0
+const LP_START := 0.05      # overlay painted, construction about to begin
+const LP_GRID := 0.30       # THEMES grid rendered
+const LP_PANELS := 0.50     # SIMON + SKINS panels prebuilt
+const LP_COMPILE := 1.0     # every priority preview shader compiled
 
 # --- SIMON tab ---
 const SIMON_ACCENT := Color(0.58, 0.46, 1.00)
@@ -193,6 +205,7 @@ func _ready() -> void:
 # moment the veil lifts. No network work — all data is already in CoinsManager.
 func _begin_load() -> void:
 	_show_loading()
+	_set_load_progress(LP_START)
 	# Let the loading overlay actually paint BEFORE we block the main thread building the
 	# store. Everything below (the 21-card grid + the SIMON/SKINS panels) is constructed
 	# synchronously, so without this yield the veil only appears after that freeze — the
@@ -233,9 +246,11 @@ func _begin_load() -> void:
 	await _render_category(_current_cat, true)
 	if not is_inside_tree():
 		return
+	_set_load_progress(LP_GRID)
 	await _prebuild_panels()
 	if not is_inside_tree():
 		return
+	_set_load_progress(LP_PANELS)
 	# Give the SPECIAL SKINS preview wheels a couple of frames to render once behind the veil
 	# (paying the first-draw shader upload during loading — see _prebuild_panels), then idle
 	# the hidden wheels since we open on THEMES. The first switch to that tab then just kicks
@@ -252,8 +267,22 @@ func _begin_load() -> void:
 	# Hold the veil until every preview shader has finished compiling. With the skin
 	# wheels now idled, these frames are cheap, so the orbit animation stays smooth
 	# however long the compile queue takes to drain.
+	# The compile queue drains one shader per frame, so its depth is real progress —
+	# measure against the high-water mark and walk the bar from LP_PANELS to LP_COMPILE
+	# as it empties. This is the longest stretch of a first shop open; on a repeat open
+	# everything is already warm, the loop never runs, and the bar simply completes.
+	var peak_pending := maxi(1, BackgroundManager.prewarm_pending())
 	while BackgroundManager.is_prewarming() and is_inside_tree():
+		peak_pending = maxi(peak_pending, BackgroundManager.prewarm_pending())
+		var done_frac := 1.0 - float(BackgroundManager.prewarm_pending()) / float(peak_pending)
+		_set_load_progress(LP_PANELS + (LP_COMPILE - LP_PANELS) * done_frac)
 		await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	# Top the bar off and let one frame present it, so the veil doesn't lift off a bar
+	# visibly stuck short of full.
+	_set_load_progress(LP_COMPILE)
+	await get_tree().process_frame
 	if not is_inside_tree():
 		return
 	_loaded = true
@@ -1832,12 +1861,12 @@ func _build_loading_overlay() -> void:
 	_ov.add_theme_stylebox_override("panel", s)
 	add_child(_ov)
 
-	# Deliberately fully static — a single painted frame with NO animation of any kind
-	# (matches every other loading screen in the app). On the GL-compatibility renderer,
-	# first shop-open compiles ~20 preview shaders + the skin wheels, and each compile is
-	# a hard render-thread stall that delivers no frame; anything meant to move — even a
-	# caption whose trailing dots change — freezes and jerks during those stalls, so
-	# nothing here moves: just a fixed "Loading…" caption.
+	# Nothing here is animated in the tween/spinner sense. On the GL-compatibility
+	# renderer, first shop-open compiles ~20 preview shaders + the skin wheels, and each
+	# compile is a hard render-thread stall that delivers no frame; anything meant to move
+	# smoothly — even a caption whose trailing dots change — freezes and jerks through
+	# those stalls. So the caption is fixed and the bar below steps on MILESTONES only,
+	# which makes a stall read as honest progress rather than a broken animation.
 	_ov_caption = Label.new()
 	_ov_caption.text = "Loading…"
 	_ov_caption.add_theme_font_size_override("font_size", 24)
@@ -1850,6 +1879,26 @@ func _build_loading_overlay() -> void:
 	_ov_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ov.add_child(_ov_caption)
 
+	# Flat-stylebox ProgressBar: repaints only when `value` changes, so it costs
+	# nothing while a stage grinds. Same palette as the boot loading screen's bar.
+	_ov_bar = ProgressBar.new()
+	_ov_bar.min_value = 0.0
+	_ov_bar.max_value = 100.0
+	_ov_bar.value = 0.0
+	_ov_bar.show_percentage = false
+	_ov_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0.09, 0.16, 0.36, 0.95)
+	track.border_color = Color(0.30, 0.45, 1.0, 0.30)
+	track.set_border_width_all(1)
+	track.set_corner_radius_all(int(OV_BAR_H * 0.5))
+	_ov_bar.add_theme_stylebox_override("background", track)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.42, 0.60, 1.0, 1.0)
+	fill.set_corner_radius_all(int(OV_BAR_H * 0.5))
+	_ov_bar.add_theme_stylebox_override("fill", fill)
+	_ov.add_child(_ov_bar)
+
 	_ov.visible = false
 	_layout_loading()
 
@@ -1861,7 +1910,17 @@ func _layout_loading() -> void:
 	_ov.size = sz
 	if _ov_caption:
 		_ov_caption.size = Vector2(320, 32)
-		_ov_caption.position = Vector2(sz.x * 0.5 - 160, sz.y * 0.5 - 16)
+		_ov_caption.position = Vector2(sz.x * 0.5 - 160, sz.y * 0.5 - 28)
+	if _ov_bar:
+		_ov_bar.size = Vector2(OV_BAR_W, OV_BAR_H)
+		_ov_bar.position = Vector2(sz.x * 0.5 - OV_BAR_W * 0.5, sz.y * 0.5 + 14)
+
+# Monotonic, so a stage that resolves early (nothing left to compile, skins tab
+# detached) can only push the bar forward, never snap it back.
+func _set_load_progress(v: float) -> void:
+	_ov_progress = maxf(_ov_progress, clampf(v, 0.0, 1.0))
+	if _ov_bar:
+		_ov_bar.value = _ov_progress * 100.0
 
 func _show_loading() -> void:
 	_layout_loading()

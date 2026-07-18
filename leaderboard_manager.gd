@@ -823,9 +823,19 @@ func _warm_family(range_key: String, pending: Dictionary) -> void:
 # { all_time: <load_all result>, daily: <load_all result> }. The screen seeds its
 # own per-range caches from this to paint instantly without a loading overlay.
 func take_warm() -> Dictionary:
-	if _warm_ready[RANGE_ALL_KEY] and _warm_ready[RANGE_DAILY_KEY]:
+	if warm_ready():
 		return {RANGE_ALL_KEY: _warm[RANGE_ALL_KEY], RANGE_DAILY_KEY: _warm[RANGE_DAILY_KEY]}
 	return {}
+
+# True once BOTH families are in the warm cache, i.e. the leaderboards screen can
+# open with no loading overlay. The boot loading screen polls this.
+func warm_ready() -> bool:
+	return _warm_ready[RANGE_ALL_KEY] and _warm_ready[RANGE_DAILY_KEY]
+
+# True while a warm_boards() pass is in flight (its fetches reset the ready flags,
+# so callers must not kick a second pass on top of a live one).
+func is_warming() -> bool:
+	return _warming
 
 # Loads all three boards of one family CONCURRENTLY. Each _load_board coroutine
 # fires its first HTTP request before it suspends, so kicking them all off (without
