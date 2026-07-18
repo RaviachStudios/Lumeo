@@ -498,8 +498,6 @@ func _make_pill_button(txt: String, icon_kind: String, accent: Color,
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(lbl)
 
-	btn.mouse_entered.connect(_on_btn_hover.bind(btn, true))
-	btn.mouse_exited.connect(_on_btn_hover.bind(btn, false))
 	btn.button_down.connect(_on_btn_down.bind(btn))
 	btn.button_up.connect(_on_btn_up.bind(btn))
 	btn.pressed.connect(cb)
@@ -515,13 +513,6 @@ func _make_pill_button(txt: String, icon_kind: String, accent: Color,
 		pulse.tween_method(set_rim, 2.1, 1.5, 1.1) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	return wrap
-
-func _on_btn_hover(btn: Button, entered: bool) -> void:
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(btn, "scale", Vector2.ONE * (1.04 if entered else 1.0), 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(btn, "position:y", -3.0 if entered else 0.0, 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 
 # ---------------- button icons (procedural) ----------------
 

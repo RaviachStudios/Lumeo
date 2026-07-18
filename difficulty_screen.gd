@@ -398,8 +398,6 @@ func _make_card(d: Dictionary) -> Control:
 		btn.add_child(seal)
 		btn.set_meta("lock_seal", seal)
 
-	btn.mouse_entered.connect(_on_hover.bind(btn, true))
-	btn.mouse_exited.connect(_on_hover.bind(btn, false))
 	btn.pressed.connect(_on_card_pressed.bind(d))
 	return wrap
 
@@ -508,17 +506,6 @@ func _lock_icon(s: float, col: Color) -> Node2D:
 	shackle.points = pts
 	n.add_child(shackle)
 	return n
-
-func _on_hover(btn: Button, entered: bool) -> void:
-	if _selecting:
-		return
-	var mat: ShaderMaterial = btn.get_meta("mat")
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(btn, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(btn, "position:y", -3.0 if entered else 0.0, 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(mat, "shader_parameter/rim_boost", 1.6 if entered else 1.0, 0.16)
 
 # Tapping a card either starts the game (unlocked) or opens the buy-confirm
 # popup (locked). The popup, not the card, completes a purchase.

@@ -9,6 +9,11 @@ extends Control
 const ArenaUI := preload("res://arena_ui.gd")
 const ArenaFX := preload("res://arena_fx.gd")
 
+# The crown (Create) and door (Join) choices are drawn well above their base
+# size so they read as the two big entrances on the enlarged stage (~20% larger
+# than the previous 2.0 for a chunkier, more premium footprint).
+const ACTION_SCALE := 2.4
+
 var game_manager: Node
 
 var _bg: ColorRect
@@ -61,11 +66,11 @@ func _ready() -> void:
 	_subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_subtitle)
 
-	_create_btn = ArenaUI.pill_button("＋  Create a Room", ArenaUI.ACCENT, true)
+	_create_btn = ArenaUI.action_card("CREATE CONTEST", "", "crown", ArenaUI.ACCENT, true, ArenaUI.TORCH, ACTION_SCALE)
 	_create_btn.pressed.connect(_on_create)
 	add_child(_create_btn)
 
-	_join_btn = ArenaUI.pill_button("⮕  Join a Room", ArenaUI.SAND)
+	_join_btn = ArenaUI.action_card("JOIN CONTEST", "", "door", ArenaUI.JOIN_BLUE, false, ArenaUI.JOIN_CYAN, ACTION_SCALE)
 	_join_btn.pressed.connect(_on_join)
 	add_child(_join_btn)
 
@@ -81,7 +86,6 @@ func _layout() -> void:
 	ArenaUI.size_bg(_bg, sz)
 	if _fx:
 		_fx.relayout(sz)
-	var cx := sz.x * 0.5
 	if _back:
 		_back.position = Vector2(20, 20)
 	if _title:
@@ -91,18 +95,17 @@ func _layout() -> void:
 		_subtitle.size = Vector2(sz.x, 26)
 		_subtitle.position = Vector2(0, 120)
 
-	# Two stacked action buttons, centered.
-	var bw: float = minf(360.0, sz.x - 120.0)
-	var bh := 72.0
-	var gap := 26.0
-	var group_h := bh * 2 + gap
-	var top := sz.y * 0.5 - group_h * 0.5 + 20.0
+	# The crown (Create) and door (Join) now stand directly on the enlarged
+	# podium, evenly spaced either side of the championship shield — no
+	# separate menu row below it anymore. Card footprint is derived from the
+	# (scaled) icon + pedestal so the 3x choices are never clipped.
 	if _create_btn:
-		_create_btn.size = Vector2(bw, bh)
-		_create_btn.position = Vector2(cx - bw * 0.5, top)
-	if _join_btn:
-		_join_btn.size = Vector2(bw, bh)
-		_join_btn.position = Vector2(cx - bw * 0.5, top + bh + gap)
+		var ps: Vector2 = _create_btn.get_meta("plaque_size")
+		var crest: float = _create_btn.get_meta("crest")
+		var cw := ps.x + 60.0
+		var ch := ps.y + crest + 90.0
+		ArenaUI.layout_action_card(_create_btn, ArenaFX.side_slot_pos(sz, -1.0), Vector2(cw, ch))
+		ArenaUI.layout_action_card(_join_btn, ArenaFX.side_slot_pos(sz, 1.0), Vector2(cw, ch))
 
 	if _toast:
 		_toast.size = Vector2(sz.x, 30)
@@ -192,7 +195,7 @@ func _build_choice_modal() -> void:
 	add_child(_choice_modal)
 
 	var title := Label.new()
-	title.text = "Join a Room"
+	title.text = "Join Contest"
 	title.add_theme_font_size_override("font_size", 26)
 	title.add_theme_color_override("font_color", ArenaUI.TEXT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

@@ -465,8 +465,6 @@ func _build_card(title: String, draw_cb: Callable, cta: String, icon_cb: Callabl
 	panel.add_child(pill)
 
 	var btn := _overlay_button(CARD_SIZE)
-	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
-	btn.mouse_exited.connect(_on_card_hover.bind(wrap, false))
 	btn.button_down.connect(_on_card_press.bind(wrap, true))
 	btn.button_up.connect(_on_card_press.bind(wrap, false))
 	btn.pressed.connect(action)
@@ -552,8 +550,6 @@ func _build_arena_card() -> void:
 	panel.add_child(sub)
 
 	var btn := _overlay_button(ARENA_SIZE)
-	btn.mouse_entered.connect(_on_card_hover.bind(wrap, true))
-	btn.mouse_exited.connect(_on_card_hover.bind(wrap, false))
 	btn.button_down.connect(_on_card_press.bind(wrap, true))
 	btn.button_up.connect(_on_card_press.bind(wrap, false))
 	btn.pressed.connect(_on_arena)
@@ -1036,12 +1032,6 @@ func _overlay_button(size: Vector2) -> Button:
 		btn.add_theme_stylebox_override(s, empty)
 	return btn
 
-func _on_card_hover(wrap: Control, entered: bool) -> void:
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(wrap, "scale", Vector2.ONE * (1.03 if entered else 1.0), 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(wrap, "modulate", Color(1.10, 1.10, 1.10) if entered else Color.WHITE, 0.16)
-
 func _on_card_press(wrap: Control, down: bool) -> void:
 	var tw := create_tween()
 	tw.tween_property(wrap, "scale", Vector2.ONE * (0.97 if down else 1.0), 0.10) \
@@ -1087,8 +1077,6 @@ func _landmark(art_size: Vector2, draw_cb: Callable, cb: Callable) -> Dictionary
 	drawer.draw.connect(draw_cb.bind(drawer))
 	art.add_child(drawer)
 
-	btn.mouse_entered.connect(_on_lm_hover.bind(art, true))
-	btn.mouse_exited.connect(_on_lm_hover.bind(art, false))
 	btn.button_down.connect(_on_lm_press.bind(art))
 	btn.button_up.connect(_on_lm_release.bind(art))
 	btn.pressed.connect(cb)
@@ -1569,12 +1557,6 @@ func _draw_gear(c: Control) -> void:
 		c.draw_line(ctr + d * 5.0, ctr + d * 9.0, col, 2.6)
 	c.draw_arc(ctr, 6.0, 0.0, TAU, 24, col, 2.4, true)
 	c.draw_circle(ctr, 2.2, col)
-
-func _on_lm_hover(art: Control, entered: bool) -> void:
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(art, "scale", Vector2.ONE * (1.06 if entered else 1.0), 0.16) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.tween_property(art, "modulate", Color(1.12, 1.12, 1.12) if entered else Color.WHITE, 0.16)
 
 func _on_lm_press(art: Control) -> void:
 	create_tween().tween_property(art, "scale", Vector2.ONE * 0.94, 0.09) \

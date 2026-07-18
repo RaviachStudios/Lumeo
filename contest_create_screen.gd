@@ -12,9 +12,9 @@ const ArenaUI := preload("res://arena_ui.gd")
 var game_manager: Node
 
 var _bg: ColorRect
+var _deco: Control                # radial light + framing pillars + floating gold motes
 var _back: Button
-var _title: Label
-var _dots: Control
+var _title: Control               # carved-gold CREATE ROOM banner (built locally)
 
 # Step containers (only one visible at a time).
 var _step1: Control
@@ -22,11 +22,18 @@ var _step2: Control
 
 # Step 1 (name).
 var _name_edit: LineEdit
+var _field_deco: Control         # gold-frame ornaments over the field (gems, inner shadow)
 var _name_base_bottom := 0.0     # resting bottom edge of the field (no keyboard)
 var _name_shift := 0.0
 var _suggest_row: Control        # funny-name suggestion chips + a 🎲 reshuffle
 var _sug_chips: Array[Button] = []
 var _sug_dice: Button
+var _sug_deco: Control           # per-chip top highlight + inner shadow ornaments
+var _sug_spark: Control          # magical sparkle overlay orbiting the Shuffle chip
+
+# Ambient animation clock (floating motes + shuffle sparkle).
+var _anim_t := 0.0
+var _motes: Array = []           # drifting golden particles in the deco layer
 
 # Step 2 selections.
 var _diff_pills: Array[Dictionary] = []
@@ -37,6 +44,7 @@ var _selected_public := true
 # Bottom navigation.
 var _prev_btn: Button
 var _primary_btn: Button
+var _cta_art: Control             # child layer painting the premium CTA (frame + panel + engraved text)
 var _msg: Label
 var _overlay: Panel
 var _overlay_lbl: Label
@@ -54,17 +62,21 @@ func _ready() -> void:
 	_bg = ArenaUI.make_lobby_bg()
 	add_child(_bg)
 
+	# A quiet decorative layer above the arena backdrop but behind every control:
+	# soft radial hearth-light pooled behind the content, twin stone pillars framing
+	# the edges, and slow golden motes drifting up the room.
+	_deco = Control.new()
+	_deco.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_deco.draw.connect(_draw_deco.bind(_deco))
+	add_child(_deco)
+	_seed_motes()
+
 	_back = ArenaUI.make_back_button()
 	_back.pressed.connect(func() -> void: game_manager.show_arena())
 	add_child(_back)
 
-	_title = ArenaUI.title("CREATE ROOM")
+	_title = _make_title_banner("CREATE ROOM")
 	add_child(_title)
-
-	_dots = Control.new()
-	_dots.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_dots.draw.connect(_draw_dots)
-	add_child(_dots)
 
 	_step1 = _make_step()
 	_step2 = _make_step()
@@ -75,7 +87,7 @@ func _ready() -> void:
 	_prev_btn = ArenaUI.pill_button("◀  Back", ArenaUI.SAND)
 	_prev_btn.pressed.connect(_on_prev)
 	add_child(_prev_btn)
-	_primary_btn = ArenaUI.pill_button("Next  ▶", ArenaUI.ACCENT, true)
+	_primary_btn = _make_cta_button("Next  ▶")
 	_primary_btn.pressed.connect(_on_primary)
 	add_child(_primary_btn)
 
@@ -105,8 +117,10 @@ func _build_step1() -> void:
 	var prompt := Label.new()
 	prompt.name = "prompt"
 	prompt.text = "Name your room"
-	prompt.add_theme_font_size_override("font_size", 32)
-	prompt.add_theme_color_override("font_color", Color.WHITE)
+	prompt.add_theme_font_size_override("font_size", 34)
+	prompt.add_theme_color_override("font_color", Color(1.0, 0.98, 0.94))
+	prompt.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.12, 0.8))
+	prompt.add_theme_constant_override("outline_size", 3)
 	prompt.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.4))
 	prompt.add_theme_constant_override("shadow_offset_y", 3)
 	prompt.add_theme_constant_override("shadow_outline_size", 9)
@@ -117,34 +131,58 @@ func _build_step1() -> void:
 	var sub := Label.new()
 	sub.name = "sub"
 	sub.text = "This is how it'll appear to everyone who joins"
-	sub.add_theme_font_size_override("font_size", 16)
-	sub.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", Color(0.74, 0.78, 1.0, 0.92))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_step1.add_child(sub)
 
+	# A premium fantasy text box: a thick gold frame around a dark-navy interior,
+	# with a subtle placeholder and a warm gold bloom when focused. The recessed
+	# inner shadow, top highlight and corner gemstones are drawn by _field_deco.
 	_name_edit = LineEdit.new()
 	_name_edit.placeholder_text = "e.g. Friday Rumble"
 	_name_edit.max_length = ContestManager.TITLE_MAX
 	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_name_edit.add_theme_font_size_override("font_size", 26)
-	_name_edit.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.15))
+	_name_edit.add_theme_color_override("font_color", Color(1.0, 0.92, 0.66))
+	_name_edit.add_theme_color_override("font_placeholder_color", Color(0.58, 0.62, 0.82, 0.5))
 	_name_edit.add_theme_color_override("caret_color", ArenaUI.GOLD)
+	_name_edit.add_theme_color_override("font_outline_color", Color(0.05, 0.04, 0.10, 0.6))
+	_name_edit.add_theme_constant_override("outline_size", 2)
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.09, 0.10, 0.22, 0.92)
-	s.set_corner_radius_all(16)
-	s.border_color = Color(0.55, 0.60, 0.95, 0.7)
-	s.set_border_width_all(2)
-	s.content_margin_left = 16
-	s.content_margin_right = 16
+	s.bg_color = Color(0.05, 0.07, 0.17, 0.96)          # deep navy interior
+	s.set_corner_radius_all(18)
+	s.corner_detail = 8
+	# richer metallic gold frame: warm face + a slightly cooler bevel-toned edge blend
+	s.border_color = Color(1.0, 0.82, 0.40, 0.95)       # thick warm-gold frame
+	s.set_border_width_all(3)
+	# a whisper of ambient bloom even at rest — the frame reads as lit metal, not paint
+	s.shadow_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.10)
+	s.shadow_size = 6
+	s.content_margin_left = 22
+	s.content_margin_right = 22
+	s.content_margin_top = 8
+	s.content_margin_bottom = 8
 	_name_edit.add_theme_stylebox_override("normal", s)
+	# focused: the bloom lifts to a soft premium halo (~40% softer than before —
+	# alpha 0.42→0.25, size 16→11) rather than a hard yellow flare.
 	var sf := s.duplicate() as StyleBoxFlat
-	sf.border_color = ArenaUI.GOLD
+	sf.border_color = ArenaUI.GOLD.lightened(0.16)
 	sf.shadow_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.25)
-	sf.shadow_size = 8
+	sf.shadow_size = 11
 	_name_edit.add_theme_stylebox_override("focus", sf)
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_primary())
 	_step1.add_child(_name_edit)
+
+	# Frame ornaments over the field: top-edge highlight, recessed inner shadow, and
+	# a tiny blue gemstone set into each side of the gold frame. Mouse-transparent so
+	# taps still reach the field beneath.
+	_field_deco = Control.new()
+	_field_deco.name = "field_deco"
+	_field_deco.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_field_deco.draw.connect(_draw_field_deco.bind(_field_deco))
+	_step1.add_child(_field_deco)
 
 	# Funny-name suggestions: a hint, a row of tappable name chips, and a 🎲 that
 	# reshuffles them. Sits under the field but lifts with the field on keyboard open.
@@ -163,27 +201,43 @@ func _build_step1() -> void:
 	_step1.add_child(_suggest_row)
 	_reshuffle_suggestions()
 
-# A small tappable suggestion pill. Tapping it fills the name field.
-func _make_suggest_chip(text: String) -> Button:
+# An elegant outlined fantasy chip: a dark interior with a thin gold border. Tapping
+# it fills the name field. `bright` makes the Shuffle chip stand apart — a brighter,
+# thicker gold rim with a soft glow.
+func _make_suggest_chip(text: String, bright := false) -> Button:
+	var gold := ArenaUI.GOLD
 	var b := Button.new()
 	b.text = text
 	b.focus_mode = Control.FOCUS_NONE
 	b.add_theme_font_size_override("font_size", 15)
+	b.add_theme_color_override("font_outline_color", Color(0.04, 0.03, 0.08, 0.7))
+	b.add_theme_constant_override("outline_size", 2)
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.14)
-	s.set_corner_radius_all(15)
-	s.border_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.55)
-	s.set_border_width_all(1)
-	s.content_margin_left = 14
-	s.content_margin_right = 14
+	s.bg_color = Color(0.06, 0.07, 0.16, 0.86)          # dark navy interior
+	s.set_corner_radius_all(16)
+	s.corner_detail = 6
+	# richer gold rim; ordinary chips lift from 0.5→0.62 for a cleaner metallic edge
+	s.border_color = Color(gold.r, gold.g, gold.b, 0.95 if bright else 0.62)
+	s.set_border_width_all(2 if bright else 1)
+	s.content_margin_left = 15
+	s.content_margin_right = 15
 	s.content_margin_top = 6
 	s.content_margin_bottom = 6
+	if bright:
+		s.shadow_color = Color(gold.r, gold.g, gold.b, 0.32)
+		s.shadow_size = 9
+	else:
+		# a soft downward contact shadow so plain chips sit on the surface, not float
+		s.shadow_color = Color(0.0, 0.0, 0.0, 0.28)
+		s.shadow_size = 4
+		s.shadow_offset = Vector2(0, 2)
 	b.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.26)
+	sh.bg_color = Color(gold.r, gold.g, gold.b, 0.20)
+	sh.border_color = Color(gold.r, gold.g, gold.b, 1.0 if bright else 0.78)
 	b.add_theme_stylebox_override("hover", sh)
 	b.add_theme_stylebox_override("pressed", sh)
-	b.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.35))
+	b.add_theme_color_override("font_color", gold.lightened(0.45 if bright else 0.3))
 	return b
 
 # Repopulate the suggestion row with 3 fresh random funny names + a 🎲 chip.
@@ -201,9 +255,20 @@ func _reshuffle_suggestions() -> void:
 		chip.pressed.connect(func() -> void: _apply_suggestion(name_txt))
 		_suggest_row.add_child(chip)
 		_sug_chips.append(chip)
-	_sug_dice = _make_suggest_chip("↻ Shuffle")
+	_sug_dice = _make_suggest_chip("↻ Shuffle", true)
 	_sug_dice.pressed.connect(_reshuffle_suggestions)
 	_suggest_row.add_child(_sug_dice)
+	# Material ornaments over every chip: a thin top-edge highlight + a recessed inner
+	# shadow, so each chip reads as tooled metal rather than a flat rectangle.
+	_sug_deco = Control.new()
+	_sug_deco.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sug_deco.draw.connect(_draw_sug_deco)
+	_suggest_row.add_child(_sug_deco)
+	# Magical sparkle overlay orbiting the Shuffle chip (drawn on top, animated).
+	_sug_spark = Control.new()
+	_sug_spark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_sug_spark.draw.connect(_draw_shuffle_sparkle)
+	_suggest_row.add_child(_sug_spark)
 	_position_suggestions()
 
 # Fill the field with a chosen suggestion (and keep the keyboard where it is).
@@ -234,6 +299,14 @@ func _position_suggestions() -> void:
 	if _sug_dice:
 		_sug_dice.position = Vector2(x, 0)
 		_sug_dice.size = Vector2(dice_w, h)
+	if _sug_deco:
+		_sug_deco.position = Vector2.ZERO
+		_sug_deco.size = _suggest_row.size
+		_sug_deco.queue_redraw()
+	if _sug_spark:
+		_sug_spark.position = Vector2.ZERO
+		_sug_spark.size = _suggest_row.size
+		_sug_spark.queue_redraw()
 
 # ---------------- step 2: difficulty + visibility ----------------
 
@@ -374,8 +447,9 @@ func _show_step() -> void:
 	_step2.visible = _step == 1
 	_prev_btn.visible = _step > 0
 	_primary_btn.text = "Create Room" if _step == STEP_COUNT - 1 else "Next  ▶"
+	if _cta_art:
+		_cta_art.queue_redraw()
 	_msg.text = ""
-	_dots.queue_redraw()
 	if _step == 0 and _name_edit:
 		_name_edit.grab_focus()
 	else:
@@ -399,37 +473,41 @@ func _on_primary() -> void:
 func _layout() -> void:
 	var sz := get_viewport_rect().size
 	ArenaUI.size_bg(_bg, sz)
+	if _deco:
+		_deco.position = Vector2.ZERO
+		_deco.size = sz
+		_deco.queue_redraw()
 	var cx := sz.x * 0.5
 	if _back:
 		_back.position = Vector2(20, 20)
 	if _title:
-		_title.size = Vector2(sz.x, 52)
-		_title.position = Vector2(0, 22)
-	if _dots:
-		_dots.position = Vector2(cx - 90, 84)
-		_dots.size = Vector2(180, 22)
-		_dots.queue_redraw()
+		_title.size = Vector2(sz.x, 66)
+		_title.position = Vector2(0, 14)
 
 	for c in [_step1, _step2]:
 		c.position = Vector2.ZERO
 		c.size = sz
 
 	# Step 1 — centered name field.
-	var name_w: float = minf(460.0, sz.x - 100.0)
+	var name_w: float = minf(480.0, sz.x - 100.0)
 	var field_y := sz.y * 0.42
 	var prompt: Label = _step1.get_node("prompt")
-	prompt.size = Vector2(sz.x, 40); prompt.position = Vector2(0, field_y - 120)
+	prompt.size = Vector2(sz.x, 44); prompt.position = Vector2(0, field_y - 116)
 	var sub: Label = _step1.get_node("sub")
-	sub.size = Vector2(sz.x, 24); sub.position = Vector2(0, field_y - 70)
-	_name_edit.size = Vector2(name_w, 56)
+	sub.size = Vector2(sz.x, 24); sub.position = Vector2(0, field_y - 66)
+	_name_edit.size = Vector2(name_w, 58)
 	_name_edit.position = Vector2(cx - name_w * 0.5, field_y)
-	_name_base_bottom = field_y + 56.0
+	_name_base_bottom = field_y + 58.0
+	if _field_deco:
+		_field_deco.position = _name_edit.position
+		_field_deco.size = _name_edit.size
+		_field_deco.queue_redraw()
 
 	# Suggestions sit just below the field.
 	var hint: Label = _step1.get_node("sug_hint")
-	hint.size = Vector2(sz.x, 22); hint.position = Vector2(0, field_y + 78)
+	hint.size = Vector2(sz.x, 22); hint.position = Vector2(0, field_y + 82)
 	if _suggest_row:
-		_suggest_row.position = Vector2(cx - name_w * 0.5, field_y + 106)
+		_suggest_row.position = Vector2(cx - name_w * 0.5, field_y + 110)
 		_suggest_row.size = Vector2(name_w, 34)
 		_position_suggestions()
 
@@ -467,14 +545,14 @@ func _layout() -> void:
 		desc_lbl.position = Vector2(8, 48); desc_lbl.size = Vector2(vw - 16, 40)
 		vx += vw + gap
 
-	# Bottom nav — primary centered, step-back to its left.
-	var nav_y := sz.y - 96.0
-	_primary_btn.size = Vector2(260, 58)
-	_primary_btn.position = Vector2(cx - 130, nav_y)
-	_prev_btn.size = Vector2(150, 58)
-	_prev_btn.position = Vector2(cx - 130 - 150 - 16, nav_y)
+	# Bottom nav — primary centered (the hero CTA, ~15% larger), step-back to its left.
+	var nav_y := sz.y - 104.0
+	_primary_btn.size = Vector2(318, 74)
+	_primary_btn.position = Vector2(cx - 159, nav_y)
+	_prev_btn.size = Vector2(150, 74)
+	_prev_btn.position = Vector2(cx - 159 - 150 - 16, nav_y)
 	_msg.size = Vector2(sz.x, 24)
-	_msg.position = Vector2(0, nav_y + 64)
+	_msg.position = Vector2(0, nav_y + 78)
 
 	if _overlay:
 		_overlay.position = Vector2.ZERO
@@ -483,22 +561,18 @@ func _layout() -> void:
 		_overlay_lbl.size = Vector2(sz.x, 40)
 		_overlay_lbl.position = Vector2(0, sz.y * 0.5 - 20)
 
-func _draw_dots() -> void:
-	var gap := 30.0
-	var x := _dots.size.x * 0.5 - gap * 0.5
-	var y := _dots.size.y * 0.5
-	for i in STEP_COUNT:
-		var on: bool = i == _step
-		var done: bool = i < _step
-		var col: Color = ArenaUI.GOLD if (on or done) else Color(0.5, 0.55, 0.8)
-		_dots.draw_circle(Vector2(x + i * gap, y), 7.0 if on else 5.0,
-			Color(col.r, col.g, col.b, 1.0 if on else (0.7 if done else 0.4)))
-
 # ---------------- keyboard lift (step 1) ----------------
 
 const TOP_MARGIN := 96.0     # keep the field below the header while lifted
 
 func _process(delta: float) -> void:
+	# Ambient motion: drifting motes behind the content and the Shuffle sparkle.
+	_anim_t += delta
+	if _deco:
+		_deco.queue_redraw()
+	if _sug_spark and _step == 0 and _step1.visible:
+		_sug_spark.queue_redraw()
+
 	if _name_edit == null:
 		return
 	var target := 0.0
@@ -557,3 +631,396 @@ func _set_overlay(on: bool, msg: String = "") -> void:
 	if _overlay:
 		_overlay.visible = on
 		_overlay_lbl.text = msg
+
+# ================= premium presentation helpers =================
+
+# ---- carved-gold title banner + gold divider ----
+
+# A larger, premium "CREATE ROOM" wordmark: a sunken bronze shadow, a raised ivory
+# highlight and a carved-gold face (the stacked layers read as a soft gold gradient),
+# finished with a thin tapered gold divider + centre gem underneath.
+func _make_title_banner(text: String) -> Control:
+	var root := Control.new()
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.clip_contents = false
+	var up := text.to_upper()
+	var fs := 46
+	var sh := _title_layer(up, fs, Color(0.20, 0.09, 0.01, 0.95), 5, Color(0.10, 0.05, 0.0, 0.9))
+	sh.position = Vector2(0, 3)
+	root.add_child(sh)
+	# a warm mid-gold under-layer beneath the highlight deepens the top-to-bottom
+	# gradient so the face reads as polished gold rather than flat yellow
+	var mid := _title_layer(up, fs, Color(0.86, 0.58, 0.16, 0.85), 0, Color(0, 0, 0, 0))
+	mid.position = Vector2(0, 2)
+	root.add_child(mid)
+	var hi := _title_layer(up, fs, Color(1.0, 0.99, 0.86, 0.92), 0, Color(0, 0, 0, 0))
+	hi.position = Vector2(0, -2)
+	root.add_child(hi)
+	var face := Label.new()
+	face.text = up
+	face.set_anchors_preset(Control.PRESET_FULL_RECT)
+	face.add_theme_font_size_override("font_size", fs)
+	face.add_theme_color_override("font_color", Color(1.0, 0.85, 0.44))
+	face.add_theme_color_override("font_outline_color", Color(0.28, 0.15, 0.02, 0.95))
+	face.add_theme_constant_override("outline_size", 5)
+	face.add_theme_color_override("font_shadow_color", Color(1.0, 0.6, 0.2, 0.5))
+	face.add_theme_constant_override("shadow_offset_y", 2)
+	face.add_theme_constant_override("shadow_outline_size", 14)
+	face.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	face.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(face)
+	var div := Control.new()
+	div.set_anchors_preset(Control.PRESET_FULL_RECT)
+	div.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	div.draw.connect(_draw_title_divider.bind(div, up, fs))
+	root.add_child(div)
+	return root
+
+func _title_layer(text: String, fs: int, col: Color, outline: int, oc: Color) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.set_anchors_preset(Control.PRESET_FULL_RECT)
+	l.add_theme_font_size_override("font_size", fs)
+	l.add_theme_color_override("font_color", col)
+	if outline > 0:
+		l.add_theme_constant_override("outline_size", outline)
+		l.add_theme_color_override("font_outline_color", oc)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+func _draw_title_divider(c: Control, up: String, fs: int) -> void:
+	var f := ThemeDB.fallback_font
+	var tw: float = f.get_string_size(up, HORIZONTAL_ALIGNMENT_CENTER, -1.0, fs).x
+	var cx := c.size.x * 0.5
+	var y := c.size.y * 0.5 + fs * 0.46 + 9.0
+	var half: float = minf(tw * 0.52, 250.0)
+	var gold := Color(1.0, 0.82, 0.36)
+	var gold_hi := Color(1.0, 0.95, 0.72)
+	# tapered rule fading out toward each tip, with a small gap either side of the gem
+	for dir: float in [-1.0, 1.0]:
+		var steps := 24
+		for i in steps:
+			var t0 := float(i) / steps
+			var t1 := float(i + 1) / steps
+			var x0 := cx + dir * (13.0 + t0 * half)
+			var x1 := cx + dir * (13.0 + t1 * half)
+			var a := (1.0 - t0) * 0.8
+			c.draw_line(Vector2(x0, y), Vector2(x1, y), Color(gold.r, gold.g, gold.b, a), 2.2, true)
+	# small elegant flanking ornaments — a tiny stud + a taper toward each tip — framing
+	# the centre gem for a more finished, heraldic divider
+	for dir: float in [-1.0, 1.0]:
+		var ox := cx + dir * 13.0
+		c.draw_circle(Vector2(ox, y), 1.7, Color(gold_hi.r, gold_hi.g, gold_hi.b, 0.85))
+	# a soft glow pooled beneath the centre gem
+	c.draw_circle(Vector2(cx, y), 9.0, Color(gold.r, gold.g, gold.b, 0.12))
+	var r := 5.0
+	var pts := PackedVector2Array([
+		Vector2(cx, y - r), Vector2(cx + r, y), Vector2(cx, y + r), Vector2(cx - r, y)])
+	c.draw_colored_polygon(pts, gold)
+	c.draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]), gold_hi, 1.0, true)
+	c.draw_circle(Vector2(cx - 1.2, y - 1.4), 1.2, Color(1, 1, 1, 0.85))
+
+# ---- field frame ornaments (top highlight, inner shadow, corner gems) ----
+
+func _draw_field_deco(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	# a faint metallic sheen pooling in the upper interior — a soft reflected-light
+	# gradient that gives the recessed navy face a lit, glassy read
+	for i in range(7):
+		var t := float(i) / 7.0
+		var yy := 6.0 + t * (h * 0.42)
+		var a := 0.05 * (1.0 - t)
+		c.draw_line(Vector2(16.0, yy), Vector2(w - 16.0, yy), Color(0.55, 0.68, 1.0, a), 2.0, true)
+	# recessed inner shadow fading down from the top interior
+	for i in range(5):
+		var yy := 4.0 + float(i) * 1.6
+		var a := 0.20 * (1.0 - float(i) / 5.0)
+		c.draw_line(Vector2(12.0, yy), Vector2(w - 12.0, yy), Color(0, 0, 0, a), 1.4)
+	# a thin highlight across the top edge, just inside the gold frame
+	c.draw_line(Vector2(15.0, 3.0), Vector2(w - 15.0, 3.0), Color(1.0, 0.97, 0.82, 0.5), 1.4, true)
+	# blue gemstones set into the frame on each side, centred vertically
+	_draw_gem(c, Vector2(2.0, h * 0.5))
+	_draw_gem(c, Vector2(w - 2.0, h * 0.5))
+
+func _draw_gem(c: Control, ctr: Vector2) -> void:
+	var blue := Color(0.35, 0.62, 1.0)
+	var blue_hi := Color(0.75, 0.90, 1.0)
+	var r := 5.5
+	c.draw_circle(ctr, r * 2.2, Color(blue.r, blue.g, blue.b, 0.16))
+	c.draw_circle(ctr, r * 1.5, Color(blue.r, blue.g, blue.b, 0.16))
+	var pts := PackedVector2Array([
+		ctr + Vector2(0, -r), ctr + Vector2(r * 0.72, 0),
+		ctr + Vector2(0, r), ctr + Vector2(-r * 0.72, 0)])
+	c.draw_colored_polygon(pts, blue)
+	c.draw_colored_polygon(PackedVector2Array([
+		ctr + Vector2(0, -r), ctr + Vector2(r * 0.72, 0), ctr + Vector2(-r * 0.72, 0)]),
+		Color(blue_hi.r, blue_hi.g, blue_hi.b, 0.7))
+	c.draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]),
+		Color(0.9, 0.95, 1.0, 0.9), 1.0, true)
+	c.draw_circle(ctr + Vector2(-1.0, -1.6), 1.0, Color(1, 1, 1, 0.9))
+
+# ---- suggestion-chip material ornaments (top highlight + inner shadow) ----
+
+func _draw_sug_deco() -> void:
+	if _sug_deco == null:
+		return
+	var chips: Array = []
+	chips.append_array(_sug_chips)
+	if _sug_dice:
+		chips.append(_sug_dice)
+	for node in chips:
+		var chip := node as Button
+		if chip == null:
+			continue
+		var p := chip.position
+		var w := chip.size.x
+		var inset := 9.0
+		# recessed inner shadow just under the top edge
+		_sug_deco.draw_line(Vector2(p.x + inset, p.y + 4.0),
+			Vector2(p.x + w - inset, p.y + 4.0), Color(0, 0, 0, 0.22), 1.4)
+		# a soft warm highlight riding the very top edge, inside the gold rim
+		var bright: bool = chip == _sug_dice
+		_sug_deco.draw_line(Vector2(p.x + inset, p.y + 2.0),
+			Vector2(p.x + w - inset, p.y + 2.0),
+			Color(1.0, 0.96, 0.80, 0.42 if bright else 0.30), 1.4, true)
+
+# ---- shuffle sparkle ----
+
+func _draw_shuffle_sparkle() -> void:
+	if _sug_dice == null or _sug_spark == null:
+		return
+	var r := Rect2(_sug_dice.position, _sug_dice.size)
+	var ctr := r.position + r.size * 0.5
+	var gold := Color(1.0, 0.9, 0.5)
+	var count := 5
+	for i in range(count):
+		var fi := float(i)
+		var tw := 0.5 + 0.5 * sin(_anim_t * 2.4 + fi * 1.7)
+		var ang := fi / float(count) * TAU + _anim_t * 0.6
+		var px := ctr.x + cos(ang) * (r.size.x * 0.5 + 8.0)
+		var py := ctr.y + sin(ang) * (r.size.y * 0.5 + 5.0)
+		_draw_star4c(_sug_spark, Vector2(px, py), 4.0 * tw, Color(gold.r, gold.g, gold.b, tw * 0.9))
+
+func _draw_star4c(c: Control, ctr: Vector2, s: float, col: Color) -> void:
+	if s <= 0.3:
+		return
+	c.draw_colored_polygon(PackedVector2Array([
+		ctr + Vector2(0.0, -s), ctr + Vector2(s * 0.3, 0.0),
+		ctr + Vector2(0.0, s), ctr + Vector2(-s * 0.3, 0.0)]), col)
+	c.draw_colored_polygon(PackedVector2Array([
+		ctr + Vector2(-s, 0.0), ctr + Vector2(0.0, s * 0.3),
+		ctr + Vector2(s, 0.0), ctr + Vector2(0.0, -s * 0.3)]), col)
+	c.draw_circle(ctr, s * 0.22, Color(1, 1, 1, col.a * 0.85))
+
+# ---- premium primary (Next / Create) button ----
+
+# A hand-crafted AAA call-to-action in the spirit of Supercell's buttons: a sculpted
+# gold frame surrounds a slightly-convex warm-gold panel that sits recessed behind it,
+# with an ambient-occlusion groove between them, engraved ivory-gold lettering, a tight
+# bloom hugging the frame and a soft contact shadow anchoring it to the platform.
+#
+# The Button itself is invisible (transparent styleboxes, hidden text) and only supplies
+# the tap target + press state; the child "art" Control paints every material detail so
+# we control the bevel lighting, gradients and depth directly. It reads the button's
+# `.text` so "Next  ▶" / "Create Room" both render engraved, arrow included.
+func _make_cta_button(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.clip_contents = false
+	b.add_theme_font_size_override("font_size", 27)
+	b.add_theme_color_override("font_color", Color(0, 0, 0, 0))   # hide native text; art draws it
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, empty)
+	var art := Control.new()
+	art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.clip_contents = false
+	art.draw.connect(_draw_cta.bind(art))
+	art.resized.connect(art.queue_redraw)
+	b.add_child(art)
+	_cta_art = art
+	# physical press: the whole face sinks toward its shadow, then springs back on release
+	b.button_down.connect(func() -> void:
+		art.set_meta("pressed", true); art.queue_redraw())
+	b.button_up.connect(func() -> void:
+		art.set_meta("pressed", false); art.queue_redraw())
+	return b
+
+# Trace a clockwise rounded-rectangle perimeter (used for gradient fills + outlines).
+func _rr_points(rect: Rect2, r: float, seg := 6) -> PackedVector2Array:
+	r = minf(r, minf(rect.size.x, rect.size.y) * 0.5)
+	var pts := PackedVector2Array()
+	var corners := [
+		[rect.position + Vector2(rect.size.x - r, r), -PI * 0.5],            # top-right
+		[rect.position + Vector2(rect.size.x - r, rect.size.y - r), 0.0],    # bottom-right
+		[rect.position + Vector2(r, rect.size.y - r), PI * 0.5],             # bottom-left
+		[rect.position + Vector2(r, r), PI],                                 # top-left
+	]
+	for cn in corners:
+		var ctr: Vector2 = cn[0]
+		var a0: float = cn[1]
+		for i in seg + 1:
+			var a: float = a0 + (float(i) / seg) * (PI * 0.5)
+			pts.append(ctr + Vector2(cos(a), sin(a)) * r)
+	return pts
+
+# Fill a polygon with a smooth vertical (top→bottom) gradient via per-vertex colours.
+func _fill_grad_v(c: Control, pts: PackedVector2Array, y0: float, y1: float, top: Color, bot: Color) -> void:
+	var cols := PackedColorArray()
+	var span: float = maxf(y1 - y0, 0.001)
+	for p in pts:
+		cols.append(top.lerp(bot, clampf((p.y - y0) / span, 0.0, 1.0)))
+	c.draw_polygon(pts, cols)
+
+func _draw_cta(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var pressed: bool = bool(c.get_meta("pressed", false))
+	var dy := 3.0 if pressed else 0.0        # the face sinks when held
+	var R := 30.0                            # corner radius (rounder than before)
+	var fw := 8.0                            # sculpted gold-frame thickness
+
+	# ---- soft contact shadow, anchoring the button to the lit platform (stays put as
+	# the face sinks into it — kills the "floating" read) ----
+	for i in range(6):
+		var t := float(i) / 6.0
+		var sw: float = w - 26.0 + t * 30.0
+		var sy: float = h - 7.0 + t * 6.0
+		var srect := Rect2((w - sw) * 0.5, sy, sw, 15.0)
+		var sa: float = (0.30 * (1.0 - t)) * (0.55 if pressed else 1.0)
+		c.draw_colored_polygon(_rr_points(srect, 7.0), Color(0.0, 0.0, 0.02, sa))
+
+	var frame := Rect2(1.0, 1.0 + dy, w - 2.0, h - 5.0)
+	var frame_pts := _rr_points(frame, R)
+
+	# ---- tight premium bloom hugging the frame: a few expanding outlines fading outward
+	# make a snug warm aura (not the old big blurry glow) that the frame then paints over ----
+	var bloom := Color(1.0, 0.82, 0.38)
+	for i in range(5):
+		var g: float = 1.0 + i * 2.3
+		var bpts := _rr_points(frame.grow(g), R + g)
+		bpts.append(bpts[0])
+		c.draw_polyline(bpts, Color(bloom.r, bloom.g, bloom.b, 0.13 * (1.0 - float(i) / 5.0)), 3.0, true)
+
+	# ---- sculpted gold frame: a bevelled vertical gradient reads as lit, polished metal ----
+	_fill_grad_v(c, frame_pts, frame.position.y, frame.position.y + frame.size.y,
+		Color(1.0, 0.93, 0.64), Color(0.42, 0.26, 0.05))
+	# specular: a bright thin highlight riding the top edge + a soft second sheen beneath
+	c.draw_line(Vector2(R * 0.7, frame.position.y + 2.6), Vector2(w - R * 0.7, frame.position.y + 2.6),
+		Color(1.0, 0.99, 0.88, 0.7), 1.8, true)
+	c.draw_line(Vector2(R, frame.position.y + 5.4), Vector2(w - R, frame.position.y + 5.4),
+		Color(1.0, 0.94, 0.72, 0.28), 1.2, true)
+	# a darker line skimming the bottom of the frame for weight
+	c.draw_line(Vector2(R, frame.position.y + frame.size.y - 2.4),
+		Vector2(w - R, frame.position.y + frame.size.y - 2.4), Color(0.26, 0.15, 0.02, 0.55), 1.6, true)
+
+	# ---- ambient-occlusion groove: a dark ring set just outside the panel so the frame
+	# clearly *surrounds* a recessed centre rather than being painted onto it ----
+	var panel := frame.grow(-fw)
+	var ao_pts := _rr_points(panel.grow(1.6), R - fw + 1.6)
+	c.draw_colored_polygon(ao_pts, Color(0.20, 0.11, 0.01, 0.85))
+
+	# ---- recessed centre panel: warm golden gradient, brighter up top, darker at the base ----
+	var panel_pts := _rr_points(panel, R - fw)
+	_fill_grad_v(c, panel_pts, panel.position.y, panel.position.y + panel.size.y,
+		Color(1.0, 0.84, 0.45), Color(0.58, 0.34, 0.09))
+	# convex rise: a soft light pooled in the upper third makes the surface bulge gently
+	var sheen_ctr := Vector2(w * 0.5, panel.position.y + panel.size.y * 0.34)
+	c.draw_set_transform(sheen_ctr, 0.0, Vector2(1.0, 0.46))
+	for i in range(6):
+		var t := float(i) / 6.0
+		c.draw_circle(Vector2.ZERO, lerpf(panel.size.y * 0.16, panel.size.x * 0.46, t),
+			Color(1.0, 0.93, 0.64, 0.11 * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+	# a crisp bright band across the very top of the panel (upper-third highlight)
+	c.draw_line(Vector2(panel.position.x + 14.0, panel.position.y + 3.5),
+		Vector2(panel.end.x - 14.0, panel.position.y + 3.5), Color(1.0, 0.96, 0.80, 0.4), 2.0, true)
+
+	# ---- small forged rivets set into the frame on each side (engraved craftsmanship) ----
+	for sx in [fw + 1.0, w - fw - 1.0]:
+		var rc := Vector2(sx, h * 0.5 + dy)
+		c.draw_circle(rc, 3.4, Color(0.30, 0.18, 0.03))
+		c.draw_circle(rc, 2.3, Color(1.0, 0.86, 0.44))
+		c.draw_circle(rc - Vector2(0.5, 0.8), 0.9, Color(1.0, 0.99, 0.86, 0.9))
+
+	# ---- engraved ivory-gold lettering (Next / Create Room, arrow included) ----
+	var font := ThemeDB.fallback_font
+	var fs := 27
+	var txt := (c.get_parent() as Button).text
+	var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	var base := Vector2((w - ts.x) * 0.5,
+		(h - ts.y) * 0.5 + font.get_ascent(fs) + dy)
+	# dark carved halo for depth + contrast on the golden panel
+	c.draw_string_outline(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, 6,
+		Color(0.24, 0.12, 0.0, 0.92))
+	# soft inner shadow just below, then the polished ivory-gold face, then a top bevel light
+	c.draw_string(font, base + Vector2(0.0, 1.6), txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs,
+		Color(0.50, 0.30, 0.06, 0.55))
+	c.draw_string(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, Color(1.0, 0.94, 0.76))
+	c.draw_string(font, base + Vector2(0.0, -1.2), txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs,
+		Color(1.0, 1.0, 0.94, 0.42))
+
+# ---- background decoration: radial light, pillars, floating motes ----
+
+func _seed_motes() -> void:
+	_motes.clear()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260719
+	for i in range(22):
+		_motes.append({
+			"x": rng.randf(),
+			"y": rng.randf(),
+			# a touch slower overall so the drift stays calm and elegant
+			"spd": rng.randf_range(0.008, 0.024),
+			"amp": rng.randf_range(6.0, 20.0),
+			"phase": rng.randf() * TAU,
+			# a wider spread including finer dust — most are tiny, a few catch the light
+			"r": rng.randf_range(0.8, 2.8),
+		})
+
+func _draw_deco(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	# soft radial hearth-light pooled behind the content
+	var warm := Color(1.0, 0.80, 0.40)
+	var ctr := Vector2(w * 0.5, h * 0.42)
+	for i in range(9):
+		var t := float(i) / 9.0
+		var rad: float = lerp(90.0, minf(w, h) * 0.62, t)
+		var a := 0.05 * (1.0 - t) * (1.0 - t)
+		c.draw_circle(ctr, rad, Color(warm.r, warm.g, warm.b, a))
+	# a very soft circular arena-platform glow low on the screen, so the primary CTA
+	# reads as resting on a lit magical floor rather than floating. Squashed into a
+	# shallow ellipse and kept faint so it never competes with the button itself.
+	var floor_ctr := Vector2(w * 0.5, h - 66.0)
+	c.draw_set_transform(floor_ctr, 0.0, Vector2(1.0, 0.34))
+	var floor_warm := Color(1.0, 0.82, 0.42)
+	for i in range(9):
+		var ft := float(i) / 9.0
+		var frad: float = lerp(56.0, 250.0, ft)
+		var fa := 0.075 * (1.0 - ft) * (1.0 - ft)
+		c.draw_circle(Vector2.ZERO, frad, Color(floor_warm.r, floor_warm.g, floor_warm.b, fa))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+	# slow golden motes drifting up the room
+	var gold := Color(1.0, 0.88, 0.5)
+	for m in _motes:
+		var spd := float(m["spd"])
+		var amp := float(m["amp"])
+		var phase := float(m["phase"])
+		var yy: float = fposmod(float(m["y"]) - _anim_t * spd, 1.0)
+		var xx: float = float(m["x"]) + sin(_anim_t * 0.5 + phase) * (amp / w)
+		var pos := Vector2(xx * w, yy * h)
+		var tw := 0.4 + 0.6 * (0.5 + 0.5 * sin(_anim_t * 1.5 + phase))
+		var fade: float = clampf((1.0 - yy) * 2.0, 0.0, 1.0)
+		var a := 0.32 * tw * fade
+		var rr := float(m["r"])
+		c.draw_circle(pos, rr * 1.9, Color(gold.r, gold.g, gold.b, a * 0.25))
+		c.draw_circle(pos, rr, Color(gold.r, gold.g, gold.b, a))
