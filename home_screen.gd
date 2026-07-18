@@ -18,6 +18,7 @@ const DailyRankRewardPopup := preload("res://daily_rank_reward_popup.gd")
 const ProfilePopup := preload("res://profile_screen.gd")
 const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
 const HomeTutorial := preload("res://home_tutorial.gd")
+const ShopScreen := preload("res://shop_screen.gd")
 
 var game_manager: Node
 
@@ -140,6 +141,9 @@ var _credits: Label
 # doc to load (signed-in users) so we don't connect the `loaded` signal twice.
 var _tutorial_active := false
 var _awaiting_coins_for_tutorial := false
+# One-shot guard so the opportunistic shop-preview warm-up (see _schedule_shop_prewarm)
+# only fires once per home-screen lifetime.
+var _shop_prewarm_started := false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -177,6 +181,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_layout)
 	_start_animations()
 	AudioManager.play_bg_music()
+	_schedule_shop_prewarm()
 
 	# On the first home open of this launch, a signed-out player is asked whether
 	# to sign in or continue as a guest. The flag lives on the (persistent)
@@ -1254,9 +1259,9 @@ func _draw_trophy(c: Control, bc: Vector2) -> void:
 	c.draw_colored_polygon(_ellipse_pts(Vector2(bc.x, cup_top - 1.0), 25, 5.5),
 		g_edge.darkened(0.25))
 
-	# --- rounded tube handles (symmetric) ---
-	_draw_handle(c, Vector2(bc.x - 26, cup_top + 20), false, g_dk, g_lt)
-	_draw_handle(c, Vector2(bc.x + 26, cup_top + 20), true, g_dk, g_lt)
+	# --- rounded tube handles (ear-shaped, rooted to the tapering bowl) ---
+	_draw_handle(c, bc.x, cup_top, bh, rw, bw, -1.0, g_dk, g_lt)
+	_draw_handle(c, bc.x, cup_top, bh, rw, bw, 1.0, g_dk, g_lt)
 
 	# --- deluxe star glints ---
 	_star4(c, Vector2(bc.x + 27, cup_top + 1), 6.0, Color(1, 1, 1, 0.90))
@@ -1291,12 +1296,34 @@ func _bowl_edge(c: Control, cx: float, top: float, bh: float, rw: float, bw: flo
 		cols.append(clear)
 	c.draw_polygon(pts, cols)
 
-# A rounded gold handle: a thick dark tube arc with a thin bright sheen on top.
-func _draw_handle(c: Control, center: Vector2, right: bool, dk: Color, lt: Color) -> void:
-	var a0 := -PI * 0.5 if right else PI * 0.5
-	var a1 := PI * 0.5 if right else PI * 1.5
-	c.draw_arc(center, 16.0, a0, a1, 20, dk, 7.0, true)
-	c.draw_arc(center, 16.0, a0, a1, 20, lt, 2.5, true)
+# A rounded gold handle shaped like an ear: it springs off the bowl just below the
+# rim, bulges outward, then curves back to meet the bowl lower down. Both roots are
+# read off the exact same taper the bowl uses (same rw/bw/exponent), so the ends
+# always sit on the metal instead of floating past a narrower part of the cup.
+func _draw_handle(c: Control, cx: float, cup_top: float, bh: float,
+		rw: float, bw: float, side: float, dk: Color, lt: Color) -> void:
+	var top_t := 0.12   # upper root: high on the bowl, near the wide rim
+	var bot_t := 0.82   # lower root: down where the bowl has narrowed
+	# Bowl half-width at each root (matches the cup loop's taper), pulled in ~2px so
+	# the tube embeds into the metal rather than kissing the outer edge.
+	var top_w := bw + (rw - bw) * pow(1.0 - top_t, 0.72) - 2.0
+	var bot_w := bw + (rw - bw) * pow(1.0 - bot_t, 0.72) - 2.0
+	var p_top := Vector2(cx + side * top_w, cup_top + bh * top_t)
+	var p_bot := Vector2(cx + side * bot_w, cup_top + bh * bot_t)
+	var bulge := 20.0   # how far the ear swells out from the chord
+	var n := 18
+	var pts := PackedVector2Array()
+	for i in n + 1:
+		var s := float(i) / float(n)
+		var base := p_top.lerp(p_bot, s)
+		base.x += side * sin(s * PI) * bulge     # swell outward, zero at both roots
+		pts.append(base)
+	c.draw_polyline(pts, dk, 7.0, true)
+	# Bright sheen along the upper side of the tube (light from upper-left).
+	var hi := PackedVector2Array()
+	for p in pts:
+		hi.append(p + Vector2(-0.8, -1.4))
+	c.draw_polyline(hi, lt, 2.5, true)
 
 # A four-point sparkle: two slim diamonds crossed over a bright core.
 func _star4(c: Control, ctr: Vector2, r: float, col: Color) -> void:
@@ -2459,6 +2486,38 @@ func _on_start() -> void:
 
 func _on_how() -> void:
 	game_manager.show_how_to_play()
+
+# Opportunistic shop warm-up. Once the home screen has been sitting idle for a beat,
+# quietly pre-compile the theme-preview shaders that fill the shop's opening view — the
+# exact set the shop's loading veil otherwise blocks on (its first three grid rows, see
+# shop_screen._begin_load's priority_count). Each warm-up is one tiny throwaway 16x16
+# render per frame (BackgroundManager.prewarm_previews), so it's invisible here; by the
+# time the player taps Shop those shaders are already compiled and the veil lifts almost
+# immediately instead of holding for the first-open compile burst. Skipped work for
+# players who never open the shop is exactly one no-op call. Idempotent: prewarm_previews
+# ignores ids already warm or queued, and the _shop_prewarm_started guard stops repeats.
+func _schedule_shop_prewarm() -> void:
+	if _shop_prewarm_started:
+		return
+	_shop_prewarm_started = true
+	# Gate behind GL stability so this never bakes into a torn context right after a
+	# resume (see the app-pause/resume GL guard on GameManager), then let home settle
+	# so the warm-up never competes with the entry animations or a first-run tour.
+	if game_manager:
+		await game_manager.await_gl_stable()
+	if not is_inside_tree():
+		return
+	await get_tree().create_timer(2.5).timeout
+	if not is_inside_tree():
+		return
+	var items: Array = []
+	for cat in ShopScreen.CATEGORIES:
+		if cat.get("key", "") == "themes":
+			items = cat.get("items", [])
+			break
+	# Match the shop's veil-blocking set: its first three grid rows.
+	var priority: int = ShopScreen.GRID_COLS * 3
+	BackgroundManager.prewarm_previews(items.slice(0, priority))
 
 func _on_shop() -> void:
 	# The shop needs a wallet — guests get the sign-in popup, not a direct
