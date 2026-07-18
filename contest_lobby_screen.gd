@@ -189,7 +189,8 @@ func _reload() -> void:
 		return
 	_busy = true
 	_set_overlay(true, "Finding contests…")
-	var rows := await ContestManager.load_lobby_contests()
+	# Explicit type: 4.6 won't infer a `:=` through `await` across an autoload.
+	var rows: Array = await ContestManager.load_lobby_contests()
 	if not is_inside_tree():
 		return
 	_rows = rows

@@ -251,6 +251,36 @@ func _ready() -> void:
 	_intro()
 	_load_initial()
 
+# DEV-ONLY: one-off histogram backfill/rebuild trigger. `OS.has_feature("editor")`
+# is true ONLY when running from the Godot editor, so this never exists in the
+# shipped APK. Running the game in the editor talks to production Firestore over
+# REST, so opening Leaderboards there and pressing F9 rebuilds every all-time
+# histogram from the authoritative rows. Re-runnable any time to heal drift.
+func _input(event: InputEvent) -> void:
+	if not OS.has_feature("editor"):
+		return
+	if event is InputEventKey and event.pressed and not event.echo \
+			and (event as InputEventKey).keycode == KEY_F9:
+		_dev_rebuild_histograms()
+
+func _dev_rebuild_histograms() -> void:
+	print("[hist] rebuilding all-time histograms from rows…")
+	var summary: Dictionary = await LeaderboardManager.rebuild_histograms()
+	var all_ok := true
+	for board in summary:
+		var s: Dictionary = summary[board]
+		if not bool(s.get("write_ok", false)):
+			all_ok = false
+		print("[hist]   %s: rows=%d distinct=%d  commit_http=%d  write_ok=%s"
+			% [board, int(s.get("rows", 0)), int(s.get("distinct_scores", 0)),
+				int(s.get("write_code", 0)), str(s.get("write_ok", false))])
+	# The headline answer to "did the unauthenticated :commit writes succeed?"
+	if all_ok:
+		print("[hist] ✅ WRITES OK — histogram commits landed (verified by read-back).")
+	else:
+		print("[hist] ❌ WRITES FAILED — check commit_http above. 401/403 = rules/auth ",
+			"blocked the unauthenticated commit; 400 = malformed body; 0 = no network.")
+
 func _is_rtl() -> bool:
 	return is_layout_rtl()
 
@@ -1958,6 +1988,21 @@ signal _family_loaded
 # fetches its three difficulty boards in parallel), so the whole set lands in
 # roughly one round-trip instead of six serialized ones.
 func _load_initial() -> void:
+	# Fast path: the boot warm-up (LeaderboardManager.warm_boards, kicked on
+	# sign-in) usually has BOTH families ready before the player ever reaches this
+	# screen. Seed our caches from it, paint immediately with NO loading overlay,
+	# then quietly revalidate in the background (stale-while-revalidate).
+	var warm: Dictionary = LeaderboardManager.take_warm()
+	if not warm.is_empty():
+		_caches[RANGE_ALL] = warm.get(RANGE_ALL, {})
+		_caches[RANGE_DAILY] = warm.get(RANGE_DAILY, {})
+		_loaded_ranges[RANGE_ALL] = true
+		_loaded_ranges[RANGE_DAILY] = true
+		_hide_overlay()
+		_render(_caches[_current_range].get(_current_diff, {}))
+		_revalidate()
+		return
+
 	_show_loading()
 	_load_token += 1
 	var token := _load_token
@@ -1977,6 +2022,26 @@ func _load_initial() -> void:
 		_render(_caches[_current_range].get(_current_diff, {}))
 	else:
 		_show_error()
+
+# Background refresh after an instant warm-cache paint: refetch both families and
+# re-render the current view only if its data actually changed (so we don't replay
+# the intro animations when nothing moved). Never shows the loading overlay.
+func _revalidate() -> void:
+	_load_token += 1
+	var token := _load_token
+	var before := JSON.stringify(_caches[_current_range].get(_current_diff, {}))
+	var pending := {"left": 2}
+	_fetch_family(RANGE_ALL, token, pending)
+	_fetch_family(RANGE_DAILY, token, pending)
+	while pending["left"] > 0:
+		await _family_loaded
+	if token != _load_token:
+		return
+	if not _loaded_ranges[_current_range]:
+		return
+	var after := JSON.stringify(_caches[_current_range].get(_current_diff, {}))
+	if after != before:
+		_render(_caches[_current_range].get(_current_diff, {}))
 
 # Worker: fetches one range's three boards, caches them, then signals the batch.
 # Called WITHOUT await so ALL-TIME and TODAY load at the same time.

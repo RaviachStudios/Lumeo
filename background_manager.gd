@@ -2637,8 +2637,8 @@ float sdTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
 	vec2 pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
 	float s = sign(e0.x * e2.y - e0.y * e2.x);
 	vec2 d = min(min(vec2(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
-	                 vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
-	                 vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+					 vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+					 vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
 	return -sqrt(d.x) * sign(d.y);
 }
 // ---- One membranous wing. ws = sweep angle (more negative = raised); far>0.5
@@ -6149,7 +6149,7 @@ void lpBooth(inout vec3 col, vec2 a, vec2 bc, float hw, float seed) {
 	float cntY  = bc.y;            // counter top
 	float signY = wallY + 0.016;
 	float win = win1(a.x, bc.x - hw - 0.014, bc.x + hw + 0.014, 0.006)
-	          * win1(a.y, awnY - 0.055, cntY + 0.048, 0.006);
+			  * win1(a.y, awnY - 0.055, cntY + 0.048, 0.006);
 	if (win <= 0.0) return;
 	vec2 q = a - bc;
 	vec3 s1 = lpHue(hash11(seed * 1.7));                       // awning stripe A
@@ -6207,7 +6207,7 @@ void lpTent(inout vec3 col, vec2 a, vec2 tc, float hw, float roofH) {
 	float top  = tc.y - roofH;     // peak
 	float hemY = tc.y;             // hem line
 	float win = win1(a.x, tc.x - hw - 0.05, tc.x + hw + 0.05, 0.008)
-	          * win1(a.y, top - 0.09, hemY + 0.11, 0.008);
+			  * win1(a.y, top - 0.09, hemY + 0.11, 0.008);
 	if (win <= 0.0) return;
 	vec2 q = a - tc;
 	float v = clamp((hemY - a.y) / roofH, 0.0, 1.0);          // 0 hem .. 1 peak

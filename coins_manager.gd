@@ -335,30 +335,30 @@ var selected_skin: String = ""           # equipped complete skin ("" = none yet
 var owned_skins: Array[String] = []      # purchased complete skins (none yet)
 var last_claim_date: String = ""         # "YYYY-MM-DD" UTC; "" = never claimed
 var streak_days: int = 0                 # consecutive days the user has opened the
-                                          # app (1 on the first day, resets to 1 if
-                                          # the user misses a calendar day)
+										  # app (1 on the first day, resets to 1 if
+										  # the user misses a calendar day)
 var first_login_at: String = ""           # ISO-8601 UTC ("YYYY-MM-DDTHH:MM:SS") of
-                                          # the streak's day-1 open. Reset together
-                                          # with streak_days whenever a day is missed.
+										  # the streak's day-1 open. Reset together
+										  # with streak_days whenever a day is missed.
 var player_name: String = ""              # mirror of FirebaseManager.display_name.
-                                          # Kept on /users so a rename can be pushed
-                                          # to leaderboards even when offline.
+										  # Kept on /users so a rename can be pushed
+										  # to leaderboards even when offline.
 # Leaderboard rewards (see LEADERBOARD_REWARDS_PLAN.md):
 var alltime_reward_bands: Dictionary = {} # diff -> best (lowest) band idx already
-                                          # rewarded on the all-time board. Absent
-                                          # / 0 = never rewarded for that diff.
+										  # rewarded on the all-time board. Absent
+										  # / 0 = never rewarded for that diff.
 var last_daily_reward_date: String = ""   # "YYYY-MM-DD" UTC of the most recent day
-                                          # whose daily-standing reward has been
-                                          # resolved. "" = never (fresh cycle).
+										  # whose daily-standing reward has been
+										  # resolved. "" = never (fresh cycle).
 # Audit trail (added later so old wallets keep working — both default to empty
 # and accumulate forward from the first new event).
 var earned_coins: int = 0                 # lifetime coins earned by gameplay/claims,
-                                          # NOT counting real-money purchases. Allows
-                                          # auditing balance = earned + purchased - spent.
+										  # NOT counting real-money purchases. Allows
+										  # auditing balance = earned + purchased - spent.
 var purchase_history: Dictionary = {}     # sku -> { iso_timestamp: true }. Stored as
-                                          # a map-of-map (not a list) because the Android
-                                          # Firestore SDK rejects raw arrays — same
-                                          # reasoning as _owned_themes_map_for_save.
+										  # a map-of-map (not a list) because the Android
+										  # Firestore SDK rejects raw arrays — same
+										  # reasoning as _owned_themes_map_for_save.
 # Non-consumable entitlement: once bought, ads are off forever. The flag is
 # the durable source of truth — PurchaseManager re-acknowledges with Play on
 # every fresh install, but it's CoinsManager that the rest of the app reads.
@@ -570,7 +570,8 @@ func grant_daily_rewards_if_due() -> void:
 	while di <= yesterday_idx:
 		var date_str := _date_str_from_day_index(di)
 		for diff in ["easy", "moderate", "hard"]:
-			var rank := await LeaderboardManager.my_daily_rank_for(diff, date_str)
+			# Explicit type: 4.6 won't infer a `:=` through `await` across an autoload.
+			var rank: int = await LeaderboardManager.my_daily_rank_for(diff, date_str)
 			if rank < 0:
 				# A read failed — abort the WHOLE pass without stamping or paying,
 				# so nothing is lost and the next login retries cleanly.

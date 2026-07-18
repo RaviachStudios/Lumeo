@@ -37,6 +37,45 @@ const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 # REST base for the Firestore project. The runQuery/runAggregationQuery
 # endpoints hang off the same root.
 const _FB_BASE := "https://firestore.googleapis.com/v1/projects/simon-6bc39/databases/(default)/documents"
+# The bare resource path (no host/version) used inside :commit / :batchGet bodies,
+# where documents are named by their full resource path.
+const _FB_PROJECT_DOCS := "projects/simon-6bc39/databases/(default)/documents"
+
+# ---- score histogram (scale-invariant rank) --------------------------------
+# The rank of a player OUTSIDE the top-N used to need a count() aggregation over
+# every row above them — O(players-above-me) reads, which grows without bound as
+# the board grows. Instead we keep a materialized score histogram: for each score
+# value, HOW MANY players hold that as their best. Rank is then pure arithmetic —
+# read the (fixed-size) histogram and sum the counts of every score above mine —
+# so a rank lookup costs a FIXED number of reads no matter how large the board is.
+#
+# Storage: board_hist/{board}_{k}  ->  { counts: { "<score>": <int> } }
+# where {board} is e.g. "global_easy" and k is 0..HIST_SHARDS-1.
+#
+# Why shards: every score submit writes the histogram, and a single Firestore
+# document sustains only ~1 write/sec. Each client writes to a RANDOM shard, so
+# writes spread across HIST_SHARDS docs; the true count for a score is the SUM of
+# that score's field across all shards. Reads batch-get all shards in one request.
+# HIST_SHARDS is a small constant, so rank stays a fixed read cost. Raising it
+# later is backward-compatible: new shards simply start empty at 0.
+#
+# Maintenance is via Firestore's atomic `increment` field-transform over the REST
+# :commit endpoint (the Android plugin can't do atomic increments). Increments are
+# applied server-side, so concurrent submits never clobber even without a
+# transaction. On a new best, the client does +1 at the new score and -1 at the
+# old score (in ONE commit to ONE shard). Only the all-time boards are
+# histogrammed — daily boards are naturally bounded to one day's players, so their
+# aggregation never scales.
+#
+# Trust: the histogram doc is world-writable (there's no native-auth token on the
+# REST path), so a bad client can skew rank NUMBERS — but not the podium, which
+# still derives from the auth-guarded per-uid rows. Same client-trusted posture as
+# the boards themselves. Drift (a crash between the -1/+1, or a deleted account) is
+# self-healing: rebuild_histograms() recomputes every shard from the rows.
+const HIST_SHARDS := 10
+const _HIST_COLL := "board_hist"
+# The all-time boards that carry a histogram (daily boards intentionally don't).
+const _HIST_BOARDS: Array[String] = ["global_easy", "global_moderate", "global_hard"]
 
 # Daily rows are now HISTORICAL: keyed by `{date}__{uid}` (not `{uid}`), so a
 # later replay never overwrites a prior day's row, and each closed day's board
@@ -64,6 +103,17 @@ var _sim_daily := {"easy": {}, "moderate": {}, "hard": {}}
 const _RANK_CACHE_PATH := "user://rank_cache.cfg"
 var _rank_cache: Dictionary = {}   # diff -> int rank (>0)
 
+# Boot-warmed board cache. Both families are fetched right after sign-in (well
+# before the player can reach the leaderboards screen), so the screen can paint
+# instantly from here with NO loading overlay and then quietly revalidate. Keys
+# match the screen's range keys ("all_time" / "daily"). Now that every board read
+# is fixed-cost, this warm-up is cheap and bounded regardless of DB size.
+const RANGE_ALL_KEY := "all_time"
+const RANGE_DAILY_KEY := "daily"
+var _warm: Dictionary = {}                       # range_key -> load_all result
+var _warm_ready := {RANGE_ALL_KEY: false, RANGE_DAILY_KEY: false}
+var _warming := false
+
 func _uid() -> String:  return FirebaseManager.uid
 func _name() -> String: return FirebaseManager.display_name
 
@@ -71,9 +121,12 @@ func _ready() -> void:
 	FirebaseManager.display_name_changed.connect(_on_display_name_changed)
 	FirebaseManager.signed_in.connect(_on_signed_in)
 	FirebaseManager.signed_out.connect(_on_signed_out)
-	# Editor sign-in is synchronous, so we may already be signed in by now.
+	# Editor sign-in is synchronous, so we may already be signed in by now (the
+	# signed_in signal fired before we connected). Cover that case: load the rank
+	# cache and kick the board warm-up so the leaderboards screen opens instantly.
 	if not _uid().is_empty():
 		_load_rank_cache()
+		warm_boards()
 
 # The last cached all-time rank for `difficulty` (0 if unknown / not signed in).
 func cached_rank(difficulty: String) -> int:
@@ -82,9 +135,14 @@ func cached_rank(difficulty: String) -> int:
 func _on_signed_in(_uid_in: String, _name_in: String) -> void:
 	_rank_cache.clear()
 	_load_rank_cache()
+	# Preload both leaderboard families now so the screen never shows a loader.
+	warm_boards()
 
 func _on_signed_out() -> void:
 	_rank_cache.clear()
+	_warm.clear()
+	_warm_ready[RANGE_ALL_KEY] = false
+	_warm_ready[RANGE_DAILY_KEY] = false
 
 # Record a freshly-computed rank for the signed-in player and persist it.
 func _cache_rank(difficulty: String, rank: int) -> void:
@@ -135,9 +193,15 @@ func delete_all_my_rows() -> void:
 			_sim_daily[diff] = dd
 		return
 	for diff in DIFFS:
-		# All-time: one row per uid.
-		Firebase.firestore.delete_document("global_" + diff, my_uid)
+		# All-time: one row per uid. Read its score first so we can pull this
+		# player's count back out of the materialized histogram after deleting.
+		var board := "global_" + diff
+		var mine := await _rest_get(board, my_uid)
+		var my_old := int(mine.get("data", {}).get("score", 0))
+		Firebase.firestore.delete_document(board, my_uid)
 		await Firebase.firestore.delete_task_completed
+		if my_old > 0:
+			await _hist_apply(board, {my_old: -1})
 		# Legacy daily row from before date-partitioning (keyed by `{uid}`, no
 		# `uid` field so the query below can't see it). Harmless no-op if absent.
 		var daily_coll := "daily_" + diff
@@ -145,7 +209,7 @@ func delete_all_my_rows() -> void:
 		await Firebase.firestore.delete_task_completed
 		# Daily: potentially one row per retained day. Query by the `uid` field
 		# (single-field auto-index — no composite needed) and delete each.
-		var mine := await _rest_run_query({
+		var daily_rows := await _rest_run_query({
 			"from": [{"collectionId": daily_coll}],
 			"where": {"fieldFilter": {
 				"field": {"fieldPath": "uid"},
@@ -153,7 +217,7 @@ func delete_all_my_rows() -> void:
 				"value": {"stringValue": my_uid},
 			}},
 		})
-		for item in mine.get("items", []):
+		for item in daily_rows.get("items", []):
 			Firebase.firestore.delete_document(daily_coll, String(item.get("id", "")))
 			await Firebase.firestore.delete_task_completed
 
@@ -343,6 +407,199 @@ func _fields(f: Dictionary) -> Dictionary:
 		if v != null: out[k] = v
 	return out
 
+# ---- score histogram helpers ----
+
+# Full resource name of one histogram shard, e.g.
+# projects/.../documents/board_hist/global_easy_3
+func _hist_shard_name(board: String, k: int) -> String:
+	return _FB_PROJECT_DOCS + "/" + _HIST_COLL + "/" + board + "_" + str(k)
+
+# Firestore field path for a score bucket. A numeric map key must be backtick-
+# quoted in a field path, so score 37 becomes  counts.`37`.
+func _hist_field_path(score: int) -> String:
+	return "counts.`" + str(score) + "`"
+
+# Apply a set of {score: delta} changes to the board's histogram, atomically, in a
+# SINGLE commit to ONE random shard. Server-side `increment` transforms mean
+# concurrent writers never clobber; a missing shard/field is created and treated as
+# 0. Best-effort and fire-and-forget from the caller's view — a lost increment only
+# nudges rank slightly and is healed by rebuild_histograms().
+func _hist_apply(board: String, deltas: Dictionary) -> void:
+	if _is_editor or deltas.is_empty():
+		return
+	var k := randi() % HIST_SHARDS
+	var transforms: Array = []
+	for score in deltas:
+		var d := int(deltas[score])
+		if d == 0:
+			continue
+		transforms.append({
+			"fieldPath": _hist_field_path(int(score)),
+			"increment": {"integerValue": str(d)},
+		})
+	if transforms.is_empty():
+		return
+	# update with an EMPTY updateMask writes none of update's own fields (so sibling
+	# counts are preserved) while still creating the doc if absent; the transforms
+	# then apply. This is exactly what a merge-set of FieldValue.increment compiles
+	# to.
+	var body := {
+		"writes": [{
+			"update": {"name": _hist_shard_name(board, k)},
+			"updateMask": {"fieldPaths": []},
+			"updateTransforms": transforms,
+		}],
+	}
+	await _rest_commit(body)
+
+# The signed-in player's EXACT all-time rank on `board` (1-based) from the
+# histogram: 1 + (players whose best score is strictly greater than mine). Reads
+# every shard in one batchGet, so the cost is fixed (HIST_SHARDS reads) regardless
+# of board size. Returns -1 on a hard read failure so the caller can fall back.
+func _hist_rank(board: String, my_score: int) -> int:
+	var names: Array = []
+	for k in HIST_SHARDS:
+		names.append(_hist_shard_name(board, k))
+	var shards := await _rest_batch_get(names)
+	if not bool(shards.get("ok", false)):
+		return -1
+	var docs: Array = shards.get("docs", [])
+	# No shard exists yet → the histogram hasn't been seeded (pre-backfill rollout,
+	# or a brand-new board). Signal a fallback rather than reporting a bogus rank 1
+	# for everyone. (After rebuild_histograms(), every shard exists — shard 0 with
+	# the tally, the rest as empty {counts:{}} — so this only fires when unseeded.)
+	if docs.is_empty():
+		return -1
+	var above := 0
+	for fields in docs:
+		var counts: Dictionary = (fields as Dictionary).get("counts", {})
+		for key in counts:
+			if int(key) > my_score:
+				above += int(counts[key])
+	return above + 1
+
+# POSTs a Firestore :commit and returns the HTTP status (200 = written). Writes
+# are NOT retried here: `increment` is not idempotent, so a retry on an ambiguous
+# response could double-count. Callers treat non-200 as best-effort failure.
+func _rest_commit(body: Dictionary) -> int:
+	var r := await _http_post(_FB_BASE + ":commit", body)
+	return int(r[1])
+
+# Batch-reads several documents by full resource name in one request. Returns
+# {ok, docs} where docs is the list of decoded field dicts for the ones that
+# exist (missing shards are simply skipped). ok=false only on hard failure.
+func _rest_batch_get(names: Array) -> Dictionary:
+	var body := {"documents": names}
+	for attempt in 3:
+		var r := await _http_post(_FB_BASE + ":batchGet", body)
+		if r[1] == 200:
+			var j := JSON.new()
+			j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+			var out: Array = []
+			if j.data is Array:
+				for env in j.data:
+					if env is Dictionary and (env as Dictionary).has("found"):
+						var found: Dictionary = env["found"]
+						out.append(_fields(found.get("fields", {})))
+			return {"ok": true, "docs": out}
+		if attempt < 2:
+			await get_tree().create_timer(1.0).timeout
+	return {"ok": false, "docs": []}
+
+# ---- histogram backfill / rebuild (run once at rollout, and to heal drift) ----
+
+# Recompute EVERY all-time histogram from the authoritative per-uid rows and
+# overwrite the shards. Safe to re-run any time: the rows are the source of truth,
+# so this both seeds a fresh deployment and repairs any accumulated drift. Reads
+# every row of each board once (a one-off O(rows) admin cost, NOT paid per player
+# open). Returns a per-board summary { board: {rows, distinct_scores} }.
+# Run it from a device/editor build, e.g. via a debug button:
+#   await LeaderboardManager.rebuild_histograms()
+func rebuild_histograms() -> Dictionary:
+	var summary := {}
+	for board in _HIST_BOARDS:
+		var res := await _rebuild_one(board)
+		var counts: Dictionary = res.get("counts", {})
+		var total := 0
+		for s in counts:
+			total += int(counts[s])
+		summary[board] = {
+			"rows": total,
+			"distinct_scores": counts.size(),
+			"write_code": int(res.get("write_code", 0)),  # HTTP status of the commit (200 = ok)
+			"write_ok": bool(res.get("write_ok", false)),  # AND the read-back matched
+		}
+	return summary
+
+func _rebuild_one(board: String) -> Dictionary:
+	# 1) Tally {score: count} over every row (paged full scan).
+	var counts := {}
+	var rows := await _rest_list_all(board)
+	for row in rows:
+		var sc := int((row as Dictionary).get("score", 0))
+		if sc <= 0:
+			continue
+		counts[sc] = int(counts.get(sc, 0)) + 1
+	# 2) Overwrite shard 0 with the full tally and CLEAR the rest, so re-running
+	# never double-counts. Reads sum across shards, so one loaded shard is correct.
+	var code := await _hist_overwrite_shard(board, 0, counts)
+	for k in range(1, HIST_SHARDS):
+		await _hist_overwrite_shard(board, k, {})
+	# 3) Prove the write actually landed (answers "did the unauthenticated :commit
+	# succeed?"): read shard 0 back and confirm its total matches the tally.
+	# Firestore single-doc reads are strongly consistent, so this sees the write.
+	var want_total := 0
+	for s in counts:
+		want_total += int(counts[s])
+	var back := await _rest_get(_HIST_COLL, board + "_0")
+	var back_counts: Dictionary = back.get("data", {}).get("counts", {})
+	var back_total := 0
+	for s in back_counts:
+		back_total += int(back_counts[s])
+	var write_ok := code == 200 and back_total == want_total
+	return {"counts": counts, "write_code": code, "write_ok": write_ok}
+
+# Replace one shard's document with exactly { counts: <map> } (no updateMask =
+# full-document replace). Returns the commit's HTTP status (200 = written).
+# Used only by the rebuild path.
+func _hist_overwrite_shard(board: String, k: int, counts: Dictionary) -> int:
+	var fields := {}
+	for score in counts:
+		fields[str(int(score))] = {"integerValue": str(int(counts[score]))}
+	var body := {
+		"writes": [{
+			"update": {
+				"name": _hist_shard_name(board, k),
+				"fields": {"counts": {"mapValue": {"fields": fields}}},
+			},
+		}],
+	}
+	return await _rest_commit(body)
+
+# Pages through an entire collection via the REST list endpoint, returning every
+# document's decoded fields. Only used by the one-off rebuild, so the full scan is
+# acceptable here (and nowhere on the per-open read path).
+func _rest_list_all(collection: String) -> Array:
+	var out: Array = []
+	var page_token := ""
+	for _guard in 10000:                       # hard stop against a runaway loop
+		var url := _FB_BASE + "/" + collection + "?pageSize=300"
+		if not page_token.is_empty():
+			url += "&pageToken=" + page_token.uri_encode()
+		var r := await _http_get(url)
+		if r[1] != 200:
+			break
+		var j := JSON.new()
+		j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+		if not j.data is Dictionary:
+			break
+		for doc in j.data.get("documents", []):
+			out.append(_fields((doc as Dictionary).get("fields", {})))
+		page_token = String(j.data.get("nextPageToken", ""))
+		if page_token.is_empty():
+			break
+	return out
+
 # ---- date helpers (UTC; one canonical day per real-world day) ----
 
 func _today_utc() -> String:
@@ -387,11 +644,19 @@ func submit_score(difficulty: String, score: int) -> void:
 		return
 	var coll := "global_" + difficulty
 	var existing := await _rest_get(coll, _uid())
-	if score <= int(existing.get("data", {}).get("score", 0)):
+	var old_score := int(existing.get("data", {}).get("score", 0))
+	if score <= old_score:
 		return
 	Firebase.firestore.set_document(coll, _uid(),
 		{"name": _name(), "score": score}, true)
 	await Firebase.firestore.write_task_completed
+	# Keep the materialized histogram in step: this player's best moved from
+	# old_score -> score. Move their single count with it (a first-ever row has
+	# old_score 0, which was never counted, so only the +1 applies).
+	var deltas := {score: 1}
+	if old_score > 0:
+		deltas[old_score] = int(deltas.get(old_score, 0)) - 1
+	await _hist_apply(coll, deltas)
 
 # Submit a new daily score. Rows are keyed per-day (`{today}__{uid}`), so this
 # only ever compares against TODAY's own row — no cross-day overwrite handling is
@@ -516,6 +781,52 @@ func load_all_globals() -> Dictionary:
 func load_all_dailies() -> Dictionary:
 	return await _load_all("daily_", {"date": _today_utc()})
 
+# ---- boot warm-up (kills the leaderboards loading screen) ----
+
+# Fetch BOTH families concurrently into the warm cache. Re-runnable: a fresh call
+# refetches (used on sign-in). Non-blocking for callers — start it and forget it;
+# the screen consumes whatever's ready via take_warm(). Safe to call before the
+# player opens the screen.
+func warm_boards() -> void:
+	if _warming:
+		return
+	_warming = true
+	_warm_ready[RANGE_ALL_KEY] = false
+	_warm_ready[RANGE_DAILY_KEY] = false
+	var pending := {"left": 2}
+	_warm_family(RANGE_ALL_KEY, pending)
+	_warm_family(RANGE_DAILY_KEY, pending)
+	while pending["left"] > 0:
+		await _warm_family_done
+	_warming = false
+
+# Its own completion signal (NOT _board_loaded, which the inner _load_all loops
+# already fan out on — sharing it across the nested concurrent loops would risk a
+# missed wake-up).
+signal _warm_family_done
+
+# Worker: loads one family into the warm cache. Called WITHOUT await so both
+# families load at once.
+func _warm_family(range_key: String, pending: Dictionary) -> void:
+	var res: Dictionary
+	if range_key == RANGE_DAILY_KEY:
+		res = await load_all_dailies()
+	else:
+		res = await load_all_globals()
+	if bool(res.get("ok", false)):
+		_warm[range_key] = res
+		_warm_ready[range_key] = true
+	pending["left"] -= 1
+	_warm_family_done.emit()
+
+# The warm-cached families if BOTH are ready, else {}. Shape:
+# { all_time: <load_all result>, daily: <load_all result> }. The screen seeds its
+# own per-range caches from this to paint instantly without a loading overlay.
+func take_warm() -> Dictionary:
+	if _warm_ready[RANGE_ALL_KEY] and _warm_ready[RANGE_DAILY_KEY]:
+		return {RANGE_ALL_KEY: _warm[RANGE_ALL_KEY], RANGE_DAILY_KEY: _warm[RANGE_DAILY_KEY]}
+	return {}
+
 # Loads all three boards of one family CONCURRENTLY. Each _load_board coroutine
 # fires its first HTTP request before it suspends, so kicking them all off (without
 # awaiting in between) puts every request in flight at once; we then wait for the
@@ -612,11 +923,7 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 	var neighborhood: Array = []
 	if not my_row.is_empty() and not found_me_in_top:
 		var my_score := int(my_row.get("score", 0))
-		# Exact rank via aggregation: "rows above me" + 1.
-		var agg := await _rest_run_aggregation(
-			_build_score_compare_query(collection, extra_eq, ">", my_score, ""),
-			"above_count")
-		my_rank = int(agg.get("value", 0)) + 1
+		my_rank = await _rank_above(collection, extra_eq, my_score)
 		# Above-query is clipped so we never return players who are already in
 		# the top-N list (otherwise rank 21–25 would all duplicate the top 20).
 		# For a rank-22 player, only 1 above row exists below the top 20; for a
@@ -640,6 +947,22 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 		"my_rank": my_rank,
 		"neighborhood": neighborhood,
 	}
+
+# The signed-in player's 1-based rank on `collection` given their score. All-time
+# boards resolve this from the score histogram — a FIXED read cost that does not
+# grow with the board — falling back to the count() aggregation only if the
+# histogram read hard-fails. Daily boards use the aggregation directly (one day's
+# field is naturally bounded, so it never scales).
+func _rank_above(collection: String, extra_eq: Dictionary, my_score: int) -> int:
+	if collection.begins_with("global_"):
+		var r := await _hist_rank(collection, my_score)
+		if r > 0:
+			return r
+		# Histogram unreachable/unseeded — fall back to the exact aggregation.
+	var agg := await _rest_run_aggregation(
+		_build_score_compare_query(collection, extra_eq, ">", my_score, ""),
+		"above_count")
+	return int(agg.get("value", 0)) + 1
 
 # Build a structuredQuery body for "top N by score" with optional equality
 # filters layered on top (used for daily's `date == today`).

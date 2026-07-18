@@ -86,6 +86,28 @@ service cloud.firestore {
           && (docId == request.auth.uid || resource.data.uid == request.auth.uid);
     }
 
+    // ---- Score histogram (scale-invariant leaderboard rank) ---------------
+    // Materialized view of the all-time boards: for each score value, how many
+    // players hold it as their best. A player's rank is then read in a FIXED
+    // number of reads (sum the counts above their score) instead of an O(N)
+    // count() aggregation that grows with the board. Sharded as
+    // board_hist/{board}_{k} so per-submit writes spread across HIST_SHARDS docs.
+    //
+    // Maintained client-side via the REST :commit atomic `increment` transform
+    // (the Android plugin can't do atomic ops), which carries no native-auth
+    // token — so writes are public, matching the client-trusted posture of the
+    // boards themselves (see LeaderboardManager). A bad writer can only skew rank
+    // NUMBERS, never the podium (that still derives from the auth-guarded per-uid
+    // rows), and rebuild_histograms() heals any drift from the source-of-truth
+    // rows. Structure is bounded: the doc holds only a `counts` map, size-capped
+    // to the score domain (0..9999) so it can't be bloated with junk keys.
+    match /board_hist/{docId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasOnly(['counts'])
+          && request.resource.data.counts is map
+          && request.resource.data.counts.size() <= 10001;
+    }
+
     // Private wallet doc: coin balance, owned/equipped theme, login streak
     // (streak_days + first_login_at), display name, last claim date.
     // Owner-only. Fields are validated only when present so partial (merge)
