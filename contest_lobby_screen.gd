@@ -251,7 +251,7 @@ func _make_row(c: Dictionary, row_w: float) -> Control:
 	# Join / View / Full button.
 	var btn: Button
 	if mine:
-		btn = ArenaUI.pill_button("View", ArenaUI.SAND)
+		btn = ArenaUI.pill_button("Join", Color(0.30, 0.80, 0.52), true)
 	elif is_full:
 		btn = ArenaUI.pill_button("Full", Color(0.5, 0.5, 0.55))
 		btn.disabled = true

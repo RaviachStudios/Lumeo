@@ -42,7 +42,6 @@ var _vis_cards: Array[Dictionary] = []
 var _selected_public := true
 
 # Bottom navigation.
-var _prev_btn: Button
 var _primary_btn: Button
 var _cta_art: Control             # child layer painting the premium CTA (frame + panel + engraved text)
 var _msg: Label
@@ -72,7 +71,16 @@ func _ready() -> void:
 	_seed_motes()
 
 	_back = ArenaUI.make_back_button()
-	_back.pressed.connect(func() -> void: game_manager.show_arena())
+	# Top-left arrow doubles as the step-back control (the old bottom Back pill is gone):
+	# on step 2 it returns to the name step; on step 1 it leaves to the arena.
+	_back.pressed.connect(func() -> void:
+		if _step > 0:
+			_on_prev()
+		else:
+			game_manager.show_arena())
+	# Touch app — kill the default gray hover tint; the arrow keeps its resting look
+	# until actually pressed.
+	_back.add_theme_stylebox_override("hover", _back.get_theme_stylebox("normal"))
 	add_child(_back)
 
 	_title = _make_title_banner("CREATE ROOM")
@@ -83,10 +91,7 @@ func _ready() -> void:
 	_build_step1()
 	_build_step2()
 
-	# Bottom nav.
-	_prev_btn = ArenaUI.pill_button("◀  Back", ArenaUI.SAND)
-	_prev_btn.pressed.connect(_on_prev)
-	add_child(_prev_btn)
+	# Bottom nav — just the hero CTA (stepping back is handled by the top-left arrow).
 	_primary_btn = _make_cta_button("Next  ▶")
 	_primary_btn.pressed.connect(_on_primary)
 	add_child(_primary_btn)
@@ -232,10 +237,11 @@ func _make_suggest_chip(text: String, bright := false) -> Button:
 		s.shadow_size = 4
 		s.shadow_offset = Vector2(0, 2)
 	b.add_theme_stylebox_override("normal", s)
+	# No hover state (touch app) — hover matches the resting look; only a tap lights it up.
+	b.add_theme_stylebox_override("hover", s)
 	var sh := s.duplicate() as StyleBoxFlat
 	sh.bg_color = Color(gold.r, gold.g, gold.b, 0.20)
 	sh.border_color = Color(gold.r, gold.g, gold.b, 1.0 if bright else 0.78)
-	b.add_theme_stylebox_override("hover", sh)
 	b.add_theme_stylebox_override("pressed", sh)
 	b.add_theme_color_override("font_color", gold.lightened(0.45 if bright else 0.3))
 	return b
@@ -324,39 +330,38 @@ func _build_step2() -> void:
 
 	for diff in DIFF_ORDER:
 		var accent: Color = DIFF_ACCENT[diff]
+		# A sculpted 3D pill (same material approach as the CTA): the Button is invisible
+		# and only supplies the tap target + press state; the child "art" paints the bevel,
+		# gradient, rim light and engraved label. No hover state — this is a touch app.
 		var btn := Button.new()
 		btn.focus_mode = Control.FOCUS_NONE
-		var sb_off := StyleBoxFlat.new()
-		sb_off.bg_color = Color(0.08, 0.09, 0.20, 0.72)
-		sb_off.set_corner_radius_all(24)
-		sb_off.border_color = Color(accent.r, accent.g, accent.b, 0.35)
-		sb_off.set_border_width_all(1)
-		var sb_on := StyleBoxFlat.new()
-		sb_on.bg_color = Color(accent.r, accent.g, accent.b, 0.2)
-		sb_on.set_corner_radius_all(24)
-		sb_on.border_color = Color(accent.r, accent.g, accent.b, 0.95)
-		sb_on.set_border_width_all(2)
-		sb_on.shadow_color = Color(accent.r, accent.g, accent.b, 0.4)
-		sb_on.shadow_size = 12
-		for st in ["normal", "hover", "pressed", "focus"]:
-			btn.add_theme_stylebox_override(st, sb_off)
+		btn.clip_contents = false
+		var empty := StyleBoxEmpty.new()
+		for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+			btn.add_theme_stylebox_override(st, empty)
 		_step2.add_child(btn)
 
-		var lbl := Label.new()
-		lbl.text = ContestManager.diff_label(diff)
-		lbl.add_theme_font_size_override("font_size", 20)
-		lbl.add_theme_color_override("font_color", accent)
-		lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn.add_child(lbl)
+		var art := Control.new()
+		art.set_anchors_preset(Control.PRESET_FULL_RECT)
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		art.clip_contents = false
+		art.set_meta("accent", accent)
+		art.set_meta("label", ContestManager.diff_label(diff))
+		art.set_meta("selected", diff == _selected_diff)
+		art.set_meta("pressed", false)
+		art.draw.connect(_draw_diff_pill.bind(art))
+		art.resized.connect(art.queue_redraw)
+		btn.add_child(art)
 
+		# Physical press: the face sinks toward its shadow, then springs back on release.
+		btn.button_down.connect(func() -> void:
+			art.set_meta("pressed", true); art.queue_redraw())
+		btn.button_up.connect(func() -> void:
+			art.set_meta("pressed", false); art.queue_redraw())
 		btn.pressed.connect(func() -> void:
 			_selected_diff = diff
 			_refresh_diff_styles())
-		_diff_pills.append({"btn": btn, "diff": diff, "sb_on": sb_on, "sb_off": sb_off,
-			"lbl": lbl, "accent": accent})
+		_diff_pills.append({"btn": btn, "diff": diff, "art": art, "accent": accent})
 
 	# Visibility picker (public listed in the browse-lobby / private = ID only).
 	var vcap := _section_caption("Who can join?")
@@ -369,64 +374,270 @@ func _build_step2() -> void:
 	for opt in vis_opts:
 		var is_pub: bool = opt["public"]
 		var accent: Color = ArenaUI.ACCENT if is_pub else ArenaUI.SAND
+		# Same sculpted-3D recipe as the difficulty pills: the Button is invisible and only
+		# supplies the tap target + press state; the child "art" paints the bevel, gradient,
+		# rim light, emblem and engraved title/description.
 		var card := Button.new()
 		card.focus_mode = Control.FOCUS_NONE
-		var sb_off := StyleBoxFlat.new()
-		sb_off.bg_color = Color(0.09, 0.10, 0.22, 0.72)
-		sb_off.set_corner_radius_all(18)
-		sb_off.border_color = Color(accent.r, accent.g, accent.b, 0.32)
-		sb_off.set_border_width_all(1)
-		var sb_on := StyleBoxFlat.new()
-		sb_on.bg_color = Color(accent.r, accent.g, accent.b, 0.20)
-		sb_on.set_corner_radius_all(18)
-		sb_on.border_color = Color(accent.r, accent.g, accent.b, 0.95)
-		sb_on.set_border_width_all(2)
-		sb_on.shadow_color = Color(accent.r, accent.g, accent.b, 0.4)
-		sb_on.shadow_size = 12
-		for st in ["normal", "hover", "pressed", "focus"]:
-			card.add_theme_stylebox_override(st, sb_off)
+		card.clip_contents = false
+		var empty := StyleBoxEmpty.new()
+		for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+			card.add_theme_stylebox_override(st, empty)
 		_step2.add_child(card)
 
-		var title_lbl := Label.new()
-		title_lbl.text = String(opt["title"])
-		title_lbl.add_theme_font_size_override("font_size", 22)
-		title_lbl.add_theme_color_override("font_color", Color.WHITE)
-		title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(title_lbl)
-		var desc_lbl := Label.new()
-		desc_lbl.text = String(opt["desc"])
-		desc_lbl.add_theme_font_size_override("font_size", 13)
-		desc_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 1.0))
-		desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		desc_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		card.add_child(desc_lbl)
+		var art := Control.new()
+		art.set_anchors_preset(Control.PRESET_FULL_RECT)
+		art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		art.clip_contents = false
+		art.set_meta("accent", accent)
+		art.set_meta("title", String(opt["title"]))
+		art.set_meta("desc", String(opt["desc"]))
+		art.set_meta("public", is_pub)
+		art.set_meta("selected", is_pub == _selected_public)
+		art.set_meta("pressed", false)
+		art.draw.connect(_draw_vis_card.bind(art))
+		art.resized.connect(art.queue_redraw)
+		card.add_child(art)
 
+		# Physical press: the face sinks toward its shadow, then springs back on release.
+		card.button_down.connect(func() -> void:
+			art.set_meta("pressed", true); art.queue_redraw())
+		card.button_up.connect(func() -> void:
+			art.set_meta("pressed", false); art.queue_redraw())
 		card.pressed.connect(func() -> void:
 			_selected_public = is_pub
 			_refresh_vis_styles())
-		_vis_cards.append({"btn": card, "public": is_pub, "sb_on": sb_on, "sb_off": sb_off,
-			"title_lbl": title_lbl, "desc_lbl": desc_lbl, "accent": accent})
+		_vis_cards.append({"btn": card, "public": is_pub, "art": art, "accent": accent})
 
 func _refresh_vis_styles() -> void:
 	for d in _vis_cards:
-		var on: bool = bool(d["public"]) == _selected_public
-		var sb: StyleBoxFlat = d["sb_on"] if on else d["sb_off"]
-		for st in ["normal", "hover", "pressed", "focus"]:
-			(d["btn"] as Button).add_theme_stylebox_override(st, sb)
-		var accent: Color = d["accent"]
-		(d["title_lbl"] as Label).add_theme_color_override("font_color",
-			accent.lightened(0.45) if on else Color.WHITE)
+		var art: Control = d["art"]
+		art.set_meta("selected", bool(d["public"]) == _selected_public)
+		art.queue_redraw()
+
+# A sculpted 3D visibility card, painted per-vertex to match the difficulty pills. Unselected
+# reads as a dark bevelled tablet with a faint accent rim; selected lifts into a glossy
+# accent-coloured cap with a hugging bloom, bright top specular and a convex sheen. A small
+# forged emblem (a globe for Public, a padlock for Private) sits above the engraved title +
+# description. Held → the whole face sinks 3px.
+func _draw_vis_card(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var accent: Color = c.get_meta("accent", Color.WHITE)
+	var selected: bool = bool(c.get_meta("selected", false))
+	var pressed: bool = bool(c.get_meta("pressed", false))
+	var is_pub: bool = bool(c.get_meta("public", true))
+	var dy := 3.0 if pressed else 0.0
+	var R := 18.0
+
+	# ---- soft contact shadow anchoring the card (stays put as the face sinks) ----
+	for i in range(5):
+		var t := float(i) / 5.0
+		var sw: float = w - 26.0 + t * 30.0
+		var sy: float = h - 6.0 + t * 5.0
+		var srect := Rect2((w - sw) * 0.5, sy, sw, 13.0)
+		var sa: float = (0.26 * (1.0 - t)) * (0.5 if pressed else 1.0)
+		c.draw_colored_polygon(_rr_points(srect, 7.0), Color(0.0, 0.0, 0.02, sa))
+
+	var body := Rect2(1.0, 1.0 + dy, w - 2.0, h - 5.0)
+	var body_pts := _rr_points(body, R)
+
+	# ---- selected: a tight accent bloom hugging the card ----
+	if selected:
+		for i in range(5):
+			var g: float = 1.0 + i * 2.4
+			var bpts := _rr_points(body.grow(g), R + g)
+			bpts.append(bpts[0])
+			c.draw_polyline(bpts, Color(accent.r, accent.g, accent.b, 0.16 * (1.0 - float(i) / 5.0)),
+				3.0, true)
+
+	# ---- bevelled body: a vertical gradient reads as a lit convex cap ----
+	var top_col: Color
+	var bot_col: Color
+	if selected:
+		top_col = accent.lightened(0.34)
+		bot_col = accent.darkened(0.40)
+	else:
+		top_col = Color(0.15, 0.17, 0.30).lerp(accent, 0.14)
+		bot_col = Color(0.05, 0.06, 0.14).lerp(accent, 0.07)
+	_fill_grad_v(c, body_pts, body.position.y, body.position.y + body.size.y, top_col, bot_col)
+
+	# ---- rim: a bright bevel edge tracing the card ----
+	var rim: Color = accent.lightened(0.5) if selected else accent.lightened(0.15)
+	var rim_pts := _rr_points(body, R)
+	rim_pts.append(rim_pts[0])
+	c.draw_polyline(rim_pts, Color(rim.r, rim.g, rim.b, 0.6 if selected else 0.30), 2.0, true)
+
+	# ---- specular highlight riding the top edge + a darker shade line along the base ----
+	c.draw_line(Vector2(R * 0.8, body.position.y + 2.8), Vector2(w - R * 0.8, body.position.y + 2.8),
+		Color(1.0, 1.0, 1.0, 0.5 if selected else 0.18), 1.6, true)
+	c.draw_line(Vector2(R, body.position.y + body.size.y - 2.4),
+		Vector2(w - R, body.position.y + body.size.y - 2.4), Color(0.0, 0.0, 0.02, 0.36), 1.6, true)
+
+	# ---- convex sheen pooled in the upper third so the surface bulges gently ----
+	var sheen_ctr := Vector2(w * 0.5, body.position.y + body.size.y * 0.28)
+	c.draw_set_transform(sheen_ctr, 0.0, Vector2(1.0, 0.42))
+	for i in range(5):
+		var t := float(i) / 5.0
+		c.draw_circle(Vector2.ZERO, lerpf(body.size.y * 0.12, body.size.x * 0.40, t),
+			Color(1.0, 1.0, 1.0, (0.10 if selected else 0.045) * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+
+	# ---- forged emblem (globe / padlock) sitting above the title ----
+	# On the bright gold selected face a white emblem washes out, so we stamp it in deep
+	# engraved bronze with a light lower emboss; unselected keeps a bright accent tint.
+	var emb_col: Color = Color(0.30, 0.17, 0.03) if selected else accent.lightened(0.28)
+	var emb_edge: Color = Color(1.0, 0.97, 0.86, 0.55) if selected else Color(0.0, 0.0, 0.02, 0.5)
+	_draw_vis_emblem(c, is_pub, Vector2(w * 0.5, body.position.y + 26.0), emb_col, emb_edge, selected)
+
+	# ---- engraved title ----
+	var font := ThemeDB.fallback_font
+	var tfs := 22
+	var title := String(c.get_meta("title", ""))
+	var tw2 := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tfs).x
+	var title_y := body.position.y + 63.0
+	var tbase := Vector2((w - tw2) * 0.5, title_y)
+	# Deep-bronze engrave on the gold face (matches the emblem); bright accent when unselected.
+	var title_col: Color = Color(0.26, 0.14, 0.02) if selected else accent.lightened(0.30)
+	var title_hi: Color = Color(1.0, 0.98, 0.88, 0.55) if selected else Color(0.0, 0.0, 0.0, 0.38)
+	c.draw_string_outline(font, tbase, title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tfs, 5,
+		(Color(1.0, 0.95, 0.80, 0.30) if selected else Color(0.0, 0.0, 0.02, 0.7)))
+	c.draw_string(font, tbase + Vector2(0.0, 1.1), title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tfs, title_hi)
+	c.draw_string(font, tbase, title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, tfs, title_col)
+
+	# ---- engraved description (2 short lines, centred) ----
+	var dfs := 12
+	var desc: String = String(c.get_meta("desc", ""))
+	var desc_col: Color = Color(0.30, 0.17, 0.03, 0.94) if selected else Color(0.74, 0.78, 1.0, 0.88)
+	var dy0 := title_y + 18.0
+	for line in desc.split("\n"):
+		var lw := font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, dfs).x
+		var lb := Vector2((w - lw) * 0.5, dy0 + font.get_ascent(dfs))
+		c.draw_string_outline(font, lb, line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, dfs, 3,
+			(Color(1.0, 0.96, 0.82, 0.28) if selected else Color(0.0, 0.0, 0.02, 0.55)))
+		c.draw_string(font, lb, line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, dfs, desc_col)
+		dy0 += 16.0
+
+# A tiny forged pictograph for the visibility cards: an open globe (Public) or a padlock
+# (Private), drawn from primitives so it reads as engraved metal in both states.
+func _draw_vis_emblem(c: Control, is_pub: bool, ctr: Vector2, col: Color, edge: Color, _selected: bool) -> void:
+	var shade := edge
+	if is_pub:
+		var r := 8.5
+		c.draw_arc(ctr + Vector2(0, 1.0), r, 0.0, TAU, 28, shade, 2.6, true)
+		c.draw_arc(ctr, r, 0.0, TAU, 28, col, 2.0, true)
+		# meridian + two parallels for a globe read
+		c.draw_line(ctr + Vector2(0, -r), ctr + Vector2(0, r), col, 1.6, true)
+		c.draw_arc(ctr, r, -PI * 0.5, PI * 0.5, 16, col, 1.4, true)
+		c.draw_line(ctr + Vector2(-r, 0), ctr + Vector2(r, 0), col, 1.4, true)
+		c.draw_line(ctr + Vector2(-r * 0.86, -r * 0.5), ctr + Vector2(r * 0.86, -r * 0.5), col, 1.2, true)
+		c.draw_line(ctr + Vector2(-r * 0.86, r * 0.5), ctr + Vector2(r * 0.86, r * 0.5), col, 1.2, true)
+	else:
+		# padlock: a rounded body with a shackle arc above
+		var bw := 15.0
+		var bh := 11.0
+		var body := Rect2(ctr.x - bw * 0.5, ctr.y - 1.0, bw, bh)
+		var body_shade := Rect2(body.position + Vector2(0, 1.4), body.size)
+		c.draw_colored_polygon(_rr_points(body_shade, 3.0), shade)
+		c.draw_colored_polygon(_rr_points(body, 3.0), col)
+		# shackle
+		var sh_ctr := Vector2(ctr.x, body.position.y)
+		c.draw_arc(sh_ctr, 5.0, PI, TAU, 16, col, 2.2, true)
+		c.draw_line(sh_ctr + Vector2(-5.0, 0), sh_ctr + Vector2(-5.0, -0.5), col, 2.2, true)
+		c.draw_line(sh_ctr + Vector2(5.0, 0), sh_ctr + Vector2(5.0, -0.5), col, 2.2, true)
+		# keyhole
+		var kh := body.position + Vector2(bw * 0.5, bh * 0.5)
+		c.draw_circle(kh, 1.8, shade)
 
 func _refresh_diff_styles() -> void:
 	for d in _diff_pills:
-		var on: bool = d["diff"] == _selected_diff
-		var sb: StyleBoxFlat = d["sb_on"] if on else d["sb_off"]
-		for st in ["normal", "hover", "pressed", "focus"]:
-			(d["btn"] as Button).add_theme_stylebox_override(st, sb)
-		var accent: Color = d["accent"]
-		(d["lbl"] as Label).add_theme_color_override("font_color",
-			accent.lightened(0.4) if on else Color(accent.r, accent.g, accent.b, 0.75))
+		var art: Control = d["art"]
+		art.set_meta("selected", d["diff"] == _selected_diff)
+		art.queue_redraw()
+
+# A sculpted 3D difficulty pill painted per-vertex (no flat stylebox). Unselected reads as
+# a dark bevelled tablet with a faint accent-tinted rim; selected lifts into a glossy,
+# accent-coloured cap with a hugging bloom, a bright top specular and a convex sheen — so
+# the chosen difficulty visibly pops off the panel. Held → the whole face sinks 3px.
+func _draw_diff_pill(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var accent: Color = c.get_meta("accent", Color.WHITE)
+	var selected: bool = bool(c.get_meta("selected", false))
+	var pressed: bool = bool(c.get_meta("pressed", false))
+	var dy := 3.0 if pressed else 0.0
+	var R: float = minf(h * 0.5, 28.0)
+
+	# ---- soft contact shadow anchoring the pill to the panel (stays put as the face sinks) ----
+	for i in range(5):
+		var t := float(i) / 5.0
+		var sw: float = w - 22.0 + t * 26.0
+		var sy: float = h - 6.0 + t * 5.0
+		var srect := Rect2((w - sw) * 0.5, sy, sw, 12.0)
+		var sa: float = (0.26 * (1.0 - t)) * (0.5 if pressed else 1.0)
+		c.draw_colored_polygon(_rr_points(srect, 6.0), Color(0.0, 0.0, 0.02, sa))
+
+	var body := Rect2(1.0, 1.0 + dy, w - 2.0, h - 5.0)
+	var body_pts := _rr_points(body, R)
+
+	# ---- selected: a tight accent bloom hugging the pill ----
+	if selected:
+		for i in range(5):
+			var g: float = 1.0 + i * 2.2
+			var bpts := _rr_points(body.grow(g), R + g)
+			bpts.append(bpts[0])
+			c.draw_polyline(bpts, Color(accent.r, accent.g, accent.b, 0.16 * (1.0 - float(i) / 5.0)),
+				3.0, true)
+
+	# ---- bevelled body: a vertical gradient reads as a lit convex cap ----
+	var top_col: Color
+	var bot_col: Color
+	if selected:
+		top_col = accent.lightened(0.42)
+		bot_col = accent.darkened(0.34)
+	else:
+		# deep navy tablet with just a whisper of the accent
+		top_col = Color(0.15, 0.17, 0.30).lerp(accent, 0.16)
+		bot_col = Color(0.05, 0.06, 0.14).lerp(accent, 0.08)
+	_fill_grad_v(c, body_pts, body.position.y, body.position.y + body.size.y, top_col, bot_col)
+
+	# ---- rim: a bright bevel edge tracing the pill ----
+	var rim: Color = accent.lightened(0.5) if selected else accent.lightened(0.15)
+	var rim_pts := _rr_points(body, R)
+	rim_pts.append(rim_pts[0])
+	c.draw_polyline(rim_pts, Color(rim.r, rim.g, rim.b, 0.6 if selected else 0.32), 2.0, true)
+
+	# ---- specular highlight riding the top edge + a darker shade line along the base ----
+	c.draw_line(Vector2(R * 0.8, body.position.y + 2.8), Vector2(w - R * 0.8, body.position.y + 2.8),
+		Color(1.0, 1.0, 1.0, 0.5 if selected else 0.20), 1.6, true)
+	c.draw_line(Vector2(R, body.position.y + body.size.y - 2.4),
+		Vector2(w - R, body.position.y + body.size.y - 2.4), Color(0.0, 0.0, 0.02, 0.38), 1.6, true)
+
+	# ---- convex sheen pooled in the upper third so the surface bulges gently ----
+	var sheen_ctr := Vector2(w * 0.5, body.position.y + body.size.y * 0.32)
+	c.draw_set_transform(sheen_ctr, 0.0, Vector2(1.0, 0.5))
+	for i in range(5):
+		var t := float(i) / 5.0
+		c.draw_circle(Vector2.ZERO, lerpf(body.size.y * 0.14, body.size.x * 0.42, t),
+			Color(1.0, 1.0, 1.0, (0.11 if selected else 0.05) * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+
+	# ---- engraved label ----
+	var font := ThemeDB.fallback_font
+	var fs := 22
+	var txt := String(c.get_meta("label", ""))
+	var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	var base := Vector2((w - ts.x) * 0.5, (h - ts.y) * 0.5 + font.get_ascent(fs) + dy)
+	var text_col: Color = Color(1.0, 1.0, 0.98) if selected else accent.lightened(0.28)
+	c.draw_string_outline(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, 5,
+		Color(0.0, 0.0, 0.02, 0.7))
+	c.draw_string(font, base + Vector2(0.0, 1.2), txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs,
+		Color(0.0, 0.0, 0.0, 0.4))
+	c.draw_string(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, text_col)
 
 func _section_caption(text: String) -> Label:
 	var l := Label.new()
@@ -445,7 +656,6 @@ func _section_caption(text: String) -> Label:
 func _show_step() -> void:
 	_step1.visible = _step == 0
 	_step2.visible = _step == 1
-	_prev_btn.visible = _step > 0
 	_primary_btn.text = "Create Room" if _step == STEP_COUNT - 1 else "Next  ▶"
 	if _cta_art:
 		_cta_art.queue_redraw()
@@ -532,25 +742,20 @@ func _layout() -> void:
 	vcap.size = Vector2(sz.x, 30); vcap.position = Vector2(0, vis_top)
 	var vcard_top := vis_top + 44.0
 	var vw: float = clampf((sz.x - 100.0) / 2.0 - 16.0, 170.0, 260.0)
-	var vh := 92.0
+	var vh := 122.0
 	var vtotal := vw * 2.0 + gap
 	var vx := cx - vtotal * 0.5
 	for d in _vis_cards:
 		var card: Button = d["btn"]
 		card.size = Vector2(vw, vh)
 		card.position = Vector2(vx, vcard_top)
-		var title_lbl: Label = d["title_lbl"]
-		title_lbl.position = Vector2(0, 16); title_lbl.size = Vector2(vw, 28)
-		var desc_lbl: Label = d["desc_lbl"]
-		desc_lbl.position = Vector2(8, 48); desc_lbl.size = Vector2(vw - 16, 40)
+		(d["art"] as Control).queue_redraw()
 		vx += vw + gap
 
-	# Bottom nav — primary centered (the hero CTA, ~15% larger), step-back to its left.
+	# Bottom nav — the hero CTA, centered (stepping back lives on the top-left arrow).
 	var nav_y := sz.y - 104.0
 	_primary_btn.size = Vector2(318, 74)
 	_primary_btn.position = Vector2(cx - 159, nav_y)
-	_prev_btn.size = Vector2(150, 74)
-	_prev_btn.position = Vector2(cx - 159 - 150 - 16, nav_y)
 	_msg.size = Vector2(sz.x, 24)
 	_msg.position = Vector2(0, nav_y + 78)
 

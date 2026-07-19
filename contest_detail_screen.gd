@@ -146,9 +146,17 @@ func _render() -> void:
 
 	var status := String(_room.get("status", "lobby"))
 	_title.text = ArenaUI.clamp_title(String(_room.get("title", "Room")))
-	_subtitle.text = "✦   %s   ✦" % ContestManager.diff_label(String(_room.get("difficulty", "easy")))
+	var diff := String(_room.get("difficulty", "easy"))
+	_subtitle.text = "✦   %s   ✦" % ContestManager.diff_label(diff)
+	var dcol := _diff_color(diff)
+	_subtitle.add_theme_color_override("font_color", dcol)
+	_subtitle.add_theme_color_override("font_outline_color", dcol.darkened(0.72))
+	_subtitle.add_theme_color_override("font_shadow_color", Color(dcol.r, dcol.g, dcol.b, 0.4))
 	# Lobby lives in its own room; playing/finished use the amphitheatre floor.
 	var in_lobby := status == "lobby"
+	# The lobby draws its own refined difficulty badge under the title, so the plain
+	# outlined subtitle is hidden there (kept for the playing / finished faces).
+	_subtitle.visible = not in_lobby
 	_lobby_bg.visible = in_lobby
 	_bg.visible = not in_lobby
 	if not in_lobby:
@@ -194,28 +202,49 @@ func _active_players() -> Array:
 
 func _render_lobby() -> void:
 	var w := _content.size.x
+	var h := _content.size.y
 	var cx := w * 0.5
 	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
 	var members := _active_players()
 	var is_full := members.size() >= ContestManager.MAX_MEMBERS
 
-	# Roster on the LEFT, share-ID plaque on the RIGHT.
+	# Calm ambience behind everything: a soft radial pool of warm light and a few slow
+	# gold motes drifting up the room (added first so all widgets sit on top).
+	_add_lobby_ambience(w, h)
+
+	# A refined difficulty badge + a small gold divider, seated directly under the
+	# room's carved title (the plain subtitle is hidden in the lobby).
+	var diff := String(_room.get("difficulty", "easy"))
+	var badge := _make_diff_badge(ContestManager.diff_label(diff), _diff_color(diff))
+	badge.position = Vector2(cx - badge.size.x * 0.5, 4.0)
+	_content.add_child(badge)
+	var divider := _make_divider(240.0)
+	divider.position = Vector2(cx - 120.0, 6.0 + badge.size.y + 8.0)
+	_content.add_child(divider)
+
+	# Roster on the LEFT (elegant gold-framed panel), share-ID card on the RIGHT.
+	var top := 92.0
+	var by := h - 84.0                          # primary-action baseline
 	var roster_x := w * 0.12
 	var roster_w: float = clampf(w * 0.40, 240.0, 400.0)
 	var right_cx := clampf(w * 0.73, roster_x + roster_w + 180.0, w - 180.0)
 
-	_add_roster(members, is_creator, Vector2(roster_x, 4.0), roster_w)
+	_add_roster(members, is_creator, Vector2(roster_x, top), roster_w, by - 16.0)
 
-	var plaque_w := 330.0
-	var idbox := ArenaUI.stone_panel(ArenaUI.SAND)
+	var plaque_w := 340.0
+	# A sculpted 3D stone-gold tablet (bevelled body, gold rim, top specular, convex
+	# sheen) rather than the old flat stone panel — see _draw_plaque_3d.
+	var idbox := _make_plaque_3d(ArenaUI.SAND)
 	idbox.size = Vector2(plaque_w, 104)
-	idbox.position = Vector2(right_cx - plaque_w * 0.5, 40.0)
+	idbox.position = Vector2(right_cx - plaque_w * 0.5, top)
 	_content.add_child(idbox)
 	if is_full:
 		var fcap := Label.new()
 		fcap.text = "ROOM FULL"
 		fcap.add_theme_font_size_override("font_size", 18)
-		fcap.add_theme_color_override("font_color", ArenaUI.MUTED)
+		fcap.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.18))
+		fcap.add_theme_color_override("font_outline_color", Color(0.10, 0.06, 0.02, 0.85))
+		fcap.add_theme_constant_override("outline_size", 2)
 		fcap.position = Vector2(0, 20); fcap.size = Vector2(plaque_w, 22)
 		fcap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		fcap.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -226,6 +255,9 @@ func _render_lobby() -> void:
 		fmsg.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.15))
 		fmsg.add_theme_color_override("font_outline_color", Color(0.28, 0.16, 0.03))
 		fmsg.add_theme_constant_override("outline_size", 4)
+		fmsg.add_theme_color_override("font_shadow_color", Color(1.0, 0.6, 0.2, 0.4))
+		fmsg.add_theme_constant_override("shadow_offset_y", 2)
+		fmsg.add_theme_constant_override("shadow_outline_size", 9)
 		fmsg.position = Vector2(0, 48); fmsg.size = Vector2(plaque_w, 44)
 		fmsg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		fmsg.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -234,24 +266,44 @@ func _render_lobby() -> void:
 		var idcap := Label.new()
 		idcap.text = "SHARE THIS ID"
 		idcap.add_theme_font_size_override("font_size", 14)
-		idcap.add_theme_color_override("font_color", ArenaUI.MUTED)
+		idcap.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.28))
+		idcap.add_theme_color_override("font_outline_color", Color(0.10, 0.06, 0.02, 0.85))
+		idcap.add_theme_constant_override("outline_size", 2)
 		idcap.position = Vector2(0, 12); idcap.size = Vector2(plaque_w, 18)
 		idcap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		idcap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		idbox.add_child(idcap)
+		# A warm gold glow pooled behind the ID that breathes on a loop — bright for 2s,
+		# dark for 5s (see the tween below).
+		var glow := Control.new()
+		glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		glow.position = Vector2(0, 30)
+		glow.size = Vector2(plaque_w, 64)
+		glow.draw.connect(_draw_id_glow.bind(glow))
+		glow.modulate.a = 0.0
+		idbox.add_child(glow)
+		var gt := glow.create_tween().set_loops()
+		gt.tween_property(glow, "modulate:a", 1.0, 0.55).set_trans(Tween.TRANS_SINE)
+		gt.tween_interval(0.9)                                 # ~2s glowing in total
+		gt.tween_property(glow, "modulate:a", 0.0, 0.55).set_trans(Tween.TRANS_SINE)
+		gt.tween_interval(5.0)                                 # 5s fully dark
 		var idlbl := Label.new()
 		idlbl.text = contest_id
 		idlbl.add_theme_font_size_override("font_size", 46)
 		idlbl.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.15))
 		idlbl.add_theme_color_override("font_outline_color", Color(0.28, 0.16, 0.03))
 		idlbl.add_theme_constant_override("outline_size", 4)
+		idlbl.add_theme_color_override("font_shadow_color", Color(1.0, 0.66, 0.22, 0.5))
+		idlbl.add_theme_constant_override("shadow_offset_y", 2)
+		idlbl.add_theme_constant_override("shadow_outline_size", 11)
 		idlbl.position = Vector2(0, 34); idlbl.size = Vector2(plaque_w, 58)
 		idlbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		idlbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		idbox.add_child(idlbl)
-		var copy := ArenaUI.pill_button("⧉  Copy ID", ArenaUI.SAND)
-		copy.size = Vector2(180, 46)
-		copy.position = Vector2(right_cx - 90, 160.0)
+		# Slightly wider tactile secondary button, aligned under the ID card.
+		var copy := _make_button_3d("⧉  Copy ID", ArenaUI.SAND)
+		copy.size = Vector2(210, 52)
+		copy.position = Vector2(right_cx - 105, top + 120.0)
 		copy.pressed.connect(func() -> void:
 			DisplayServer.clipboard_set(contest_id)
 			_show_toast("Room ID copied!"))
@@ -259,10 +311,13 @@ func _render_lobby() -> void:
 		var hint := Label.new()
 		hint.text = "Share this ID so friends can join."
 		hint.add_theme_font_size_override("font_size", 15)
-		hint.add_theme_color_override("font_color", ArenaUI.MUTED)
+		hint.add_theme_color_override("font_color", Color(0.88, 0.82, 0.68))
+		hint.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.02, 0.45))
+		hint.add_theme_constant_override("shadow_offset_y", 1)
+		hint.add_theme_constant_override("shadow_outline_size", 4)
 		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		hint.position = Vector2(right_cx - plaque_w * 0.5, 220.0)
+		hint.position = Vector2(right_cx - plaque_w * 0.5, top + 184.0)
 		hint.size = Vector2(plaque_w, 22)
 		_content.add_child(hint)
 
@@ -277,22 +332,25 @@ func _render_lobby() -> void:
 			"anchor_x": lane["x"], "dur": 6.6, "delay": lane["delay"],
 			"amp": 22.0, "top_pad": _content.position.y + 40.0})
 
-	# Buttons at the bottom.
-	var by := _content.size.y - 78.0
+	# Primary actions at the bottom. Start (rich green, primary lighting) and Cancel
+	# (deep red, quieter) share identical proportions and sit perfectly aligned; the
+	# hierarchy comes from material and glow, not size.
 	if is_creator:
-		var start := ArenaUI.pill_button("▶  Start Race", Color(0.30, 0.80, 0.52), true)
-		start.size = Vector2(240, 56)
-		start.position = Vector2(cx - 250, by)
+		var bw := 210.0
+		var bh := 58.0
+		var start := _make_button_3d("▶  Start Race", Color(0.26, 0.78, 0.46), true)
+		start.size = Vector2(bw, bh)
+		start.position = Vector2(cx - bw - 11.0, by)
 		start.pressed.connect(_on_start)
 		_content.add_child(start)
-		var cancel := ArenaUI.pill_button("Cancel Room", Color(0.80, 0.34, 0.34))
-		cancel.size = Vector2(200, 56)
-		cancel.position = Vector2(cx + 10, by)
+		var cancel := _make_button_3d("Cancel Room", Color(0.78, 0.30, 0.30))
+		cancel.size = Vector2(bw, bh)
+		cancel.position = Vector2(cx + 11.0, by)
 		cancel.pressed.connect(_on_cancel)
 		_content.add_child(cancel)
 	else:
-		var leave := ArenaUI.pill_button("Leave Room", Color(0.7, 0.4, 0.4))
-		leave.size = Vector2(240, 56)
+		var leave := _make_button_3d("Leave Room", Color(0.7, 0.4, 0.4))
+		leave.size = Vector2(240, 58)
 		leave.position = Vector2(cx - 120, by)
 		leave.pressed.connect(_on_leave)
 		_content.add_child(leave)
@@ -671,46 +729,81 @@ func _make_result_row(r: Dictionary, width: float) -> Control:
 	row.add_child(sc)
 	return row
 
+func _diff_color(diff: String) -> Color:
+	match diff:
+		"easy":     return Color(0.40, 0.85, 0.55)
+		"moderate": return Color(1.00, 0.75, 0.35)
+		"hard":     return Color(0.97, 0.45, 0.52)
+	return ArenaUI.GOLD.lightened(0.2)
+
 # ---------------- roster rows (lobby) ----------------
 
 const ROSTER_VISIBLE := 7
 const ROSTER_ROW_H := 46.0
 const ROSTER_SEP := 8.0
 
-func _add_roster(members: Array, can_kick: bool, pos: Vector2, width: float) -> void:
+func _add_roster(members: Array, can_kick: bool, pos: Vector2, width: float, bottom: float) -> void:
+	const PAD := 14
+	const HEADER_H := 46.0
+	var panel_h: float = maxf(200.0, bottom - pos.y)
+
+	# Elegant dark panel with a thin gold frame + soft contact shadow enclosing the
+	# whole roster — reads as a premium multiplayer room list, not loose rows.
+	var panel := Panel.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.position = pos
+	panel.size = Vector2(width, panel_h)
+	var ps := StyleBoxFlat.new()
+	ps.bg_color = Color(0.045, 0.055, 0.115, 0.66)
+	ps.set_corner_radius_all(18)
+	ps.border_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.42)
+	ps.set_border_width_all(1)
+	ps.shadow_color = Color(0.0, 0.0, 0.02, 0.5)
+	ps.shadow_size = 20
+	ps.shadow_offset = Vector2(0, 7)
+	panel.add_theme_stylebox_override("panel", ps)
+	_content.add_child(panel)
+
+	# Header: caption on the left, a compact roster count on the right, a hairline rule.
 	var cap := Label.new()
 	cap.text = "PLAYERS IN LOBBY"
-	cap.add_theme_font_size_override("font_size", 20)
-	cap.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.1))
-	cap.add_theme_color_override("font_shadow_color", Color(0.20, 0.40, 1.0, 0.35))
-	cap.add_theme_constant_override("shadow_offset_y", 2)
-	cap.add_theme_constant_override("shadow_outline_size", 7)
-	cap.position = pos; cap.size = Vector2(width, 28)
-	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", 18)
+	cap.add_theme_color_override("font_color", ArenaUI.GOLD.lightened(0.12))
+	cap.add_theme_color_override("font_outline_color", Color(0.10, 0.06, 0.02, 0.75))
+	cap.add_theme_constant_override("outline_size", 2)
+	cap.position = Vector2(PAD + 2, 6); cap.size = Vector2(width - PAD * 2 - 74, HEADER_H - 8)
+	cap.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_content.add_child(cap)
+	panel.add_child(cap)
 
-	const PAD := 8
+	var cnt := _make_chip("%d/%d" % [members.size(), ContestManager.MAX_MEMBERS], Color(0.55, 0.75, 1.0))
+	cnt.position = Vector2(width - PAD - cnt.size.x, (HEADER_H - cnt.size.y) * 0.5 + 1.0)
+	panel.add_child(cnt)
+
+	var rule := Panel.new()
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var rs := StyleBoxFlat.new()
+	rs.bg_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.22)
+	rule.add_theme_stylebox_override("panel", rs)
+	rule.position = Vector2(PAD, HEADER_H); rule.size = Vector2(width - PAD * 2, 1.0)
+	panel.add_child(rule)
+
+	# Roster rows in a scroll below the header; comfortable spacing, snug padding.
 	var row_w := width - PAD * 2
-	var table_h := ROSTER_VISIBLE * ROSTER_ROW_H + (ROSTER_VISIBLE - 1) * ROSTER_SEP + PAD * 2
-	table_h = minf(table_h, _content.size.y - (pos.y + 34.0) - 96.0)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.position = Vector2(pos.x, pos.y + 34.0)
-	scroll.size = Vector2(width, table_h)
-	_content.add_child(scroll)
-	var margin := MarginContainer.new()
-	for m_side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(m_side, PAD)
-	margin.custom_minimum_size = Vector2(width, 0)
-	scroll.add_child(margin)
+	scroll.position = Vector2(PAD, HEADER_H + 10.0)
+	scroll.size = Vector2(row_w, panel_h - HEADER_H - 10.0 - PAD)
+	panel.add_child(scroll)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", int(ROSTER_SEP))
-	margin.add_child(vb)
+	vb.add_theme_constant_override("separation", 9)
+	vb.custom_minimum_size = Vector2(row_w, 0)
+	scroll.add_child(vb)
 	for m: Dictionary in members:
 		vb.add_child(_make_roster_row(m, can_kick, row_w))
+	# Empty seats read as an invitation, not a void.
 	for i in range(members.size(), ROSTER_VISIBLE):
-		vb.add_child(_make_empty_row(row_w, ROSTER_ROW_H))
+		vb.add_child(_make_waiting_row(row_w))
 
 const ROW_H := ROSTER_ROW_H
 
@@ -791,6 +884,137 @@ func _make_chip(text: String, accent: Color) -> Control:
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	chip.add_child(l)
 	return chip
+
+# A refined difficulty badge: a dark gold-trimmed pill flanked by two small ✦, tinted
+# by the difficulty colour — the room's secondary caption under the title.
+func _make_diff_badge(text: String, col: Color) -> Control:
+	var font := ThemeDB.fallback_font
+	var fs := 18
+	var label := "✦   %s   ✦" % text.to_upper()
+	var tw := font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1.0, fs).x
+	var bw: float = tw + 46.0
+	var bh := 40.0
+	var badge := Panel.new()
+	badge.custom_minimum_size = Vector2(bw, bh)
+	badge.size = Vector2(bw, bh)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.05, 0.05, 0.12, 0.78)
+	s.set_corner_radius_all(20)
+	s.border_color = Color(col.r, col.g, col.b, 0.72)
+	s.set_border_width_all(1)
+	s.shadow_color = Color(col.r, col.g, col.b, 0.22)
+	s.shadow_size = 12
+	badge.add_theme_stylebox_override("panel", s)
+	var l := Label.new()
+	l.text = label
+	l.add_theme_font_size_override("font_size", fs)
+	l.add_theme_color_override("font_color", col.lightened(0.2))
+	l.add_theme_color_override("font_outline_color", col.darkened(0.72))
+	l.add_theme_constant_override("outline_size", 1)
+	l.set_anchors_preset(Control.PRESET_FULL_RECT)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_child(l)
+	return badge
+
+# A short gold divider: a hairline that fades in from both ends to a bright centre
+# diamond gem — the decorative rule under the title.
+func _make_divider(width: float) -> Control:
+	var d := Control.new()
+	d.custom_minimum_size = Vector2(width, 12)
+	d.size = Vector2(width, 12)
+	d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	d.draw.connect(func() -> void:
+		var w := d.size.x
+		var cy := d.size.y * 0.5
+		var gold := Color(1.0, 0.82, 0.36)
+		var edge := Color(gold.r, gold.g, gold.b, 0.0)
+		var core := Color(gold.r, gold.g, gold.b, 0.8)
+		var th := 1.6
+		d.draw_polygon(PackedVector2Array([
+			Vector2(0, cy - th * 0.5), Vector2(w * 0.5, cy - th * 0.5),
+			Vector2(w * 0.5, cy + th * 0.5), Vector2(0, cy + th * 0.5)]),
+			PackedColorArray([edge, core, core, edge]))
+		d.draw_polygon(PackedVector2Array([
+			Vector2(w * 0.5, cy - th * 0.5), Vector2(w, cy - th * 0.5),
+			Vector2(w, cy + th * 0.5), Vector2(w * 0.5, cy + th * 0.5)]),
+			PackedColorArray([core, edge, edge, core]))
+		var g := Vector2(w * 0.5, cy)
+		var r := 4.5
+		d.draw_colored_polygon(PackedVector2Array([
+			g + Vector2(0, -r), g + Vector2(r, 0), g + Vector2(0, r), g + Vector2(-r, 0)]), gold)
+		d.draw_circle(g + Vector2(-1.2, -1.4), 1.3, Color(1, 1, 1, 0.85)))
+	return d
+
+# An empty roster seat that reads as an open invitation rather than a void.
+func _make_waiting_row(width: float) -> Control:
+	var row := Panel.new()
+	row.custom_minimum_size = Vector2(width, ROSTER_ROW_H)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.05, 0.07, 0.16, 0.26)
+	s.set_corner_radius_all(10)
+	s.border_color = Color(0.42, 0.47, 0.75, 0.14)
+	s.set_border_width_all(1)
+	row.add_theme_stylebox_override("panel", s)
+	# A faint dotted avatar dot, then the invite text.
+	var dot := Control.new()
+	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dot.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dot.draw.connect(func() -> void:
+		var c := Vector2(14.0 + 13.0, ROSTER_ROW_H * 0.5)
+		dot.draw_arc(c, 13.0, 0.0, TAU, 24, Color(0.55, 0.60, 0.82, 0.28), 1.4, true))
+	row.add_child(dot)
+	var l := Label.new()
+	l.text = "Waiting for player…"
+	l.add_theme_font_size_override("font_size", 15)
+	l.add_theme_color_override("font_color", Color(0.64, 0.68, 0.84, 0.6))
+	l.position = Vector2(54, 0); l.size = Vector2(width - 66, ROSTER_ROW_H)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(l)
+	return row
+
+# Calm background layering for the lobby: a soft radial pool of warm light behind the
+# upper content and a handful of slow gold motes drifting up the room.
+func _add_lobby_ambience(w: float, h: float) -> void:
+	var glow := Control.new()
+	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glow.position = Vector2.ZERO
+	glow.size = Vector2(w, h)
+	glow.draw.connect(func() -> void:
+		var ctr := Vector2(w * 0.5, h * 0.14)
+		glow.draw_set_transform(ctr, 0.0, Vector2(1.7, 1.0))
+		var gold := Color(1.0, 0.86, 0.46)
+		for i in range(10):
+			var t := float(i) / 10.0
+			glow.draw_circle(Vector2.ZERO, lerpf(46.0, w * 0.44, t),
+				Color(gold.r, gold.g, gold.b, 0.05 * (1.0 - t) * (1.0 - t)))
+		glow.draw_set_transform_matrix(Transform2D.IDENTITY))
+	_content.add_child(glow)
+
+	var motes := CPUParticles2D.new()
+	motes.texture = _confetti_flake()
+	motes.amount = 16
+	motes.lifetime = 9.0
+	motes.preprocess = 9.0
+	motes.position = Vector2(w * 0.5, h + 10.0)
+	motes.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
+	motes.emission_rect_extents = Vector2(w * 0.5, 6.0)
+	motes.direction = Vector2(0, -1)
+	motes.spread = 18.0
+	motes.gravity = Vector2(0, -5.0)
+	motes.initial_velocity_min = 8.0
+	motes.initial_velocity_max = 20.0
+	motes.scale_amount_min = 0.5
+	motes.scale_amount_max = 1.3
+	motes.color = Color(1.0, 0.86, 0.5, 0.5)
+	var mat := CanvasItemMaterial.new()
+	mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	motes.material = mat
+	_content.add_child(motes)
 
 func _render_message(msg: String, btn_text: String, cb: Callable) -> void:
 	var w := _content.size.x
@@ -950,3 +1174,203 @@ func _layout_confirm(sz: Vector2) -> void:
 	var h := 200.0
 	_confirm.size = Vector2(w, h)
 	_confirm.position = Vector2(sz.x * 0.5 - w * 0.5, sz.y * 0.5 - h * 0.5)
+
+# ================= sculpted-3D material helpers =================
+# Same recipe as the create-room screen: an invisible Button supplies the tap target +
+# press state; a child "art" Control paints the bevel, gradient, rim light and engraved
+# label per-vertex so we control the depth directly. Panels use the same body drawing.
+
+# Trace a clockwise rounded-rectangle perimeter (used for gradient fills + outlines).
+func _rr_points(rect: Rect2, r: float, seg := 6) -> PackedVector2Array:
+	r = minf(r, minf(rect.size.x, rect.size.y) * 0.5)
+	var pts := PackedVector2Array()
+	var corners := [
+		[rect.position + Vector2(rect.size.x - r, r), -PI * 0.5],
+		[rect.position + Vector2(rect.size.x - r, rect.size.y - r), 0.0],
+		[rect.position + Vector2(r, rect.size.y - r), PI * 0.5],
+		[rect.position + Vector2(r, r), PI],
+	]
+	for cn in corners:
+		var ctr: Vector2 = cn[0]
+		var a0: float = cn[1]
+		for i in seg + 1:
+			var a: float = a0 + (float(i) / seg) * (PI * 0.5)
+			pts.append(ctr + Vector2(cos(a), sin(a)) * r)
+	return pts
+
+# Fill a polygon with a smooth vertical (top→bottom) gradient via per-vertex colours.
+func _fill_grad_v(c: Control, pts: PackedVector2Array, y0: float, y1: float, top: Color, bot: Color) -> void:
+	var cols := PackedColorArray()
+	var span: float = maxf(y1 - y0, 0.001)
+	for p in pts:
+		cols.append(top.lerp(bot, clampf((p.y - y0) / span, 0.0, 1.0)))
+	c.draw_polygon(pts, cols)
+
+# A glossy sculpted-3D pill button. `primary` brightens the fill + bloom.
+func _make_button_3d(text: String, accent: Color, primary := false) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.clip_contents = false
+	b.add_theme_color_override("font_color", Color(0, 0, 0, 0))   # hide native text; art draws it
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, empty)
+	var art := Control.new()
+	art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.clip_contents = false
+	art.set_meta("accent", accent)
+	art.set_meta("primary", primary)
+	art.set_meta("pressed", false)
+	art.draw.connect(_draw_button_3d.bind(art))
+	art.resized.connect(art.queue_redraw)
+	b.add_child(art)
+	# physical press: the whole face sinks toward its shadow, then springs back on release
+	b.button_down.connect(func() -> void:
+		art.set_meta("pressed", true); art.queue_redraw())
+	b.button_up.connect(func() -> void:
+		art.set_meta("pressed", false); art.queue_redraw())
+	return b
+
+func _draw_button_3d(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var accent: Color = c.get_meta("accent", Color.WHITE)
+	var primary: bool = bool(c.get_meta("primary", false))
+	var pressed: bool = bool(c.get_meta("pressed", false))
+	var dy := 3.0 if pressed else 0.0
+	var R: float = minf(h * 0.5, 30.0)
+
+	# ---- soft contact shadow anchoring the pill (stays put as the face sinks) ----
+	for i in range(5):
+		var t := float(i) / 5.0
+		var sw: float = w - 20.0 + t * 24.0
+		var sy: float = h - 6.0 + t * 5.0
+		var srect := Rect2((w - sw) * 0.5, sy, sw, 12.0)
+		var sa: float = (0.28 * (1.0 - t)) * (0.5 if pressed else 1.0)
+		c.draw_colored_polygon(_rr_points(srect, 6.0), Color(0.0, 0.0, 0.02, sa))
+
+	var body := Rect2(1.0, 1.0 + dy, w - 2.0, h - 5.0)
+	var body_pts := _rr_points(body, R)
+
+	# ---- tight bloom hugging the pill ----
+	for i in range(5):
+		var g: float = 1.0 + i * 2.2
+		var bpts := _rr_points(body.grow(g), R + g)
+		bpts.append(bpts[0])
+		c.draw_polyline(bpts, Color(accent.r, accent.g, accent.b,
+			(0.16 if primary else 0.10) * (1.0 - float(i) / 5.0)), 3.0, true)
+
+	# ---- bevelled body: a vertical gradient reads as a lit convex cap ----
+	_fill_grad_v(c, body_pts, body.position.y, body.position.y + body.size.y,
+		accent.lightened(0.34 if primary else 0.26), accent.darkened(0.40 if primary else 0.34))
+
+	# ---- rim: a bright bevel edge tracing the pill ----
+	var rim := accent.lightened(0.5)
+	var rim_pts := _rr_points(body, R)
+	rim_pts.append(rim_pts[0])
+	c.draw_polyline(rim_pts, Color(rim.r, rim.g, rim.b, 0.6), 2.0, true)
+
+	# ---- specular highlight riding the top edge + a darker shade line along the base ----
+	c.draw_line(Vector2(R * 0.8, body.position.y + 2.8), Vector2(w - R * 0.8, body.position.y + 2.8),
+		Color(1.0, 1.0, 1.0, 0.5), 1.6, true)
+	c.draw_line(Vector2(R, body.position.y + body.size.y - 2.4),
+		Vector2(w - R, body.position.y + body.size.y - 2.4), Color(0.0, 0.0, 0.02, 0.36), 1.6, true)
+
+	# ---- convex sheen pooled in the upper third so the surface bulges gently ----
+	var sheen_ctr := Vector2(w * 0.5, body.position.y + body.size.y * 0.32)
+	c.draw_set_transform(sheen_ctr, 0.0, Vector2(1.0, 0.5))
+	for i in range(5):
+		var t := float(i) / 5.0
+		c.draw_circle(Vector2.ZERO, lerpf(body.size.y * 0.14, body.size.x * 0.42, t),
+			Color(1.0, 1.0, 1.0, 0.10 * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+
+	# ---- engraved ivory label ----
+	var font := ThemeDB.fallback_font
+	var fs := 23
+	var txt := (c.get_parent() as Button).text
+	var ts := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	var base := Vector2((w - ts.x) * 0.5, (h - ts.y) * 0.5 + font.get_ascent(fs) + dy)
+	c.draw_string_outline(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, 5,
+		Color(0.0, 0.0, 0.02, 0.7))
+	c.draw_string(font, base + Vector2(0.0, 1.2), txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs,
+		Color(0.0, 0.0, 0.0, 0.35))
+	c.draw_string(font, base, txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, Color(1.0, 0.98, 0.92))
+
+# A sculpted 3D stone-gold tablet (for the SHARE-THIS-ID plaque): the child art paints a
+# bevelled body, gold rim, top specular and a convex sheen; real Labels sit on top.
+func _make_plaque_3d(accent: Color) -> Control:
+	var root := Control.new()
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.clip_contents = false
+	var art := Control.new()
+	art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.clip_contents = false
+	art.draw.connect(_draw_plaque_3d.bind(art, accent))
+	art.resized.connect(art.queue_redraw)
+	root.add_child(art)
+	return root
+
+func _draw_plaque_3d(c: Control, accent: Color) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var R := 18.0
+
+	# ---- soft contact shadow anchoring the tablet ----
+	for i in range(5):
+		var t := float(i) / 5.0
+		var sw: float = w - 24.0 + t * 28.0
+		var sy: float = h - 6.0 + t * 5.0
+		var srect := Rect2((w - sw) * 0.5, sy, sw, 13.0)
+		c.draw_colored_polygon(_rr_points(srect, 7.0), Color(0.0, 0.0, 0.02, 0.24 * (1.0 - t)))
+
+	var body := Rect2(1.0, 1.0, w - 2.0, h - 5.0)
+	var body_pts := _rr_points(body, R)
+
+	# ---- bevelled body: a warm dark-stone gradient with a whisper of gold ----
+	_fill_grad_v(c, body_pts, body.position.y, body.position.y + body.size.y,
+		Color(0.24, 0.19, 0.12).lerp(accent, 0.30), Color(0.07, 0.05, 0.04).lerp(accent, 0.12))
+
+	# ---- gold rim tracing the tablet ----
+	var rim := accent.lightened(0.35)
+	var rim_pts := _rr_points(body, R)
+	rim_pts.append(rim_pts[0])
+	c.draw_polyline(rim_pts, Color(rim.r, rim.g, rim.b, 0.7), 2.0, true)
+
+	# ---- specular highlight along the top edge + a darker shade line along the base ----
+	c.draw_line(Vector2(R * 0.8, body.position.y + 2.8), Vector2(w - R * 0.8, body.position.y + 2.8),
+		Color(1.0, 0.97, 0.86, 0.42), 1.6, true)
+	c.draw_line(Vector2(R, body.position.y + body.size.y - 2.4),
+		Vector2(w - R, body.position.y + body.size.y - 2.4), Color(0.0, 0.0, 0.02, 0.4), 1.6, true)
+
+	# ---- convex sheen pooled in the upper third ----
+	var sheen_ctr := Vector2(w * 0.5, body.position.y + body.size.y * 0.28)
+	c.draw_set_transform(sheen_ctr, 0.0, Vector2(1.0, 0.4))
+	for i in range(5):
+		var t := float(i) / 5.0
+		c.draw_circle(Vector2.ZERO, lerpf(body.size.y * 0.12, body.size.x * 0.42, t),
+			Color(1.0, 0.95, 0.80, 0.06 * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
+
+# A warm gold radial glow pooled behind the ID number (its alpha is driven by a looping
+# tween — bright ~2s, dark ~5s).
+func _draw_id_glow(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	if w <= 2.0 or h <= 2.0:
+		return
+	var gold := Color(1.0, 0.86, 0.40)
+	var ctr := Vector2(w * 0.5, h * 0.5)
+	c.draw_set_transform(ctr, 0.0, Vector2(1.0, 0.62))
+	for i in range(8):
+		var t := float(i) / 8.0
+		var rad: float = lerpf(22.0, w * 0.5, t)
+		c.draw_circle(Vector2.ZERO, rad, Color(gold.r, gold.g, gold.b, 0.15 * (1.0 - t) * (1.0 - t)))
+	c.draw_set_transform_matrix(Transform2D.IDENTITY)
