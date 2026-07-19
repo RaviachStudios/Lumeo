@@ -166,7 +166,7 @@ func _on_join() -> void:
 # ---------------- create-contest popup ----------------
 
 # Everything needed to spin up a room lives on one modal: a name field (with a
-# 🎲 that drops in a funny name), a difficulty picker, and a Public/Private
+# dice icon that drops in a funny name), a difficulty picker, and a Public/Private
 # toggle. "Create" makes the room and drops straight into its lobby.
 func _open_create_modal() -> void:
 	if _create_modal == null:
@@ -181,6 +181,10 @@ func _open_create_modal() -> void:
 	_set_action_cards_visible(false)
 	_scrim.visible = true
 	_create_modal.visible = true
+	# The arena FX is hidden behind the blur scrim now — freeze it so the phone
+	# isn't animating an invisible crowd under a full-screen blur.
+	if _fx:
+		_fx.pause()
 	_cname_edit.grab_focus()
 
 func _close_create_modal() -> void:
@@ -190,6 +194,8 @@ func _close_create_modal() -> void:
 		_create_modal.visible = false
 	if _scrim:
 		_scrim.visible = false
+	if _fx:
+		_fx.resume()
 	_set_action_cards_visible(true)
 
 # Show/hide the two primary entrances (Create / Join) behind the create popup.
@@ -233,7 +239,7 @@ func _build_create_modal() -> void:
 	title.size = Vector2(CREATE_MODAL_W, 34)
 	_create_modal.add_child(title)
 
-	# --- name field + 🎲 shuffle ---
+	# --- name field + dice shuffle ---
 	_cname_edit = LineEdit.new()
 	_cname_edit.placeholder_text = "Name your room"
 	_cname_edit.max_length = ContestManager.TITLE_MAX
@@ -257,10 +263,14 @@ func _build_create_modal() -> void:
 	_cname_edit.text_submitted.connect(func(_t: String) -> void: _do_create())
 	_create_modal.add_child(_cname_edit)
 
-	var dice := _sculpt_button("🎲", ArenaUI.SAND)
-	dice.add_theme_font_size_override("font_size", 22)
-	dice.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.4))
+	var dice := _sculpt_button("", ArenaUI.SAND)
 	dice.name = "dice"
+	var dice_icon := ArenaIcon.new()
+	dice_icon.kind = "dice"
+	dice_icon.col = ArenaUI.SAND.lightened(0.5)
+	dice_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dice_icon.offset_bottom = -5.0   # sit on the button body, clear of its base shadow
+	dice.add_child(dice_icon)
 	dice.pressed.connect(func() -> void:
 		_cname_edit.text = ContestManager.random_title())
 	_create_modal.add_child(dice)
@@ -281,12 +291,12 @@ func _build_create_modal() -> void:
 	_create_modal.add_child(_caption("Who can join your room?", "vis_cap"))
 	_cvis_btns.clear()
 	var vis_opts := [
-		{"public": true, "label": "🌐  Public", "accent": ArenaUI.ACCENT},
-		{"public": false, "label": "🔒  Private", "accent": ArenaUI.SAND},
+		{"public": true, "kind": "globe", "label": "Public", "accent": ArenaUI.ACCENT},
+		{"public": false, "kind": "lock", "label": "Private", "accent": ArenaUI.SAND},
 	]
 	for opt in vis_opts:
 		var is_pub: bool = opt["public"]
-		var b := _seg_button(String(opt["label"]), opt["accent"])
+		var b := _vis_seg_button(String(opt["kind"]), String(opt["label"]), opt["accent"])
 		b.pressed.connect(func() -> void:
 			_cpublic = is_pub
 			_refresh_create_selection())
@@ -320,19 +330,23 @@ func _build_create_modal() -> void:
 # behind it and mixes in a deep navy wash. The wash alpha (0.75) is the old 0.6 scrim
 # raised by 25%, so the arena reads as clearly pushed back behind the popup.
 func _make_scrim_blur_material() -> ShaderMaterial:
+	# A 3x3 (9-tap) box blur with a wider step gives essentially the same soft
+	# backdrop as a dense 5x5 kernel at roughly a third of the per-pixel texture
+	# reads — this is a full-screen pass, so the tap count is the main cost on
+	# phones. filter_linear lets each tap average four texels, widening the reach.
 	var sh := Shader.new()
 	sh.code = """
 shader_type canvas_item;
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
-uniform float blur : hint_range(0.0, 6.0) = 2.2;
+uniform float blur : hint_range(0.0, 6.0) = 3.6;
 uniform vec4 tint : source_color = vec4(0.02, 0.02, 0.05, 0.75);
 void fragment() {
 	vec2 ps = SCREEN_PIXEL_SIZE * blur;
 	vec3 col = vec3(0.0);
 	float total = 0.0;
-	for (int x = -2; x <= 2; x++) {
-		for (int y = -2; y <= 2; y++) {
-			float wgt = 1.0 - 0.12 * float(abs(x) + abs(y));
+	for (int x = -1; x <= 1; x++) {
+		for (int y = -1; y <= 1; y++) {
+			float wgt = 1.0 - 0.16 * float(abs(x) + abs(y));
 			col += texture(screen_tex, SCREEN_UV + vec2(float(x), float(y)) * ps).rgb * wgt;
 			total += wgt;
 		}
@@ -371,12 +385,55 @@ func _seg_button(text: String, accent: Color) -> Button:
 	b.add_theme_color_override("font_color", accent.lightened(0.3))
 	return b
 
+# A segmented toggle carrying a custom-drawn icon (globe / lock) beside its label,
+# centred as one unit. The native button text is left blank; the icon + label live
+# in a centred overlay row and are recoloured together by _set_seg_selected (which
+# reads the "vis_icon"/"vis_label" metas).
+func _vis_seg_button(kind: String, text: String, accent: Color) -> Button:
+	var b := _sculpt_button("", accent)
+	var tint := accent.lightened(0.3)
+
+	var row := HBoxContainer.new()
+	row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	row.offset_bottom = -4.0
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 9)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(row)
+
+	var icon := ArenaIcon.new()
+	icon.kind = kind
+	icon.col = tint
+	icon.custom_minimum_size = Vector2(23, 23)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(icon)
+
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 17)
+	lbl.add_theme_color_override("font_color", tint)
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(lbl)
+
+	b.set_meta("vis_icon", icon)
+	b.set_meta("vis_label", lbl)
+	return b
+
 func _set_seg_selected(b: Button, on: bool) -> void:
 	var accent: Color = b.get_meta("accent")
 	var art: Control = b.get_meta("art")
 	art.set_meta("selected", on)
 	art.queue_redraw()
-	b.add_theme_color_override("font_color", Color(1.0, 1.0, 0.98) if on else accent.lightened(0.3))
+	var col := Color(1.0, 1.0, 0.98) if on else accent.lightened(0.3)
+	b.add_theme_color_override("font_color", col)
+	# Icon/label toggles carry their text in a centred overlay row, not the native
+	# label — recolour those directly (the lock tints; the globe keeps its own hues).
+	if b.has_meta("vis_label"):
+		(b.get_meta("vis_label") as Label).add_theme_color_override("font_color", col)
+		var icon: ArenaIcon = b.get_meta("vis_icon")
+		icon.col = col
+		icon.queue_redraw()
 
 func _refresh_create_selection() -> void:
 	for d in _cdiff_btns:
@@ -781,7 +838,7 @@ func _build_choice_modal() -> void:
 	title.size = Vector2(CHOICE_MODAL_W, 34)
 	_choice_modal.add_child(title)
 
-	var private_btn := _make_choice_button("🔒", "Private")
+	var private_btn := _make_choice_button("lock", "Private")
 	private_btn.name = "private"
 	private_btn.pressed.connect(_toggle_private)
 	_choice_modal.add_child(private_btn)
@@ -820,7 +877,7 @@ func _build_choice_modal() -> void:
 	_id_msg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_choice_modal.add_child(_id_msg)
 
-	var public_btn := _make_choice_button("🌐", "Public")
+	var public_btn := _make_choice_button("globe", "Public")
 	public_btn.name = "public"
 	public_btn.pressed.connect(func() -> void:
 		_choice_modal.visible = false
@@ -841,7 +898,7 @@ func _build_choice_modal() -> void:
 # A join-choice option: a sculpted button carrying an icon pinned to a fixed left
 # column and a single bold, premium gold headline. Both options share the same
 # icon/text columns so the two rows read as a tidy aligned list.
-func _make_choice_button(emoji: String, title_text: String) -> Button:
+func _make_choice_button(kind: String, title_text: String) -> Button:
 	var b := _sculpt_button("", ArenaUI.ACCENT, true)
 
 	var row := HBoxContainer.new()
@@ -854,13 +911,11 @@ func _make_choice_button(emoji: String, title_text: String) -> Button:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	b.add_child(row)
 
-	var icon := Label.new()
-	icon.text = emoji
-	icon.add_theme_font_size_override("font_size", 25)
-	icon.custom_minimum_size = Vector2(30, 0)
-	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var icon := ArenaIcon.new()
+	icon.kind = kind
+	icon.col = Color(1.0, 0.88, 0.62)   # warm gold, matching the headline
+	icon.custom_minimum_size = Vector2(32, 32)
 	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(icon)
 
 	var t := Label.new()
@@ -937,6 +992,8 @@ func _open_lobby_modal() -> void:
 	_set_action_cards_visible(false)
 	_lobby_scrim.visible = true
 	_lobby_modal.visible = true
+	if _fx:
+		_fx.pause()
 	_layout_lobby_modal(get_viewport_rect().size)
 	_lobby_reload()
 
@@ -945,6 +1002,8 @@ func _close_lobby_modal() -> void:
 		_lobby_modal.visible = false
 	if _lobby_scrim:
 		_lobby_scrim.visible = false
+	if _fx:
+		_fx.resume()
 	_set_action_cards_visible(true)
 
 func _build_lobby_modal() -> void:

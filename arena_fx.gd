@@ -101,7 +101,11 @@ var _redraw_acc := 0.0
 const REDRAW_DT := 1.0 / 30.0
 
 # ---- ambient ----
-var _crowd: Node2D
+# The crowd is drawn in two layers: `_crowd_bodies` holds a baked body Sprite2D per
+# spectator (drawn once, then just repositioned for the bob) with the ground shadows
+# painted under them; `_crowd_arms` paints only the waving arms on top each tick.
+var _crowd_bodies: Node2D
+var _crowd_arms: Node2D
 var _people: Array[Dictionary] = []          # cheering spectators around the stage
 var _banners: Array[Dictionary] = []      # {node, cx, halfw, len, phase, cols}
 var _torch_lamps: Array[Sprite2D] = []
@@ -110,6 +114,11 @@ var _embers: CPUParticles2D
 var _smoke: CPUParticles2D
 
 # ---- centrepiece (platform) ----
+# The dais is fully static (stone courses, gold rings, rivets) — it's drawn ONCE
+# into its own node so the per-frame path only repaints the animated shield on
+# `_duel`. This removes ~130 primitives (incl. 120 rivet circles) from every
+# redraw, which is the single biggest saving for low-end phones.
+var _dais: Node2D
 var _duel: Node2D
 var _platform_c := Vector2.ZERO
 var _duel_scale := 1.0
@@ -130,6 +139,33 @@ func setup(size: Vector2) -> void:
 func relayout(size: Vector2) -> void:
 	_sz = size
 	_build()
+
+# Freeze all animation + particles. Used while a blur-scrim modal is open: the FX
+# sits behind a heavy full-screen blur there, so it's effectively invisible and
+# there's no reason to keep paying for its redraws / particle sim on a phone.
+func pause() -> void:
+	if not is_processing():
+		return
+	set_process(false)
+	if _embers:
+		_embers.emitting = false
+	if _smoke:
+		_smoke.emitting = false
+	for f in _flyers:
+		if is_instance_valid(f):
+			(f as Node).set_process(false)
+
+func resume() -> void:
+	if is_processing():
+		return
+	set_process(true)
+	if _embers:
+		_embers.emitting = true
+	if _smoke:
+		_smoke.emitting = true
+	for f in _flyers:
+		if is_instance_valid(f):
+			(f as Node).set_process(true)
 
 # ---------------- build ----------------
 
@@ -153,15 +189,22 @@ func _build() -> void:
 	_big_timer = randf_range(10.0, 15.0)
 
 # --- crowd: individual cartoon spectators packed around the BACK of the stage ---
-# Each person is generated once (stable position / palette / cheer style) and then
-# animated every frame in _draw_person. They're packed in a deep band that wraps
-# the back rim and both flanks of the dais, hugging it tightly; the front (viewer)
-# half is left empty so nobody stands on the near part of the stage. Spectators on
-# the flanks turn to face the centre; those across the back look out at the arena.
+# Each person is generated once (stable position / palette / cheer style). PERF: the
+# body (legs, torso, neck, head, hair) never changes shape — only the whole figure's
+# vertical BOB and the arms move — so the body is baked ONCE into a small sprite and
+# thereafter only repositioned; per frame we redraw just the two arms. That's ~7
+# primitives per fan instead of ~31, the biggest per-frame saving for phones. They're
+# packed in a band wrapping the back rim and both flanks of the dais; the front
+# (viewer) half is left empty. Flank spectators turn to face the centre.
+const _PERSON_FW := 48                  # baked body sprite size (design px)
+const _PERSON_FH := 84
+const _PERSON_FEET := Vector2(24.0, 76.0)   # feet anchor inside the baked sprite
+
 func _build_crowd() -> void:
-	_crowd = Node2D.new()
-	_crowd.draw.connect(_draw_crowd)
-	add_child(_crowd)
+	# bodies (+ ground shadows) underneath, arms layer on top
+	_crowd_bodies = Node2D.new()
+	_crowd_bodies.draw.connect(_draw_crowd_shadows)
+	add_child(_crowd_bodies)
 	_people.clear()
 
 	var c := stage_center(_sz)
@@ -214,7 +257,22 @@ func _build_crowd() -> void:
 
 	# Draw back-to-front (higher on screen first) so nearer fans overlap cleanly.
 	_people.sort_custom(func(a, b): return a["pos"].y < b["pos"].y)
-	_crowd.queue_redraw()
+
+	# Bake each spectator's body into a sprite (added in sorted order so nearer fans
+	# sit in front), then add the arms layer above all bodies.
+	for p in _people:
+		var spr := Sprite2D.new()
+		spr.texture = _bake_person(p)
+		spr.centered = false
+		spr.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+		_crowd_bodies.add_child(spr)
+		p["sprite"] = spr
+	_crowd_arms = Node2D.new()
+	_crowd_arms.draw.connect(_draw_crowd_arms)
+	add_child(_crowd_arms)
+
+	_update_crowd()
+	_crowd_bodies.queue_redraw()
 
 # Deterministic 0..1 hash so a person's look never re-randomises between rebuilds.
 func _rnd(seed: int) -> float:
@@ -236,71 +294,37 @@ func _add_person(pos: Vector2, scl: float, seed: int, face: float = 0.0, simple:
 		"flip": _rnd(seed * 23 + 8) < 0.5,
 	})
 
-func _draw_crowd() -> void:
+# Ground shadows sit under the bodies — static (they don't bob), so painted once.
+func _draw_crowd_shadows() -> void:
 	for p in _people:
-		if p.get("simple", false):
-			_draw_person_far(p)
-		else:
-			_draw_person(p)
+		var o: Vector2 = p["pos"]
+		var s: float = p["s"]
+		_crowd_bodies.draw_circle(o + Vector2(0, 1.0 * s), 8.0 * s, Color(0.02, 0.02, 0.05, 0.28))
 
-# A cheap distant spectator for the packed back rows: a bobbing torso blob, a
-# head with a hair cap (blank face), and a hint of raised hands that lift on
-# a cheer. A fraction of _draw_person's primitives, so the stands can hold many
-# more fans without the per-frame cost of full figures.
-func _draw_person_far(p: Dictionary) -> void:
-	var o: Vector2 = p["pos"]
-	var s: float = p["s"]
-	var ph: float = p["phase"]
-	var spd: float = p["speed"]
-	var skin: Color = p["skin"]
-	var hair: Color = p["hair"]
-	var shirt: Color = p["shirt"]
-	var boost := 1.0 + _cheer * 0.7
-	var t := _t * spd + ph
-	var bob := (sin(t * 2.6) * 0.5 + 0.5) * 3.2 * s * boost
-	var b := o - Vector2(0, bob)
+# Per-tick crowd update: recompute each fan's bob + arm targets, slide the body
+# sprite to the bobbed position, and flag the arms layer for a repaint.
+func _update_crowd() -> void:
+	for p in _people:
+		var pose := _person_pose(p)
+		p["_pose"] = pose
+		var spr: Sprite2D = p.get("sprite")
+		if spr:
+			spr.position = pose["b"] - _PERSON_FEET
+	if _crowd_arms:
+		_crowd_arms.queue_redraw()
 
-	# torso: two overlapping discs read as body + shoulders
-	_crowd.draw_circle(b + Vector2(0, -13.0 * s), 7.6 * s, shirt)
-	_crowd.draw_circle(b + Vector2(0, -25.0 * s), 6.8 * s, shirt)
-
-	# a hint of raised, cheering hands — higher on a roar
-	var raise := lerpf(-30.0, -42.0, clampf((sin(t * 3.0) * 0.5 + 0.5) * boost, 0.0, 1.0)) * s
-	_crowd.draw_circle(b + Vector2(-6.5 * s, raise), 2.3 * s, skin)
-	_crowd.draw_circle(b + Vector2(6.5 * s, raise), 2.3 * s, skin)
-
-	# head + hair cap (blank face — no features)
-	var head := b + Vector2(0, -35.0 * s)
-	var head_r := 5.6 * s
-	_crowd.draw_circle(head, head_r, skin)
-	_crowd.draw_circle(head + Vector2(0, -head_r * 0.2), head_r * 1.06, hair)
-	_crowd.draw_circle(head + Vector2(0, head_r * 0.55), head_r * 0.95, skin)
-
-# One cheering cartoon spectator, built from _draw primitives in a local frame whose
-# origin is the person's feet (x right, y up = negative). `anim` picks one of five
-# cheer styles; everything is driven by _t so the whole crowd is alive.
-func _draw_person(p: Dictionary) -> void:
-	var o: Vector2 = p["pos"]
+# The animated pose for one spectator: vertical bob + the four arm targets (elbow /
+# hand, left / right) for its cheer style. Returns them plus `b`, the bobbed feet
+# origin in screen space. `anim` picks one of five cheer styles.
+func _person_pose(p: Dictionary) -> Dictionary:
 	var s: float = p["s"]
 	var anim: int = p["anim"]
 	var ph: float = p["phase"]
 	var spd: float = p["speed"]
-	var skin: Color = p["skin"]
-	var hair: Color = p["hair"]
-	var shirt: Color = p["shirt"]
-	var pants: Color = p["pants"]
-	var fdir := -1.0 if p["flip"] else 1.0
-	var face: float = p.get("face", 0.0)                  # -1 look left … +1 look right
 	var boost := 1.0 + _cheer * 0.7                        # everyone cheers harder on a roar
 	var t := _t * spd + ph
-
-	# body landmarks (local, y-up-negative)
 	var shoulder_y := -30.0 * s
-	var hip_y := -15.0 * s
-	var head_cy := -39.0 * s
-	var head_r := 6.2 * s
 
-	# arm targets (elbow / hand) chosen per cheer style ------------------------
 	var lel := Vector2.ZERO; var lha := Vector2.ZERO
 	var rel := Vector2.ZERO; var rha := Vector2.ZERO
 	var bob := 0.0
@@ -335,61 +359,114 @@ func _draw_person(p: Dictionary) -> void:
 			rel = Vector2(8.0 * s, lerpf(shoulder_y + 6.0 * s, shoulder_y - 6.0 * s, 1.0 - a))
 			bob = sin(t * 3.0) * 1.5 * s
 
-	# soft contact shadow on the ground (stays put while the body bobs)
-	_crowd.draw_circle(o + Vector2(0, 1.0 * s), 8.0 * s, Color(0.02, 0.02, 0.05, 0.28))
+	return {"b": p["pos"] - Vector2(0, bob), "lel": lel, "lha": lha, "rel": rel, "rha": rha}
 
-	# whole figure bobs up by `bob`
-	var b := o - Vector2(0, bob)
-
-	# legs (planted-ish) + simple shoes
-	var l_hip := b + Vector2(-3.2 * s, hip_y)
-	var r_hip := b + Vector2(3.2 * s, hip_y)
-	var l_foot := o + Vector2(-3.4 * s, 0)
-	var r_foot := o + Vector2(3.4 * s, 0)
-	_limb(l_hip, l_foot, 4.6 * s, pants)
-	_limb(r_hip, r_foot, 4.6 * s, pants)
-	_crowd.draw_circle(l_foot + Vector2(-0.6 * s, 0), 2.4 * s, Color(0.10, 0.09, 0.12))
-	_crowd.draw_circle(r_foot + Vector2(-0.6 * s, 0), 2.4 * s, Color(0.10, 0.09, 0.12))
-
-	# torso (shirt) as a capsule from hips to shoulders, with a lighter front panel
-	var hip_c := b + Vector2(0, hip_y)
-	var sho_c := b + Vector2(0, shoulder_y)
-	_limb(hip_c, sho_c, 13.5 * s, shirt)
-	_crowd.draw_line(hip_c + Vector2(fdir * 2.0 * s, 0), sho_c + Vector2(fdir * 2.0 * s, 0),
-		shirt.lightened(0.18), 3.0 * s)
-
-	# arms: shirt sleeve (shoulder→elbow) then bare skin forearm + hand
-	var l_sh := b + Vector2(-6.0 * s, shoulder_y + 1.0 * s)
-	var r_sh := b + Vector2(6.0 * s, shoulder_y + 1.0 * s)
-	_limb(l_sh, b + lel, 4.4 * s, shirt)
-	_limb(r_sh, b + rel, 4.4 * s, shirt)
-	_limb(b + lel, b + lha, 3.4 * s, skin)
-	_limb(b + rel, b + rha, 3.4 * s, skin)
-	_crowd.draw_circle(b + lha, 2.9 * s, skin)                 # hands
-	_crowd.draw_circle(b + rha, 2.9 * s, skin)
-
-	# neck + head
-	var head := b + Vector2(0, head_cy)
-	_limb(sho_c + Vector2(0, -1.0 * s), head + Vector2(0, head_r * 0.7), 4.4 * s, skin)
-	_crowd.draw_circle(head, head_r, skin)
-	# a soft shading crescent on the shadowed side for a hint of form — when the
-	# head is turned toward the centre, the far cheek is the one that recedes.
-	var shade_side := (-signf(face)) if absf(face) > 0.05 else fdir
-	_crowd.draw_circle(head + Vector2(shade_side * head_r * 0.5, head_r * 0.2), head_r * 0.62, skin.darkened(0.10))
-
-	# hair: a cap over the top of the head. Faces are left blank (no eyes/mouth).
-	_draw_hair(head, head_r, hair, skin)
-
-# A rounded hair cap: a hair-coloured disc, with the lower face punched back over it.
-func _draw_hair(head: Vector2, r: float, hair: Color, skin: Color) -> void:
-	_crowd.draw_circle(head + Vector2(0, -r * 0.16), r * 1.08, hair)
-	_crowd.draw_circle(head + Vector2(0, r * 0.55), r * 1.0, skin)   # reveal the face below
+# Draw only the waving arms (sleeve + skin forearm + hand) for every spectator, over
+# the baked bodies. Reads the pose cached by _update_crowd this tick.
+func _draw_crowd_arms() -> void:
+	for p in _people:
+		var pose: Dictionary = p.get("_pose", {})
+		if pose.is_empty():
+			continue
+		var s: float = p["s"]
+		var shirt: Color = p["shirt"]
+		var skin: Color = p["skin"]
+		var b: Vector2 = pose["b"]
+		var shoulder_y := -30.0 * s
+		var l_sh := b + Vector2(-6.0 * s, shoulder_y + 1.0 * s)
+		var r_sh := b + Vector2(6.0 * s, shoulder_y + 1.0 * s)
+		_limb(_crowd_arms, l_sh, b + pose["lel"], 4.4 * s, shirt)
+		_limb(_crowd_arms, r_sh, b + pose["rel"], 4.4 * s, shirt)
+		_limb(_crowd_arms, b + pose["lel"], b + pose["lha"], 3.4 * s, skin)
+		_limb(_crowd_arms, b + pose["rel"], b + pose["rha"], 3.4 * s, skin)
+		_crowd_arms.draw_circle(b + pose["lha"], 2.9 * s, skin)   # hands
+		_crowd_arms.draw_circle(b + pose["rha"], 2.9 * s, skin)
 
 # A rounded limb segment: a thick line with circular caps at both ends.
-func _limb(a: Vector2, c: Vector2, w: float, col: Color) -> void:
-	_crowd.draw_line(a, c, col, w)
-	_crowd.draw_circle(a, w * 0.5, col)
-	_crowd.draw_circle(c, w * 0.5, col)
+func _limb(canvas: CanvasItem, a: Vector2, c: Vector2, w: float, col: Color) -> void:
+	canvas.draw_line(a, c, col, w)
+	canvas.draw_circle(a, w * 0.5, col)
+	canvas.draw_circle(c, w * 0.5, col)
+
+# ---- one-time body bake (legs / torso / neck / head / hair) into a sprite ----
+
+# Rasterise a spectator's static body (everything except the arms + ground shadow) into
+# a small RGBA image, composited back-to-front with a 1px soft edge. The result is shown
+# as a Sprite2D anchored at _PERSON_FEET, so a bob is just a cheap vertical move. Built
+# in the same local frame as the old _draw_person (origin = feet, y up = negative).
+func _bake_person(p: Dictionary) -> ImageTexture:
+	var s: float = p["s"]
+	var skin: Color = p["skin"]
+	var hair: Color = p["hair"]
+	var shirt: Color = p["shirt"]
+	var pants: Color = p["pants"]
+	var fdir := -1.0 if p["flip"] else 1.0
+	var face: float = p.get("face", 0.0)
+
+	var hip_y := -15.0 * s
+	var shoulder_y := -30.0 * s
+	var head_cy := -39.0 * s
+	var head_r := 6.2 * s
+	var l_hip := Vector2(-3.2 * s, hip_y); var r_hip := Vector2(3.2 * s, hip_y)
+	var l_foot := Vector2(-3.4 * s, 0.0); var r_foot := Vector2(3.4 * s, 0.0)
+	var hip_c := Vector2(0, hip_y); var sho_c := Vector2(0, shoulder_y)
+	var head := Vector2(0, head_cy)
+	var shade_side := (-signf(face)) if absf(face) > 0.05 else fdir
+
+	# Shape list, back-to-front (same order the old code drew them). Each is a circle
+	# {"r"} or a capsule {"a","b","r"}, with a colour.
+	var shapes: Array = [
+		{"a": l_hip, "b": l_foot, "r": 2.3 * s, "col": pants},      # legs
+		{"a": r_hip, "b": r_foot, "r": 2.3 * s, "col": pants},
+		{"c": l_foot + Vector2(-0.6 * s, 0), "r": 2.4 * s, "col": Color(0.10, 0.09, 0.12)},   # shoes
+		{"c": r_foot + Vector2(-0.6 * s, 0), "r": 2.4 * s, "col": Color(0.10, 0.09, 0.12)},
+		{"a": hip_c, "b": sho_c, "r": 6.75 * s, "col": shirt},      # torso
+		{"a": hip_c + Vector2(fdir * 2.0 * s, 0), "b": sho_c + Vector2(fdir * 2.0 * s, 0),
+			"r": 1.5 * s, "col": shirt.lightened(0.18)},            # front panel highlight
+		{"a": sho_c + Vector2(0, -1.0 * s), "b": head + Vector2(0, head_r * 0.7),
+			"r": 2.2 * s, "col": skin},                             # neck
+		{"c": head, "r": head_r, "col": skin},                      # head
+		{"c": head + Vector2(shade_side * head_r * 0.5, head_r * 0.2), "r": head_r * 0.62,
+			"col": skin.darkened(0.10)},                            # shading crescent
+		{"c": head + Vector2(0, -head_r * 0.16), "r": head_r * 1.08, "col": hair},   # hair cap
+		{"c": head + Vector2(0, head_r * 0.55), "r": head_r * 1.0, "col": skin},     # reveal face
+	]
+
+	var img := Image.create(_PERSON_FW, _PERSON_FH, false, Image.FORMAT_RGBA8)
+	for py in _PERSON_FH:
+		for px in _PERSON_FW:
+			# local point (drawing frame): feet at _PERSON_FEET, y up = negative
+			var lp := Vector2(float(px) + 0.5, float(py) + 0.5) - _PERSON_FEET
+			var out := Color(0, 0, 0, 0)
+			for sh in shapes:
+				var d: float
+				if sh.has("c"):
+					d = lp.distance_to(sh["c"])
+				else:
+					d = _dist_to_seg(lp, sh["a"], sh["b"])
+				var cov := clampf(0.5 + (sh["r"] - d), 0.0, 1.0)   # 1px soft edge
+				if cov > 0.0:
+					var col: Color = sh["col"]
+					out = _over(out, Color(col.r, col.g, col.b, col.a * cov))
+			img.set_pixelv(Vector2i(px, py), out)
+	return ImageTexture.create_from_image(img)
+
+# Shortest distance from point p to segment a→b.
+func _dist_to_seg(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var t := clampf((p - a).dot(ab) / maxf(ab.dot(ab), 0.0001), 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+# Straight "over" alpha compositing (src over dst).
+func _over(dst: Color, src: Color) -> Color:
+	var a := src.a + dst.a * (1.0 - src.a)
+	if a <= 0.0001:
+		return Color(0, 0, 0, 0)
+	var inv := dst.a * (1.0 - src.a)
+	return Color(
+		(src.r * src.a + dst.r * inv) / a,
+		(src.g * src.a + dst.g * inv) / a,
+		(src.b * src.a + dst.b * inv) / a, a)
 
 # --- draped, gently waving banners hung from the upper walls ---
 func _build_banners() -> void:
@@ -522,10 +599,19 @@ func _build_platform() -> void:
 	_platform_c = stage_center(_sz)
 	_duel_scale = stage_scale(_sz)
 
+	# Static stone dais — painted once (Node2D draws itself on entering the tree
+	# and again only when _build() rebuilds it on a resize).
+	_dais = Node2D.new()
+	_dais.position = _platform_c
+	_dais.scale = Vector2.ONE * _duel_scale
+	_dais.draw.connect(_draw_dais)
+	add_child(_dais)
+
+	# Animated championship shield — the only part of the podium that repaints.
 	_duel = Node2D.new()
 	_duel.position = _platform_c
 	_duel.scale = Vector2.ONE * _duel_scale
-	_duel.draw.connect(_draw_platform)
+	_duel.draw.connect(_draw_champion_shield)
 	add_child(_duel)
 
 # --- soft spotlights raking down from above onto the crown / shield / door ---
@@ -581,10 +667,11 @@ func _draw_spot_cone(target: Vector2, flicker: float) -> void:
 	# a soft pool of light where the beam lands on the podium
 	_spot.draw_circle(target, 28.0, Color(col.r, col.g, col.b, 0.13 * flicker))
 
-func _draw_platform() -> void:
+func _draw_dais() -> void:
 	# a squashed stone dais with a soft cast shadow and a beveled, rivet-studded
 	# rim — the whole podium footprint doubled again (rx/ry only) so it reads
-	# as a genuinely big stage rather than a pedestal under the shield.
+	# as a genuinely big stage rather than a pedestal under the shield. Fully
+	# static, so it's painted once onto `_dais` (never in the per-frame path).
 	_draw_ellipse(Vector2(0, 27), 364, 92, Color(0.02, 0.02, 0.05, 0.5), 48)   # cast shadow
 	_draw_ellipse(Vector2(0, 15), 346, 84, Color(0.13, 0.11, 0.18, 0.96), 48)  # dark base course
 	# a thin gold banding line around the outer stone course for a richer edge
@@ -604,11 +691,9 @@ func _draw_platform() -> void:
 	for k in 40:
 		var ra := float(k) / 40.0 * TAU
 		var rp := Vector2(cos(ra) * 312.0, 11.0 + sin(ra) * 64.0)
-		_duel.draw_circle(rp + Vector2(0, 1.2), 3.2, Color(0.04, 0.03, 0.07, 0.6))
-		_duel.draw_circle(rp, 2.6, Color(GOLD.r, GOLD.g, GOLD.b, 0.75))
-		_duel.draw_circle(rp + Vector2(-0.8, -0.8), 0.9, Color(1.0, 0.97, 0.85, 0.8))
-	# --- the champion emblem: a big winged Simon mounted on a heraldic shield ---
-	_draw_champion_shield()
+		_dais.draw_circle(rp + Vector2(0, 1.2), 3.2, Color(0.04, 0.03, 0.07, 0.6))
+		_dais.draw_circle(rp, 2.6, Color(GOLD.r, GOLD.g, GOLD.b, 0.75))
+		_dais.draw_circle(rp + Vector2(-0.8, -0.8), 0.9, Color(1.0, 0.97, 0.85, 0.8))
 
 # The centrepiece trophy: a gold-rimmed heraldic shield bearing the four-colour Simon
 # disc, flanked by outstretched golden wings and topped with a small crown — a
@@ -729,12 +814,13 @@ func _draw_crown(c: Vector2, w: float) -> void:
 		_duel.draw_circle(c + Vector2(px, peak - 1.0), 1.6, Color(0.95, 0.30, 0.34))
 
 # Draw a filled ellipse via a polygon fan (Godot has no primitive ellipse fill).
+# Only the static dais uses this, so it paints onto `_dais`.
 func _draw_ellipse(c: Vector2, rx: float, ry: float, col: Color, steps: int) -> void:
 	var pts := PackedVector2Array()
 	for i in steps:
 		var a := float(i) / float(steps) * TAU
 		pts.append(c + Vector2(cos(a) * rx, sin(a) * ry))
-	_duel.draw_colored_polygon(pts, col)
+	_dais.draw_colored_polygon(pts, col)
 
 # ---------------- process (animation + events) ----------------
 
@@ -751,14 +837,15 @@ func _process(dt: float) -> void:
 		_big_timer = randf_range(10.0, 15.0)
 		_cheer = 1.0
 
-	# banners wave every frame (cheap); the crowd / platform / spotlights repaint at
-	# a throttled ~30fps since they're the expensive redraws and sit behind the UI.
-	_update_banners()
+	# The crowd / shield / spotlights / banners all repaint on one throttled ~30fps
+	# gate. This is ambient art sitting behind the UI, so half-rate is invisible but
+	# roughly halves the per-frame CPU + draw-call load on phones. The stone dais is
+	# static and painted once (see _build_platform), so it's not repainted here.
 	_redraw_acc += dt
 	if _redraw_acc >= REDRAW_DT:
 		_redraw_acc = 0.0
-		if _crowd:
-			_crowd.queue_redraw()
+		_update_banners()
+		_update_crowd()
 		if _duel:
 			_duel.queue_redraw()
 		if _spot:
