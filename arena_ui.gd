@@ -225,6 +225,10 @@ static func make_back_button() -> Button:
 	s.shadow_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.25)
 	s.shadow_size = 10
 	b.add_theme_stylebox_override("normal", s)
+	# No hover reaction: hovering keeps the resting look (otherwise the default theme's
+	# hover stylebox shows through).
+	b.add_theme_stylebox_override("hover", s)
+	b.add_theme_stylebox_override("focus", s)
 	var sp := s.duplicate() as StyleBoxFlat
 	sp.bg_color = Color(0.11, 0.07, 0.04, 0.92)
 	b.add_theme_stylebox_override("pressed", sp)

@@ -1,5 +1,7 @@
 extends Control
 
+const ArenaUI := preload("res://arena_ui.gd")
+
 # Premium "How To Play" screen, matching the main menu: deep-space shader
 # background, a slowly rotating orbit with pulsing colored orbs, a glowing
 # header with decorative side lines, and four dark navy-glass step cards
@@ -333,24 +335,8 @@ func _make_card(step: Dictionary) -> Control:
 	return wrap
 
 func _build_back() -> void:
-	_back = Button.new()
-	_back.text = "← Back"
-	_back.size = Vector2(150, 48)
-	_back.focus_mode = Control.FOCUS_NONE
-	_back.add_theme_font_size_override("font_size", 18)
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.10, 0.13, 0.30, 0.9)
-	s.set_corner_radius_all(24)
-	s.border_color = Color(0.35, 0.5, 1.0, 0.4)
-	s.set_border_width_all(1)
-	_back.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.16, 0.2, 0.42, 0.95)
-	_back.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.08, 0.10, 0.24, 0.95)
-	_back.add_theme_stylebox_override("pressed", sp)
-	_back.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	# Icon-only "<" back cap, matching the Arena screen's back button.
+	_back = ArenaUI.make_back_button()
 	_back.pressed.connect(func() -> void: game_manager.show_home())
 	add_child(_back)
 
@@ -394,8 +380,8 @@ func _layout() -> void:
 			start_y + row * (CARD_H + CARD_GAP_Y))
 
 	if _back:
-		_back.position = Vector2(cx - _back.size.x * 0.5,
-			minf(sz.y - 72.0, start_y + grid_h + 26.0))
+		# Top-left "<" cap, matching the Arena screen and the other menus.
+		_back.position = Vector2(24, top + 4)
 
 func _rebuild_ring(r: float) -> void:
 	var pts := PackedVector2Array()

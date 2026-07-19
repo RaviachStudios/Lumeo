@@ -1,5 +1,7 @@
 extends Control
 
+const ArenaUI := preload("res://arena_ui.gd")
+
 # Premium "Choose Difficulty" screen, matching the home menu: deep navy->purple
 # shader background (nebula + tiny particles + glow + vignette), a slowly
 # rotating orbit with five glowing orbs, a glowing header with side-lined
@@ -273,26 +275,8 @@ func _glow_dot(d: float, col: Color, center: Vector2) -> Panel:
 # ---------------- back button ----------------
 
 func _build_back() -> void:
-	_back = Button.new()
-	_back.text = "← Back"
-	_back.size = Vector2(132, 46)
-	_back.focus_mode = Control.FOCUS_NONE
-	_back.add_theme_font_size_override("font_size", 18)
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.07, 0.10, 0.26, 0.7)         # translucent navy glass
-	s.set_corner_radius_all(23)
-	s.border_color = Color(0.35, 0.5, 1.0, 0.5)       # thin blue border
-	s.set_border_width_all(1)
-	s.shadow_color = Color(0.25, 0.4, 1.0, 0.25)      # soft blue glow
-	s.shadow_size = 10
-	_back.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.12, 0.16, 0.36, 0.85)
-	_back.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.05, 0.07, 0.20, 0.9)
-	_back.add_theme_stylebox_override("pressed", sp)
-	_back.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	# Icon-only "<" back cap, matching the Arena screen's back button.
+	_back = ArenaUI.make_back_button()
 	_back.pressed.connect(func() -> void: game_manager.show_home())
 	add_child(_back)
 

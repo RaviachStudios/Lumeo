@@ -1625,9 +1625,11 @@ func _layout() -> void:
 	if _profile_card:
 		_profile_card.position = Vector2(sz.x - _profile_card.size.x - 16.0, 14.0)
 
-	# credits tuck into the bottom-right corner, right-aligned with a small margin
+	# credits tuck into the bottom-right corner, right-aligned. A wider right margin
+	# pulls the line left so the "@drorbardavid" tail clears a phone's rounded corner
+	# / safe-area edge instead of getting clipped.
 	if _credits:
-		_credits.size = Vector2(sz.x - 32.0, 18.0)
+		_credits.size = Vector2(sz.x - 56.0, 18.0)   # right edge sits 40px from the screen edge
 		_credits.position = Vector2(16.0, sz.y - 22.0)
 
 # Position a card's wrapper at `pos` (top-left). No-op for an absent card.

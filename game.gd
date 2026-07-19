@@ -48,6 +48,15 @@ var _coin_lbl: Label
 var _coin_icon: Control
 var _earn_indicator: Label
 
+# Idle nudge for the Watch-Ad button: after 2s without a move while awaiting input
+# we pulse it for ~2s to draw the eye. _last_activity is the last press / input-start
+# time; _prev_state lets _process spot the moment we enter the "input" phase.
+var _last_activity: float = 0.0
+var _prev_state: String = ""
+var _ad_glowing: bool = false
+var _ad_glowed: bool = false   # one-shot: glow once per idle period until a move re-arms it
+var _ad_glow_tw: Tween
+
 # Arena race extras (only active when _is_contest).
 const PRESS_LIMIT := 10.0          # seconds allowed to make each next press
 var _rng := RandomNumberGenerator.new()   # room-seeded so all racers share the sequence
@@ -81,6 +90,20 @@ func _process(_dt: float) -> void:
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
 		_watch_ad_btn.visible = AdManager.rewarded_ready
+
+	# Reset the idle-nudge baseline the moment we enter the input phase.
+	if _state != _prev_state:
+		if _state == "input":
+			_last_activity = _now_secs()
+			_reset_ad_glow()
+		_prev_state = _state
+
+	# Idle nudge: 2s without a move while awaiting input → glow the Watch-Ad button
+	# once for ~2s, then back to normal. A move (or a new input phase) re-arms it.
+	if _watch_ad_btn and _watch_ad_btn.visible and _state == "input" \
+			and not _ad_glowing and not _ad_glowed and _now_secs() - _last_activity >= 2.0:
+		_start_ad_glow()
+
 	# Arena race: per-press 10s window with a 3-2-1 side countdown; miss it -> over.
 	if _is_contest and _press_active and _state == "input":
 		var remaining := _press_deadline - _now_secs()
@@ -191,28 +214,24 @@ func _input(event: InputEvent) -> void:
 func _build_hud() -> void:
 	var sz := get_viewport_rect().size
 
-	# "Watch Ad to Replay" — modern amber glass pill, top-left. (The old "Level:"
-	# caption above it is gone; the level now reads from the wheel's centre.)
-	_watch_ad_btn = Button.new()
-	_watch_ad_btn.text = "▶  Watch Ad to Replay"
+	# "Watch ads for replay" — a physical glossy amber push-button pill, top-left.
+	# (The old "Level:" caption above it is gone; the level now reads from the
+	# wheel's centre.) The dome + label are drawn by watch_ad_button.gd; it also
+	# sizes itself to the text with generous padding in _ready.
+	_watch_ad_btn = (load("res://watch_ad_button.gd") as GDScript).new()
+	_watch_ad_btn.text = "Watch ads for replay"
 	_watch_ad_btn.position = Vector2(20, 20)
-	_watch_ad_btn.size = Vector2(244, 48)
 	_watch_ad_btn.focus_mode = Control.FOCUS_NONE
-	_watch_ad_btn.add_theme_font_size_override("font_size", 16)
-	_glass_btn(_watch_ad_btn, Color(0.30, 0.20, 0.02), Color(1.0, 0.74, 0.18), Color(1.0, 0.90, 0.55))
 	_watch_ad_btn.pressed.connect(_on_watch_ad)
 	_watch_ad_btn.visible = false
 	add_child(_watch_ad_btn)
 
-	# Quit — subdued dark-red glass pill, top-right. In a contest it reads as
-	# "Forfeit" (leaving still records the current score for the contest).
-	_quit_btn = Button.new()
-	_quit_btn.text = "✕  Forfeit" if _is_contest else "✕  Quit"
-	_quit_btn.position = Vector2(sz.x - HUD_RIGHT_BTN_W - HUD_RIGHT_MARGIN, 20)
-	_quit_btn.size = Vector2(HUD_RIGHT_BTN_W, 48)
+	# Quit — a physical glossy red push-button dome with a white ✕, top-right.
+	const QUIT_D := 52.0
+	_quit_btn = (load("res://close_button.gd") as GDScript).new()
+	_quit_btn.position = Vector2(sz.x - QUIT_D - HUD_RIGHT_MARGIN, 20)
+	_quit_btn.size = Vector2(QUIT_D, QUIT_D)
 	_quit_btn.focus_mode = Control.FOCUS_NONE
-	_quit_btn.add_theme_font_size_override("font_size", 17)
-	_glass_btn(_quit_btn, Color(0.20, 0.05, 0.06), Color(0.85, 0.30, 0.32), Color(1.0, 0.82, 0.82))
 	_quit_btn.pressed.connect(_on_quit)
 	add_child(_quit_btn)
 
@@ -220,8 +239,8 @@ func _build_hud() -> void:
 	# prompt reads as a deliberate readout instead of floating text.
 	_build_status_bar(sz)
 
-	if FirebaseManager.is_signed_in():
-		_build_coin_hud(sz)
+	# (Coins earned are still tracked + banked at game over via CoinsManager; the
+	# on-screen coins pill was removed from the play screen.)
 	_build_quit_dialog(sz)
 
 	# Arena race: a big glowing 3-2-1 that appears on the side in the last 3s of a
@@ -239,32 +258,48 @@ func _build_hud() -> void:
 		add_child(_countdown_lbl)
 		_layout_countdown(sz)
 
-# Modern rounded-glass button: dark translucent body, a soft accent rim/glow and
-# light label. Replaces the old flat fills on the gameplay HUD buttons.
-func _glass_btn(btn: Button, body: Color, accent: Color, fg: Color) -> void:
+# A raised, glossy 3D button. The face is `base`; a thick darker bottom border acts
+# as the button's "side", a bright top border is the highlight, and a drop shadow
+# grounds it. On press the side shrinks and the face darkens so it visibly sinks.
+# `corner` sets the corner radius (pass half the height for a circle/pill).
+func _solid3d_btn(btn: Button, base: Color, fg: Color, corner: int) -> void:
+	var side := base.darkened(0.55)       # dark lower edge = the button's depth
 	var s := StyleBoxFlat.new()
-	s.bg_color = Color(body.r, body.g, body.b, 0.86)
-	s.set_corner_radius_all(24)
-	s.border_color = Color(accent.r, accent.g, accent.b, 0.85)
-	s.set_border_width_all(2)
-	s.shadow_color = Color(accent.r, accent.g, accent.b, 0.30)
-	s.shadow_size = 10
+	s.bg_color = base
+	s.set_corner_radius_all(corner)
+	s.border_color = side
+	s.border_width_top = 2                # thin bright cap so the top edge catches light
+	s.border_width_left = 2
+	s.border_width_right = 2
+	s.border_width_bottom = 9             # tall raised "wall" under the face → chunky 3D
+	s.shadow_color = Color(0, 0, 0, 0.55) # soft cast shadow grounds the button
+	s.shadow_size = 12
+	s.shadow_offset = Vector2(0, 8)       # lifts the button well off the screen
 	s.content_margin_left = 8
 	s.content_margin_right = 8
+	s.content_margin_bottom = 3           # optical-centre the label above the thick wall
 	btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(body.r, body.g, body.b, 0.86).lightened(0.12)
-	sh.shadow_size = 14
+	sh.bg_color = base.lightened(0.12)    # brighter face on hover
+	sh.shadow_size = 16
+	sh.shadow_offset = Vector2(0, 10)     # floats a touch higher
 	btn.add_theme_stylebox_override("hover", sh)
+	# Pressed: the wall collapses and the whole button drops down into its shadow.
 	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(body.r, body.g, body.b, 0.95).darkened(0.18)
+	sp.bg_color = base.darkened(0.18)
+	sp.border_width_bottom = 2
+	sp.shadow_size = 3
+	sp.shadow_offset = Vector2(0, 2)
+	sp.content_margin_top = 7             # shove the label down as the face sinks ~7px
+	sp.content_margin_bottom = 0
 	btn.add_theme_stylebox_override("pressed", sp)
 	var sd := s.duplicate() as StyleBoxFlat
-	sd.bg_color = Color(body.r, body.g, body.b, 0.55)
-	sd.border_color = Color(accent.r, accent.g, accent.b, 0.4)
+	sd.bg_color = base.darkened(0.35)
+	sd.border_color = side.darkened(0.2)
+	sd.shadow_color = Color(0, 0, 0, 0.3)
 	btn.add_theme_stylebox_override("disabled", sd)
 	btn.add_theme_color_override("font_color", fg)
-	btn.add_theme_color_override("font_hover_color", fg.lightened(0.15))
+	btn.add_theme_color_override("font_hover_color", fg)
 	btn.add_theme_color_override("font_pressed_color", fg)
 
 # Status prompt below the wheel, housed in a soft dark-glass pill that auto-fits
@@ -391,12 +426,15 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	overlay.position = Vector2(sz.x * 0.5 - 190, sz.y * 0.5 - 100)
 	overlay.size = Vector2(380, 200)
 	var sn := StyleBoxFlat.new()
-	sn.bg_color = Color(0.05, 0.05, 0.2, 0.97)
-	sn.corner_radius_top_left = 18; sn.corner_radius_top_right = 18
-	sn.corner_radius_bottom_left = 18; sn.corner_radius_bottom_right = 18
-	sn.border_color = Color(0.5, 0.15, 0.15)
+	sn.bg_color = Color(0.07, 0.08, 0.16, 0.98)
+	sn.corner_radius_top_left = 20; sn.corner_radius_top_right = 20
+	sn.corner_radius_bottom_left = 20; sn.corner_radius_bottom_right = 20
+	sn.border_color = Color(0.32, 0.36, 0.6, 0.9)
 	sn.border_width_left = 2; sn.border_width_right = 2
 	sn.border_width_top = 2; sn.border_width_bottom = 2
+	sn.shadow_color = Color(0, 0, 0, 0.55)
+	sn.shadow_size = 24
+	sn.shadow_offset = Vector2(0, 10)
 	overlay.add_theme_stylebox_override("panel", sn)
 	add_child(overlay)
 
@@ -418,35 +456,24 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	overlay.add_child(sub)
 
-	var yes := Button.new()
-	yes.text = "Yes, Forfeit" if _is_contest else "Yes, Quit"
+	var dlg_btn: GDScript = load("res://dialog_button.gd")
+
+	var yes := dlg_btn.new() as Button
 	yes.position = Vector2(24, 120)
 	yes.size = Vector2(155, 52)
-	yes.add_theme_font_size_override("font_size", 18)
-	_flat_btn(yes, Color(0.55, 0.12, 0.12))
+	yes.focus_mode = Control.FOCUS_NONE
+	yes.call("setup", Color(0.62, 0.11, 0.12), "cross",
+		"Yes, Forfeit" if _is_contest else "Yes, Quit")
 	yes.pressed.connect(_on_quit_confirmed)
 	overlay.add_child(yes)
 
-	var no := Button.new()
-	no.text = "Keep Playing"
+	var no := dlg_btn.new() as Button
 	no.position = Vector2(201, 120)
 	no.size = Vector2(155, 52)
-	no.add_theme_font_size_override("font_size", 18)
-	_flat_btn(no, Color(0.15, 0.45, 0.2))
+	no.focus_mode = Control.FOCUS_NONE
+	no.call("setup", Color(0.14, 0.52, 0.24), "check", "Keep Playing")
 	no.pressed.connect(func() -> void: get_node("QuitDialog").visible = false)
 	overlay.add_child(no)
-
-func _flat_btn(btn: Button, col: Color) -> void:
-	var s := StyleBoxFlat.new()
-	s.bg_color = col
-	s.corner_radius_top_left = 10; s.corner_radius_top_right = 10
-	s.corner_radius_bottom_left = 10; s.corner_radius_bottom_right = 10
-	btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat; sh.bg_color = col.lightened(0.2)
-	btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat; sp.bg_color = col.darkened(0.15)
-	btn.add_theme_stylebox_override("pressed", sp)
-	btn.add_theme_color_override("font_color", Color.WHITE)
 
 func _start_game() -> void:
 	sequence = []
@@ -770,6 +797,9 @@ func _press_feedback(idx: int) -> void:
 		_wheel.set_press(idx, 0.0))
 
 func _player_pressed(idx: int) -> void:
+	# Any move resets the idle-nudge window and cancels a running Watch-Ad glow.
+	_last_activity = _now_secs()
+	_reset_ad_glow()
 	_press_feedback(idx)
 	AudioManager.play_button_tone(idx, 0.3)
 	player_seq.append(idx)
@@ -866,7 +896,35 @@ func _on_quit_confirmed() -> void:
 func _on_watch_ad() -> void:
 	if _state != "input":
 		return
+	_reset_ad_glow()
 	AdManager.show_rewarded(_replay_after_countdown)
+
+# Idle attention nudge: emit a soft amber halo around the Watch-Ad button for ~3s,
+# gently pulsing in and out a few times. The button body never moves or scales —
+# only its `glow` halo breathes. Plays once; a move re-arms it via _reset_ad_glow.
+func _start_ad_glow() -> void:
+	if _watch_ad_btn == null:
+		return
+	_ad_glowing = true
+	_ad_glowed = true
+	_watch_ad_btn.set("glow", 0.0)
+	var tw := create_tween().set_loops(3)          # 3 × 1.0s = 3s of gentle pulsing
+	tw.tween_property(_watch_ad_btn, "glow", 1.0, 0.5).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(_watch_ad_btn, "glow", 0.0, 0.5).set_trans(Tween.TRANS_SINE)
+	tw.finished.connect(func() -> void:
+		if _watch_ad_btn:
+			_watch_ad_btn.set("glow", 0.0)
+		_ad_glowing = false)                       # stays put; a move re-arms via _reset_ad_glow
+	_ad_glow_tw = tw
+
+# Stop any running glow, clear the one-shot guard and restore the button to rest.
+func _reset_ad_glow() -> void:
+	if _ad_glow_tw and _ad_glow_tw.is_valid():
+		_ad_glow_tw.kill()
+	_ad_glowing = false
+	_ad_glowed = false
+	if _watch_ad_btn:
+		_watch_ad_btn.set("glow", 0.0)
 
 func _replay_after_countdown() -> void:
 	_state = "showing"
