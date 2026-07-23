@@ -1430,6 +1430,10 @@ func _do_leave() -> void:
 	game_manager.show_arena()
 
 func _on_exit() -> void:
+	# Simple post-view interstitial, same treatment as game-over: skipped for
+	# players who bought the remove-ads entitlement.
+	if not CoinsManager.has_remove_ads:
+		AdManager.try_show_interstitial()
 	game_manager.show_arena()
 
 # ---------------- overlay / toast / confirm ----------------
