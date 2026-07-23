@@ -58,9 +58,13 @@ var _lobby_modal: Panel
 var _lobby_scroll: ScrollContainer
 var _lobby_list: VBoxContainer
 var _lobby_status: Label        # loading / empty message overlaid on the list area
-var _lobby_reshuffle: Button
 var _lobby_count: Label
+var _lobby_prev: Button
+var _lobby_next: Button
+var _lobby_page_lbl: Label
+var _lobby_tick: Timer          # 1s: refreshes the countdown pills / retires dead rows
 var _lobby_rows: Array = []
+var _lobby_page := 0
 var _lobby_busy := false
 
 # Join-by-ID input: revealed inline inside the join-choice modal when Private is
@@ -739,6 +743,8 @@ func _do_create() -> void:
 	match String(res.get("error", "")):
 		"auth":         _cmsg.text = "Sign in and pick a name first."
 		"id_collision": _cmsg.text = "Couldn't allocate an ID. Try again."
+		# One line: _cmsg is a fixed 22px row with no autowrap.
+		"lobby_full":   _cmsg.text = "Public lobby is full (%d rooms) — try again shortly." % ContestManager.LOBBY_MAX
 		_:              _cmsg.text = "Couldn't create the room. Try again."
 
 # Both create and join need a signed-in player with a chosen name.
@@ -976,15 +982,23 @@ func _layout_choice_modal(sz: Vector2) -> void:
 
 # The public lobby now lives as an in-place popup on the arena hub (no screen swap):
 # a premium panel over a blurred scrim listing the open public rooms, each with a
-# Join button. Reads on open and on explicit Reshuffle only (Firebase I/O is
-# expensive — no background polling), matching the rest of the Arena screens.
+# Join button.
+#
+# The list is LIVE: while the popup is open we hold ContestManager's lobby-index
+# listeners (watch_lobby), so rooms appear, change player count and disappear on
+# their own — there is nothing to refresh by hand. At most ContestManager.LOBBY_MAX
+# rooms can be open, shown LOBBY_PAGE at a time; the footer pages through them.
+# A 1s tick updates the per-row countdowns and retires rows whose 5-minute start
+# window ran out (expiry is a local time predicate, so it needs no server event).
 
 const LOBBY_MODAL_W := 520.0
 const LOBBY_ROW_H := 56.0
 const LOBBY_JOIN_W := 88.0
 const LOBBY_LEVEL_W := 74.0
 const LOBBY_REG_W := 66.0
-const LOBBY_COL_GAP := 16.0   # breathing room between name · diff · players · join
+const LOBBY_TIME_W := 56.0    # "4:12" countdown column
+const LOBBY_COL_GAP := 16.0   # breathing room between name · diff · players · time · join
+const LOBBY_PAGE := 20        # rows per page (5 pages covers ContestManager.LOBBY_MAX)
 
 func _open_lobby_modal() -> void:
 	if _lobby_modal == null:
@@ -995,9 +1009,19 @@ func _open_lobby_modal() -> void:
 	if _fx:
 		_fx.pause()
 	_layout_lobby_modal(get_viewport_rect().size)
-	_lobby_reload()
+	_lobby_page = 0
+	_lobby_rows = []
+	_lobby_status.text = "Finding contests…"
+	_lobby_status.visible = true
+	# Go live. The listeners fire with the current index immediately, so the
+	# "Finding…" state is only up for the round-trip.
+	if not ContestManager.lobby_changed.is_connected(_on_lobby_changed):
+		ContestManager.lobby_changed.connect(_on_lobby_changed)
+	ContestManager.watch_lobby()
+	_lobby_tick.start()
 
 func _close_lobby_modal() -> void:
+	_stop_lobby_watch()
 	if _lobby_modal:
 		_lobby_modal.visible = false
 	if _lobby_scrim:
@@ -1005,6 +1029,18 @@ func _close_lobby_modal() -> void:
 	if _fx:
 		_fx.resume()
 	_set_action_cards_visible(true)
+
+# Drop the live listeners the moment the list isn't on screen — an idle lobby
+# listener is a per-change read for every backgrounded client.
+func _stop_lobby_watch() -> void:
+	if ContestManager.lobby_changed.is_connected(_on_lobby_changed):
+		ContestManager.lobby_changed.disconnect(_on_lobby_changed)
+	ContestManager.unwatch_lobby()
+	if _lobby_tick:
+		_lobby_tick.stop()
+
+func _exit_tree() -> void:
+	_stop_lobby_watch()
 
 func _build_lobby_modal() -> void:
 	# Blur-+-darken scrim (same material as the create popup); an outside tap dismisses.
@@ -1061,12 +1097,34 @@ func _build_lobby_modal() -> void:
 	_lobby_count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_lobby_modal.add_child(_lobby_count)
 
-	_lobby_reshuffle = _sculpt_button("↻  Reshuffle", ArenaUI.SAND)
-	_lobby_reshuffle.name = "reshuffle"
-	_lobby_reshuffle.add_theme_font_size_override("font_size", 19)
-	_lobby_reshuffle.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.35))
-	_lobby_reshuffle.pressed.connect(_lobby_reload)
-	_lobby_modal.add_child(_lobby_reshuffle)
+	# Pager (replaces the old Reshuffle: with a live list there is nothing to re-roll).
+	_lobby_prev = _sculpt_button("‹", ArenaUI.SAND)
+	_lobby_prev.name = "prev"
+	_lobby_prev.add_theme_font_size_override("font_size", 24)
+	_lobby_prev.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.35))
+	_lobby_prev.pressed.connect(func() -> void: _lobby_turn_page(-1))
+	_lobby_modal.add_child(_lobby_prev)
+
+	_lobby_page_lbl = Label.new()
+	_lobby_page_lbl.name = "page"
+	_lobby_page_lbl.add_theme_font_size_override("font_size", 16)
+	_lobby_page_lbl.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.35))
+	_lobby_page_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lobby_page_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_lobby_page_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lobby_modal.add_child(_lobby_page_lbl)
+
+	_lobby_next = _sculpt_button("›", ArenaUI.SAND)
+	_lobby_next.name = "next"
+	_lobby_next.add_theme_font_size_override("font_size", 24)
+	_lobby_next.add_theme_color_override("font_color", ArenaUI.SAND.lightened(0.35))
+	_lobby_next.pressed.connect(func() -> void: _lobby_turn_page(1))
+	_lobby_modal.add_child(_lobby_next)
+
+	_lobby_tick = Timer.new()
+	_lobby_tick.wait_time = 1.0
+	_lobby_tick.timeout.connect(_on_lobby_tick)
+	add_child(_lobby_tick)
 
 	var close := _sculpt_button("Close", Color(0.62, 0.42, 0.42))
 	close.name = "close"
@@ -1111,9 +1169,17 @@ func _layout_lobby_modal(sz: Vector2) -> void:
 		_lobby_count.size = Vector2(w, 20)
 	var gap := 14.0
 	var bw := (inner - gap) * 0.5
-	if _lobby_reshuffle:
-		_lobby_reshuffle.position = Vector2(pad, by)
-		_lobby_reshuffle.size = Vector2(bw, btn_h)
+	# Left half: ‹ page x/y ›. Right half: Close.
+	var arrow_w := 46.0
+	if _lobby_prev:
+		_lobby_prev.position = Vector2(pad, by)
+		_lobby_prev.size = Vector2(arrow_w, btn_h)
+	if _lobby_next:
+		_lobby_next.position = Vector2(pad + bw - arrow_w, by)
+		_lobby_next.size = Vector2(arrow_w, btn_h)
+	if _lobby_page_lbl:
+		_lobby_page_lbl.position = Vector2(pad + arrow_w, by)
+		_lobby_page_lbl.size = Vector2(maxf(bw - arrow_w * 2.0, 10.0), btn_h)
 	if _lobby_modal.has_node("close"):
 		var close: Button = _lobby_modal.get_node("close")
 		close.position = Vector2(pad + bw + gap, by)
@@ -1122,37 +1188,78 @@ func _layout_lobby_modal(sz: Vector2) -> void:
 	if _lobby_list and not _lobby_list.get_children().is_empty():
 		_lobby_render()
 
-func _lobby_reload() -> void:
-	if _lobby_busy:
-		return
-	_lobby_busy = true
-	for c in _lobby_list.get_children():
-		c.queue_free()
-	_lobby_count.text = ""
-	_lobby_status.text = "Finding contests…"
-	_lobby_status.visible = true
-	# Explicit type: 4.6 won't infer a `:=` through `await` across an autoload.
-	var rows: Array = await ContestManager.load_lobby_contests()
+# Live push from the lobby index (rooms opened / joined / started / closed).
+func _on_lobby_changed(rows: Array) -> void:
 	if not is_inside_tree() or _lobby_modal == null or not _lobby_modal.visible:
-		_lobby_busy = false
 		return
 	_lobby_rows = rows
 	_lobby_render()
-	_lobby_busy = false
+
+# Once a second: the countdowns move, and rows whose window closed have to go even
+# though no write happened. Re-filtering locally is what makes expiry look instant.
+func _on_lobby_tick() -> void:
+	if _lobby_modal == null or not _lobby_modal.visible or _lobby_busy:
+		return
+	var before := _lobby_rows.size()
+	_lobby_rows = ContestManager.lobby_rows()
+	if _lobby_rows.size() != before:
+		_lobby_render()
+		return
+	# Same row set — just move the clocks, no rebuild.
+	var now := int(Time.get_unix_time_from_system())
+	for child in _lobby_list.get_children():
+		var lbl: Variant = child.get_node_or_null("time")
+		if lbl is Label:
+			var left := int(child.get_meta("deadline", 0)) - now
+			(lbl as Label).text = _fmt_left(left)
+			(lbl as Label).add_theme_color_override("font_color", _time_color(left))
+
+func _lobby_turn_page(step: int) -> void:
+	var pages := _lobby_page_count()
+	_lobby_page = clampi(_lobby_page + step, 0, pages - 1)
+	_lobby_render()
+
+func _lobby_page_count() -> int:
+	return maxi(1, int(ceil(float(_lobby_rows.size()) / float(LOBBY_PAGE))))
 
 func _lobby_render() -> void:
 	for c in _lobby_list.get_children():
 		c.queue_free()
 	var has := not _lobby_rows.is_empty()
 	_lobby_status.visible = not has
+	var pages := _lobby_page_count()
+	# A live list can shrink under the viewer — never strand them past the end.
+	_lobby_page = clampi(_lobby_page, 0, pages - 1)
+	if _lobby_prev:
+		_lobby_prev.disabled = _lobby_page <= 0
+	if _lobby_next:
+		_lobby_next.disabled = _lobby_page >= pages - 1
+	if _lobby_page_lbl:
+		_lobby_page_lbl.text = "Page %d / %d" % [_lobby_page + 1, pages]
 	if not has:
-		_lobby_status.text = "No public contests are open right now.\nReshuffle, or create your own!"
+		_lobby_status.text = "No public contests are open right now.\nCreate your own — it's listed instantly!"
 		_lobby_count.text = ""
 		return
-	_lobby_count.text = "%d open %s" % [_lobby_rows.size(), "room" if _lobby_rows.size() == 1 else "rooms"]
+	var first := _lobby_page * LOBBY_PAGE
+	var page_rows: Array = _lobby_rows.slice(first, first + LOBBY_PAGE)
+	_lobby_count.text = "%d open %s · showing %d–%d" % [
+		_lobby_rows.size(), "room" if _lobby_rows.size() == 1 else "rooms",
+		first + 1, first + page_rows.size()]
 	var w := _lobby_scroll.size.x if _lobby_scroll.size.x > 4.0 else (LOBBY_MODAL_W - 48.0)
-	for row: Dictionary in _lobby_rows:
+	for row: Dictionary in page_rows:
 		_lobby_list.add_child(_make_lobby_row(row, w))
+
+# "4:12" / "0:07" — time left for the host to start, floored at zero.
+func _fmt_left(secs: int) -> String:
+	var s: int = maxi(secs, 0)
+	return "%d:%02d" % [s / 60, s % 60]
+
+func _time_color(secs: int) -> Color:
+	if secs <= 15:
+		return Color(0.97, 0.45, 0.52)      # about to close
+	if secs <= 60:
+		return Color(1.00, 0.75, 0.35)
+	return Color(0.72, 0.80, 0.98)
 
 func _make_lobby_row(c: Dictionary, row_w: float) -> Control:
 	var mine: bool = bool(c.get("is_creator", false))
@@ -1160,12 +1267,15 @@ func _make_lobby_row(c: Dictionary, row_w: float) -> Control:
 	var is_full := count >= ContestManager.MAX_MEMBERS
 
 	var join_x := row_w - LOBBY_JOIN_W - 12.0
-	var reg_x := join_x - LOBBY_COL_GAP - LOBBY_REG_W
+	var time_x := join_x - LOBBY_COL_GAP - LOBBY_TIME_W
+	var reg_x := time_x - LOBBY_COL_GAP - LOBBY_REG_W
 	var level_x := reg_x - LOBBY_COL_GAP - LOBBY_LEVEL_W
 	var title_w := maxf(50.0, level_x - 14.0 - LOBBY_COL_GAP)
 
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(row_w, LOBBY_ROW_H)
+	# The tick handler updates the clock in place off this.
+	row.set_meta("deadline", int(c.get("deadline", 0)))
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.16, 0.13, 0.05, 0.5) if mine else Color(0.06, 0.08, 0.18, 0.55)
 	s.set_corner_radius_all(12)
@@ -1189,6 +1299,11 @@ func _make_lobby_row(c: Dictionary, row_w: float) -> Control:
 		_lobby_diff_color(String(c.get("difficulty", "easy"))), 15)
 	_lobby_cell(row, "%d/%d" % [count, ContestManager.MAX_MEMBERS], reg_x, LOBBY_REG_W,
 		Color(0.72, 0.80, 0.98), 15)
+	# How long the host still has to press Start (see ContestManager.START_WINDOW).
+	var left := int(c.get("deadline", 0)) - int(Time.get_unix_time_from_system())
+	var time_lbl := _lobby_cell(row, _fmt_left(left), time_x, LOBBY_TIME_W,
+		_time_color(left), 15)
+	time_lbl.name = "time"
 
 	var btn: Button
 	if mine:
@@ -1207,7 +1322,7 @@ func _make_lobby_row(c: Dictionary, row_w: float) -> Control:
 	row.add_child(btn)
 	return row
 
-func _lobby_cell(row: Control, text: String, x: float, w: float, col: Color, fs: int) -> void:
+func _lobby_cell(row: Control, text: String, x: float, w: float, col: Color, fs: int) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", fs)
@@ -1218,6 +1333,7 @@ func _lobby_cell(row: Control, text: String, x: float, w: float, col: Color, fs:
 	l.clip_text = true
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(l)
+	return l
 
 func _lobby_diff_color(diff: String) -> Color:
 	match diff:
@@ -1251,6 +1367,7 @@ func _on_lobby_join(cid: String) -> void:
 		"full":          _show_toast("That room is full.")
 		"auth":          _show_toast("Sign in and pick a name first.")
 		_:               _show_toast("Couldn't join. Try again.")
+	# Drop the stale row immediately; the index listener catches up a beat later.
 	var err := String(res.get("error", ""))
 	if err == "not_found" or err == "full" or err == "ended":
 		_lobby_rows = _lobby_rows.filter(func(r): return String(r.get("id", "")) != cid)

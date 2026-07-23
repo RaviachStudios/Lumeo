@@ -899,18 +899,21 @@ func _on_watch_ad() -> void:
 	_reset_ad_glow()
 	AdManager.show_rewarded(_replay_after_countdown)
 
-# Idle attention nudge: emit a soft amber halo around the Watch-Ad button for ~3s,
-# gently pulsing in and out a few times. The button body never moves or scales —
-# only its `glow` halo breathes. Plays once; a move re-arms it via _reset_ad_glow.
+# Idle attention nudge: light the Watch-Ad button up for ~3.5s. This only drives
+# the ENVELOPE — watch_ad_button.gd owns the animation itself (aura, sweeping bolt
+# and heartbeat swell) and runs it for as long as `glow` is up, so all we do here
+# is fade it in, hold, and fade it out. Plays once; a move re-arms it via
+# _reset_ad_glow.
 func _start_ad_glow() -> void:
 	if _watch_ad_btn == null:
 		return
 	_ad_glowing = true
 	_ad_glowed = true
 	_watch_ad_btn.set("glow", 0.0)
-	var tw := create_tween().set_loops(3)          # 3 × 1.0s = 3s of gentle pulsing
-	tw.tween_property(_watch_ad_btn, "glow", 1.0, 0.5).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(_watch_ad_btn, "glow", 0.0, 0.5).set_trans(Tween.TRANS_SINE)
+	var tw := create_tween()
+	tw.tween_property(_watch_ad_btn, "glow", 1.0, 0.28).set_trans(Tween.TRANS_SINE)
+	tw.tween_interval(2.8)                         # ~3 heartbeats + 2 passes of the bolt
+	tw.tween_property(_watch_ad_btn, "glow", 0.0, 0.42).set_trans(Tween.TRANS_SINE)
 	tw.finished.connect(func() -> void:
 		if _watch_ad_btn:
 			_watch_ad_btn.set("glow", 0.0)

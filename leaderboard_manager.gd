@@ -2,7 +2,7 @@ extends Node
 
 # Two parallel leaderboard families, one collection per difficulty:
 #   global_{diff}/{uid}   -> { name, score }                            (all-time)
-#   daily_{diff}/{uid}    -> { name, score, date, expires_at }          (today)
+#   daily_{diff}/{date}__{uid} -> { uid, name, score, date, expires_unix }
 #
 # Reads use Firestore's REST endpoints (the plugin's read callbacks don't fire
 # reliably on Android). Writes use the plugin so the native auth context is
@@ -80,12 +80,13 @@ const _HIST_BOARDS: Array[String] = ["global_easy", "global_moderate", "global_h
 # Daily rows are now HISTORICAL: keyed by `{date}__{uid}` (not `{uid}`), so a
 # later replay never overwrites a prior day's row, and each closed day's board
 # survives for the leaderboard-reward collection to read it back. We retain a
-# rolling window of days, then let TTL prune. The window doubles as "how long a
+# rolling window of days, then sweep it (see sweep_expired_daily — a Firestore
+# TTL policy does NOT work here). The window doubles as "how long a
 # player has to return and still collect a day's reward" (see CoinsManager's
 # grant_daily_rewards_if_due). The screen's `date == today` filter keeps the
 # extra history from ever showing on the live board.
 const _DAILY_RETENTION_DAYS := 14
-# Buffer added past the retention window before writing `expires_at`, so TTL
+# Buffer added past the retention window before writing the expiry, so a sweep
 # never races a player active right at the day flip. 6h is plenty of slack.
 const _DAILY_EXPIRES_BUFFER_SECS := 6 * 3600
 
@@ -607,7 +608,7 @@ func _today_utc() -> String:
 	return "%04d-%02d-%02d" % [int(d["year"]), int(d["month"]), int(d["day"])]
 
 # Unix timestamp at the next 00:00 UTC after `now_unix`. Used as the basis for
-# `expires_at` on daily rows.
+# the expiry stamped on daily rows.
 func _next_midnight_utc(now_unix: int) -> int:
 	# Each UTC day is exactly 86400s with no DST, so the next midnight is the
 	# start of the next day index.
@@ -680,6 +681,7 @@ func submit_score_daily(difficulty: String, score: int) -> void:
 		g[doc_id] = {
 			"uid": uid, "name": _name(), "score": score, "date": today,
 			"expires_at": _ts_value(expires_u)["timestampValue"],
+			"expires_unix": expires_u,
 		}
 		_sim_daily[difficulty] = g
 		return
@@ -687,17 +689,23 @@ func submit_score_daily(difficulty: String, score: int) -> void:
 	var existing := await _rest_get(coll, doc_id)
 	if score <= int(existing.get("data", {}).get("score", 0)):
 		return
-	# The plugin marshals GDScript dicts -> Firestore fields, but it doesn't
-	# know about the special {timestampValue: ...} wrapper used in REST shape.
-	# It DOES understand a plain ISO-8601 string written into a string field,
-	# which is what we use here — the field is named expires_at but stored as a
-	# Firestore Timestamp when configured via the TTL policy in the console,
-	# which accepts ISO strings as timestamps. The TTL policy is what reads it.
-	# If the plugin's string mapping turns out to keep this as `stringValue`
-	# (and TTL refuses to delete), we'll move this row to a server-side write.
+	# `expires_unix` is the field expiry ACTUALLY keys on. The earlier plan here
+	# was to let a Firestore TTL policy read the ISO string in `expires_at`, on
+	# the assumption TTL would coerce it — it does not. TTL only ever acts on a
+	# field of type Timestamp, and this plugin cannot write one: set_document()
+	# hands the dict to the AAR, which marshals a GDScript String to a Java
+	# String, so `expires_at` lands as a Firestore string and TTL skips the doc
+	# in silence. Every daily row ever written outlived its expiry as a result.
+	#
+	# An int has no such ambiguity, and firestore.rules can compare it against
+	# request.time — so any signed-in client may delete a row once it's past
+	# `expires_unix`, and sweep_expired_daily() below does exactly that. The ISO
+	# `expires_at` string is still written purely so already-released builds
+	# (which validate against it) keep working; nothing reads it.
 	Firebase.firestore.set_document(coll, doc_id, {
 		"uid": uid, "name": _name(), "score": score, "date": today,
 		"expires_at": Time.get_datetime_string_from_unix_time(expires_u) + "Z",
+		"expires_unix": expires_u,
 	}, true)
 	await Firebase.firestore.write_task_completed
 
@@ -799,6 +807,9 @@ func warm_boards() -> void:
 	while pending["left"] > 0:
 		await _warm_family_done
 	_warming = false
+	# Fire-and-forget once the boards the player is waiting on are in hand —
+	# garbage collection is never worth delaying the UI for.
+	sweep_expired_daily()
 
 # Its own completion signal (NOT _board_loaded, which the inner _load_all loops
 # already fan out on — sharing it across the nested concurrent loops would risk a
@@ -818,6 +829,51 @@ func _warm_family(range_key: String, pending: Dictionary) -> void:
 		_warm_ready[range_key] = true
 	pending["left"] -= 1
 	_warm_family_done.emit()
+
+# ---- expiry sweep (client-side GC; Firestore TTL never worked — see rules) ----
+
+# How many expired rows one pass reaps per board. Deletes are one round-trip
+# each, so this bounds what a single session contributes in the background. The
+# cap doesn't have to keep up with a day's writes on its own: every client that
+# opens the app runs a pass, oldest-first, so the backlog drains collectively.
+const _SWEEP_LIMIT := 12
+
+# Deletes daily rows whose `expires_unix` has passed. Any signed-in client may
+# do this (firestore.rules isExpired), which is the whole point — rows belonging
+# to players who never come back would otherwise live forever, since the row's
+# own owner is the only other party allowed to remove it.
+#
+# Rows written by builds that predate `expires_unix` are invisible to this query
+# (a Firestore inequality filter skips docs missing the field) and are NOT swept
+# here; those are a fixed, non-growing set cleared by a one-off admin purge.
+func sweep_expired_daily() -> void:
+	if _is_editor or _uid().is_empty():
+		return
+	var now_u := int(Time.get_unix_time_from_system())
+	for diff in DIFFS:
+		var coll := "daily_" + diff
+		var res := await _rest_run_query({
+			"from": [{"collectionId": coll}],
+			"where": {"fieldFilter": {
+				"field": {"fieldPath": "expires_unix"},
+				"op": "LESS_THAN",
+				"value": {"integerValue": str(now_u)},
+			}},
+			# Oldest first, so concurrent sweepers converge on the same head of the
+			# backlog and a doc that somehow resists deletion can't hide newer ones.
+			"orderBy": [{"field": {"fieldPath": "expires_unix"}, "direction": "ASCENDING"}],
+			"limit": _SWEEP_LIMIT,
+		})
+		if not bool(res.get("ok", false)):
+			continue
+		for item: Dictionary in res.get("items", []):
+			var doc_id := String(item.get("id", ""))
+			if doc_id.is_empty():
+				continue
+			# A racing sweeper may have deleted it already; that just fails the
+			# rule check and we move on.
+			Firebase.firestore.delete_document(coll, doc_id)
+			await Firebase.firestore.delete_task_completed
 
 # The warm-cached families if BOTH are ready, else {}. Shape:
 # { all_time: <load_all result>, daily: <load_all result> }. The screen seeds its
@@ -919,7 +975,7 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 			if bool(existing.get("exists", false)):
 				var d: Dictionary = existing.get("data", {})
 				# For daily, an extra_eq on `date` lets us reject yesterday's
-				# stale row (TTL hasn't swept it yet) without showing it.
+				# stale row (nobody has swept it yet) without showing it.
 				var keep := true
 				for k in extra_eq:
 					if String(d.get(k, "")) != String(extra_eq[k]):

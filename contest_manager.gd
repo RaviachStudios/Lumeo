@@ -17,8 +17,10 @@ extends Node
 #       status: "lobby" | "playing" | "finished",
 #       seed,                       # shared RNG seed for the race (0 until start)
 #       member_count,               # derived (non-"left" players); browse/rules hint
-#       created_at, started_at, finished_at, expires_at (TTL),
-#       lobby_key,                  # public+lobby only; ranged browse query key
+#       created_at, started_at, finished_at, expires_unix (expiry),
+#       start_deadline,             # public only: created_at + START_WINDOW
+#       lobby_shard,                # public only: which lobby/s{N} lists this room
+#       lobby_key,                  # legacy browse key (see PUBLIC LOBBY below)
 #       players: { <uid>: { name, is_creator, joined_at,
 #                           state: "lobby"|"playing"|"done"|"left",
 #                           score, finished_at } }
@@ -35,6 +37,34 @@ extends Node
 # leaderboard). Writes/deletes and the live listener go through the plugin so the
 # native FirebaseAuth context is applied and rules see request.auth.
 #
+# --- PUBLIC LOBBY (the browsable list of open rooms) ------------------------
+# The same single-document constraint applies to the LIST of public rooms: a
+# client can't listen to "all open rooms", so the list is fanned out into a small
+# index that clients CAN listen to — LOBBY_SHARDS documents of LOBBY_SHARD_CAP
+# entries each (5 x 20 = LOBBY_MAX, the hard cap on open public rooms):
+#
+#   lobby/s{N} -> { rooms: { <CID>: { t: title, d: difficulty,
+#                                     c: member_count, o: open_at, u: creator_uid } } }
+#
+# Every viewer listens to all LOBBY_SHARDS docs and merges them client-side (see
+# watch_lobby / lobby_rows), so rooms appear, change count and vanish live. Rooms
+# are tiny entries, so a whole shard is ~2KB — cheap to push on every change, and
+# far cheaper than re-running a 100-doc query per viewer per change.
+#
+# Liveness is a pure TIME predicate: an entry counts while `now < o + START_WINDOW`.
+# Closing a room writes o=0 (a merge can't delete a map key — same reason players
+# use "left" tombstones), which makes it dead by that same predicate. So one rule
+# covers closed, started AND abandoned rooms, and no client has to be online for a
+# dead room to leave the list. Dead keys are swept by the compaction pass in
+# _lobby_pick_shard() when a shard actually runs out of slots.
+#
+# Sharding also spreads writes: Firestore sustains ~1 write/sec on ONE document,
+# and joins/leaves/opens/closes across 100 rooms would exceed that on a single doc.
+#
+# ROLLOUT COMPAT: already-released clients browse by a ranged query on `lobby_key`
+# (a uniform random [0,1) sort key, dropped to -1.0 on start). We keep WRITING that
+# field so those builds keep working; nothing here reads it.
+#
 # Editor (non-Android) runs an in-memory sim mirroring the live shape so the whole
 # create -> join -> start -> play -> finish lifecycle is testable without a device;
 # watch_room() re-emits the sim room after every local write.
@@ -47,19 +77,36 @@ extends Node
 # empty {} means the room is gone (deleted / not found).
 signal room_changed(cid: String, room: Dictionary)
 
+# Live snapshot of the public lobby: the merged, still-open rows across every
+# index shard (see lobby_rows). Fires while watch_lobby() is active.
+signal lobby_changed(rows: Array)
+
 # ---- caps / limits ----
 const MAX_MEMBERS := 45
-# How many public lobby rooms the browse screen pulls per (single) fetch.
-const LOBBY_FETCH := 10
+# Public lobby index: LOBBY_SHARDS docs x LOBBY_SHARD_CAP entries. The cap is real
+# — firestore.rules rejects a shard write that would exceed LOBBY_SHARD_CAP.
+const LOBBY_SHARDS := 5
+const LOBBY_SHARD_CAP := 20
+const LOBBY_MAX := LOBBY_SHARDS * LOBBY_SHARD_CAP
+# How long a public room stays open for its host to press Start. At the deadline
+# the room auto-starts (2+ players) or closes — see contest_detail_screen.
+const START_WINDOW := 5 * 60
 # Room titles are player-authored; displayed big and clamped everywhere
 # (mirrors ArenaUI.TITLE_MAX + titleOk() in firestore.rules).
 const TITLE_MAX := 15
 
 const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 
-# TTL horizon written to `expires_at` on every write. Firestore TTL reaps orphans
-# if a client never runs cleanup.
+# Expiry horizon stamped on every room write. A room abandoned without its
+# member_count ever reaching 0 is reachable by no other cleanup path, so it is
+# reaped once this horizon passes — see sweep_expired_rooms(). This was ORIGINALLY
+# a Firestore TTL policy, which silently never ran (see _expires_iso).
 const TTL_SECS := 3 * 86400
+
+# How many expired rooms one sweep pass reaps. Deletes are a round-trip each, so
+# this bounds what a single lobby-open contributes in the background; every
+# client that opens the lobby runs a pass, so the backlog drains collectively.
+const SWEEP_LIMIT := 10
 
 const ID_LEN := 6
 # Crockford base32 minus I,L,O,U — unambiguous when shared verbally / typed.
@@ -67,16 +114,23 @@ const ID_ALPHABET := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 const MAX_SCORE := 9999   # mirror scoreOk() in firestore.rules
 
 const _COLL := "contests"
+const _LOBBY_COLL := "lobby"
 const _FB_BASE := "https://firestore.googleapis.com/v1/projects/simon-6bc39/databases/(default)/documents"
 
 var _is_editor := OS.get_name() != "Android"
 
 # ---- editor sim store (shape mirrors Firestore) ----
 var _sim_rooms: Dictionary = {}       # cid -> room dict
+var _sim_shards: Dictionary = {}      # shard index -> rooms map (lobby index)
 
 # Rooms this client currently has a live listener attached to (so document_changed
 # only re-emits for docs a screen actually asked to watch).
 var _watching: Dictionary = {}        # cid -> true
+
+# ---- public lobby live state ----
+var _watching_lobby := false
+var _shards: Dictionary = {}          # shard index -> rooms map (last snapshot)
+var _lobby_emit_queued := false       # coalesces a burst of shard snapshots into one emit
 
 # The room this client is currently participating in (set on create/join, cleared
 # on leave). Lets a screen re-enter and guards accidental double-joins.
@@ -93,8 +147,21 @@ func _name() -> String:
 
 func _now() -> int: return int(Time.get_unix_time_from_system())
 
+# Legacy expiry stamp. Kept ONLY so already-released builds keep seeing the shape
+# they validate against — nothing reads it. It was meant to drive a Firestore TTL
+# policy, but TTL only acts on fields of type Timestamp and the Android plugin
+# can't produce one (a GDScript String marshals to a Java String), so this always
+# landed as a string and TTL never deleted a single room. Expiry now keys on
+# `expires_unix` below.
 func _expires_iso(base_now: int) -> String:
 	return Time.get_datetime_string_from_unix_time(base_now + TTL_SECS) + "Z"
+
+# The real expiry stamp: plain int, UTC seconds. firestore.rules compares it
+# against request.time, so once it passes ANY signed-in client may delete the
+# room — which is what sweep_expired_rooms() does. Every room write refreshes it,
+# so a live room keeps pushing its horizon out and only an abandoned one ages.
+func _expires_unix(base_now: int) -> int:
+	return base_now + TTL_SECS
 
 # ---- static display helpers (screens reuse these) ----
 
@@ -127,15 +194,25 @@ static func clean_title(raw: String) -> String:
 		s = s.substr(0, TITLE_MAX)
 	return s
 
-# Returns {ok, id} or {ok:false, error}.
-# `is_public` rooms are discoverable in the browse-lobby (see load_lobby_contests);
-# private ones can only be joined with the shared ID.
+# Returns {ok, id} or {ok:false, error} with error in {auth, bad_args, lobby_full,
+# id_collision}.
+# `is_public` rooms are listed in the browse-lobby and must be started within
+# START_WINDOW; private ones carry no deadline and can only be joined with the
+# shared ID.
 func create_contest(difficulty: String, title: String = "",
 		is_public: bool = true) -> Dictionary:
 	if _uid().is_empty() or not FirebaseManager.has_display_name():
 		return {"ok": false, "error": "auth"}
 	if not DIFFS.has(difficulty):
 		return {"ok": false, "error": "bad_args"}
+
+	# Claim a lobby slot BEFORE creating anything, so a full lobby can't leave an
+	# orphan room behind.
+	var slot: Dictionary = {}
+	if is_public:
+		slot = await _lobby_pick_shard()
+		if not bool(slot.get("ok", false)):
+			return {"ok": false, "error": "lobby_full"}
 
 	var now := _now()
 	for _attempt in 6:
@@ -155,16 +232,21 @@ func create_contest(difficulty: String, title: String = "",
 			"created_at": now,
 			"started_at": 0,
 			"finished_at": 0,
+			# Private rooms have no start deadline (0); public ones must start within
+			# START_WINDOW of opening.
+			"start_deadline": (now + START_WINDOW) if is_public else 0,
+			"lobby_shard": int(slot.get("shard", -1)) if is_public else -1,
 			"expires_at": _expires_iso(now),
+			"expires_unix": _expires_unix(now),
 			"players": {_uid(): _new_player(true, now)},
 		}
-		# A public, still-in-lobby room carries a uniform random `lobby_key` in
-		# [0,1). The browse-lobby fetches a random slice with a single ranged query
-		# on this one field (see load_lobby_contests). Private rooms omit it, so they
-		# never surface; on start we drop it below range so started rooms leave the lobby.
+		# Legacy browse key, kept only so already-released builds still see this room
+		# in their (ranged-query) lobby. Nothing in this version reads it.
 		if is_public:
 			room["lobby_key"] = randf()
 		await _write_room(cid, room, false)
+		if is_public:
+			await _lobby_claim(slot, cid, room)
 		current_room_id = cid
 		BadgeManager.note_contest_hosted()   # "Host With Most" badge
 		return {"ok": true, "id": cid}
@@ -211,10 +293,13 @@ func join_contest(raw_id: String) -> Dictionary:
 	await _write_player(cid, _uid(), _new_player(false, now))
 	# Recompute the count from the roster we already read, counting myself once.
 	players[_uid()] = _new_player(false, now)
+	var count := _count_active(players)
 	await _write_room(cid, {
-		"member_count": _count_active(players),
+		"member_count": count,
 		"expires_at": _expires_iso(now),
+		"expires_unix": _expires_unix(now),
 	}, true)
+	await _lobby_bump(room, cid, count)
 	current_room_id = cid
 	BadgeManager.note_contest_joined()   # "Challenger" / "Regular" badges
 	return {"ok": true}
@@ -245,6 +330,7 @@ func leave_contest(cid: String) -> void:
 
 	# Creator abandoning a lobby cancels the room entirely.
 	if is_creator and status == "lobby":
+		await _lobby_close(room, cid)
 		await _delete_room(cid)
 		return
 
@@ -258,9 +344,13 @@ func leave_contest(cid: String) -> void:
 	await _write_room(cid, {
 		"member_count": remaining,
 		"expires_at": _expires_iso(_now()),
+		"expires_unix": _expires_unix(_now()),
 	}, true)
 	if remaining <= 0:
+		await _lobby_close(room, cid)
 		await _delete_room(cid)
+	else:
+		await _lobby_bump(room, cid, remaining)
 
 # Best-effort cleanup on account deletion: leave whatever room we're currently in.
 # The single-doc model has no per-uid query, so we can only reach the active room;
@@ -280,6 +370,7 @@ func cancel_room(cid: String) -> Dictionary:
 		return {"ok": false, "error": "not_creator"}
 	# Drop member_count to 0 first so the empty-delete rule path also covers us.
 	await _write_room(cid, {"member_count": 0}, true)
+	await _lobby_close(room, cid)
 	await _delete_room(cid)
 	return {"ok": true}
 
@@ -296,7 +387,9 @@ func kick_member(cid: String, target_uid: String) -> Dictionary:
 	var players: Dictionary = room.get("players", {})
 	if players.has(target_uid):
 		players[target_uid]["state"] = "left"
-	await _write_room(cid, {"member_count": _count_active(players)}, true)
+	var count := _count_active(players)
+	await _write_room(cid, {"member_count": count}, true)
+	await _lobby_bump(room, cid, count)
 	return {"ok": true}
 
 # =====================================================================
@@ -322,10 +415,13 @@ func start_room(cid: String) -> Dictionary:
 		"status": "playing",
 		"started_at": now,
 		"seed": seed,
-		# Drop below the [0,1) key range so a started room disappears from browse.
+		# Legacy key: drop below the [0,1) range so older builds stop listing it.
 		"lobby_key": -1.0,
 		"expires_at": _expires_iso(now),
+		"expires_unix": _expires_unix(now),
 	}, true)
+	# A started race is no longer joinable — take it out of the public lobby.
+	await _lobby_close(room, cid)
 	return {"ok": true, "seed": seed}
 
 # =====================================================================
@@ -365,7 +461,8 @@ func submit_result(cid: String, score: int) -> Dictionary:
 
 	if _all_done(players):
 		await _write_room(cid, {
-			"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+			"status": "finished", "finished_at": now,
+			"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
 		}, true)
 		room["status"] = "finished"
 		room["finished_at"] = now
@@ -394,7 +491,8 @@ func finalize_if_done(cid: String) -> void:
 	if _all_done(room.get("players", {})):
 		var now := _now()
 		await _write_room(cid, {
-			"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+			"status": "finished", "finished_at": now,
+			"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
 		}, true)
 
 # Creator forces the room to end now with current scores.
@@ -408,7 +506,8 @@ func finish_now(cid: String) -> Dictionary:
 		return {"ok": false, "error": "not_active"}
 	var now := _now()
 	await _write_room(cid, {
-		"status": "finished", "finished_at": now, "expires_at": _expires_iso(now),
+		"status": "finished", "finished_at": now,
+		"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
 	}, true)
 	room["status"] = "finished"
 	room["finished_at"] = now
@@ -484,6 +583,9 @@ func unwatch_room(cid: String) -> void:
 # plugin, or REST-style with a "fields" wrapper). An empty / identity-less payload
 # means the doc was deleted.
 func _on_document_changed(document_path: String, data: Dictionary) -> void:
+	if document_path.begins_with(_LOBBY_COLL + "/"):
+		_apply_shard(document_path, data)
+		return
 	var prefix := _COLL + "/"
 	var cid := document_path
 	if document_path.begins_with(prefix):
@@ -511,47 +613,276 @@ func _sim_touch(cid: String) -> void:
 		_sim_emit(cid)
 
 # =====================================================================
-#  BROWSE LOBBY  (public, still-in-lobby rooms)
+#  PUBLIC LOBBY  (live index of open rooms — see the header notes)
 # =====================================================================
 
-# Up to LOBBY_FETCH public rooms that are open (status == lobby), chosen
-# (pseudo-)randomly with a SINGLE cheap ranged read on `lobby_key`. Each row is
-# returned already-decoded so the screen shows title / difficulty / member_count
-# without another read.
-func load_lobby_contests() -> Array:
-	var pivot := randf()
-	var rows: Array
+# Go live on the public lobby. Emits lobby_changed with the current rows as soon
+# as the shard snapshots land (Firestore fires a listener immediately with the
+# current document, so this needs no separate fetch), and again on every change.
+func watch_lobby() -> void:
+	if _watching_lobby:
+		_queue_lobby_emit()   # a re-entering screen still wants an immediate paint
+		return
+	_watching_lobby = true
 	if _is_editor:
-		rows = _sim_lobby(pivot)
-	else:
-		rows = await _rest_query_lobby(pivot)
+		_queue_lobby_emit()
+		return
+	for n in LOBBY_SHARDS:
+		Firebase.firestore.listen_to_document(_shard_path(n))
+	# Opening the lobby is the natural moment to take out the trash: the player is
+	# about to sit and watch a list, so a few background deletes cost them nothing.
+	# Not awaited — the lobby must paint the instant the shards land.
+	sweep_expired_rooms()
+
+# Deletes rooms whose `expires_unix` has passed. Any signed-in client may do this
+# (firestore.rules isExpired), which is what makes it work at all: an orphaned
+# room's own members are gone by definition, and the previous delete paths all
+# required either the creator or a member_count already lowered to 0.
+#
+# Rooms written by builds that predate `expires_unix` carry no such field, and a
+# Firestore inequality filter skips docs missing the field — so they are NOT
+# swept here. That's a fixed, non-growing set cleared by a one-off admin purge.
+func sweep_expired_rooms() -> void:
+	if _is_editor or _uid().is_empty():
+		return
+	var res := await _rest_run_query({
+		"from": [{"collectionId": _COLL}],
+		"where": {"fieldFilter": {
+			"field": {"fieldPath": "expires_unix"},
+			"op": "LESS_THAN",
+			"value": {"integerValue": str(_now())},
+		}},
+		# Oldest first, so concurrent sweepers converge on the same head of the
+		# backlog instead of each nibbling a different slice of it.
+		"orderBy": [{"field": {"fieldPath": "expires_unix"}, "direction": "ASCENDING"}],
+		"limit": SWEEP_LIMIT,
+	})
+	for item: Dictionary in res:
+		var cid := String(item.get("id", ""))
+		# Never delete the room this client is sitting in, whatever its stamp says.
+		if cid.is_empty() or cid == current_room_id:
+			continue
+		# A racing sweeper may have taken it already; that just fails the rule
+		# check and we move on.
+		await _delete_room(cid)
+
+func unwatch_lobby() -> void:
+	if not _watching_lobby:
+		return
+	_watching_lobby = false
+	if _is_editor:
+		return
+	for n in LOBBY_SHARDS:
+		Firebase.firestore.stop_listening_to_document(_shard_path(n))
+
+# The merged public lobby: every still-open room across all shards, freshest
+# first (a new room has the most time left, and rows age off the END of the list
+# instead of churning the top). Rows are display-ready:
+#   {id, title, difficulty, member_count, open_at, deadline, is_creator}
+func lobby_rows() -> Array:
+	var now := _now()
+	var src: Dictionary = _sim_shards if _is_editor else _shards
 	var out: Array = []
-	for raw in rows:
-		if not (raw is Dictionary):
+	for idx in src:
+		var rooms: Variant = src[idx]
+		if not (rooms is Dictionary):
 			continue
-		if String(raw.get("status", "")) != "lobby":
-			continue
-		if not bool(raw.get("is_public", false)):
-			continue
-		out.append({
-			"id": String(raw.get("id", "")),
-			"title": String(raw.get("title", "Contest")),
-			"difficulty": String(raw.get("difficulty", "easy")),
-			"member_count": int(raw.get("member_count", 1)),
-			"is_creator": String(raw.get("creator_uid", "")) == _uid(),
-		})
+		for cid in (rooms as Dictionary):
+			var e: Variant = (rooms as Dictionary)[cid]
+			if not (e is Dictionary):
+				continue
+			var open_at := int((e as Dictionary).get("o", 0))
+			# One predicate for closed (o=0), started (o=0) and abandoned rooms.
+			if open_at <= 0 or now >= open_at + START_WINDOW:
+				continue
+			out.append({
+				"id": String(cid),
+				"title": String((e as Dictionary).get("t", "Contest")),
+				"difficulty": String((e as Dictionary).get("d", "easy")),
+				"member_count": int((e as Dictionary).get("c", 1)),
+				"open_at": open_at,
+				"deadline": open_at + START_WINDOW,
+				"is_creator": String((e as Dictionary).get("u", "")) == _uid(),
+			})
+	out.sort_custom(func(a, b):
+		if int(a["open_at"]) != int(b["open_at"]):
+			return int(a["open_at"]) > int(b["open_at"])
+		return String(a["id"]) < String(b["id"])   # stable order for same-second opens
+	)
 	return out
 
-func _sim_lobby(pivot: float) -> Array:
-	var out: Array = []
-	for cid in _sim_rooms:
-		var m: Dictionary = _sim_rooms[cid]
-		if not m.has("lobby_key"):
+func _shard_path(n: int) -> String:
+	return "%s/s%d" % [_LOBBY_COLL, n]
+
+# Android live-listener callback for a lobby shard.
+func _apply_shard(document_path: String, data: Dictionary) -> void:
+	if not _watching_lobby:
+		return
+	var suffix := document_path.substr((_LOBBY_COLL + "/").length())
+	if not suffix.begins_with("s"):
+		return
+	var idx := int(suffix.substr(1))
+	if idx < 0 or idx >= LOBBY_SHARDS:
+		return
+	var raw: Dictionary = data
+	if data.has("fields"):
+		raw = _fields(data["fields"])
+	var rooms: Variant = raw.get("rooms", {})
+	_shards[idx] = rooms if rooms is Dictionary else {}
+	_queue_lobby_emit()
+
+# All LOBBY_SHARDS snapshots land back-to-back when a screen goes live; coalesce
+# them (and any write-triggered re-emit) into one repaint per frame.
+func _queue_lobby_emit() -> void:
+	if _lobby_emit_queued:
+		return
+	_lobby_emit_queued = true
+	call_deferred("_emit_lobby")
+
+func _emit_lobby() -> void:
+	_lobby_emit_queued = false
+	if _watching_lobby:
+		emit_signal("lobby_changed", lobby_rows())
+
+# ---- index writes ----
+
+# The index row for a room. Kept to single-letter keys: this map is pushed to
+# every lobby viewer on every change.
+func _lobby_entry(room: Dictionary) -> Dictionary:
+	return {
+		"t": String(room.get("title", "Contest")),
+		"d": String(room.get("difficulty", "easy")),
+		"c": int(room.get("member_count", 1)),
+		"o": int(room.get("created_at", _now())),
+		"u": String(room.get("creator_uid", "")),
+	}
+
+# Writes a room's entry into the slot claimed by _lobby_pick_shard(). When that
+# slot needed compaction, the shard is rewritten wholesale (live entries + ours)
+# — the only non-merge write in here, and the only thing that reclaims dead keys.
+# Two clients compacting the same shard in the same instant can drop one of their
+# entries (last write wins): that room simply isn't LISTED — it still exists, its
+# ID still works, and its host can reopen. Only reachable on a shard that is both
+# full and stale, so it stays rare by construction.
+func _lobby_claim(slot: Dictionary, cid: String, room: Dictionary) -> void:
+	var shard := int(slot.get("shard", -1))
+	if shard < 0:
+		return
+	if bool(slot.get("compact", false)):
+		var live: Dictionary = (slot.get("live", {}) as Dictionary).duplicate(true)
+		live[cid] = _lobby_entry(room)
+		await _lobby_write(shard, {"rooms": live}, false)
+	else:
+		await _lobby_write(shard, {"rooms": {cid: _lobby_entry(room)}}, true)
+
+# Republishes a listed room's player count. No-op for private rooms and for rooms
+# that have already left the lobby.
+func _lobby_bump(room: Dictionary, cid: String, count: int) -> void:
+	if not bool(room.get("is_public", false)) or String(room.get("status", "")) != "lobby":
+		return
+	var shard := int(room.get("lobby_shard", -1))
+	if shard < 0 or shard >= LOBBY_SHARDS:
+		return
+	await _lobby_write(shard, {"rooms": {cid: {"c": count}}}, true)
+
+# Takes a room out of the public lobby (started, cancelled or emptied). o=0 makes
+# the entry fail the liveness predicate everywhere; the key itself is reclaimed by
+# the next compaction.
+func _lobby_close(room: Dictionary, cid: String) -> void:
+	if not bool(room.get("is_public", false)):
+		return
+	var shard := int(room.get("lobby_shard", -1))
+	if shard < 0 or shard >= LOBBY_SHARDS:
+		return
+	await _lobby_write(shard, {"rooms": {cid: {"o": 0}}}, true)
+
+func _lobby_write(shard: int, data: Dictionary, merge: bool) -> void:
+	if _is_editor:
+		var rooms: Dictionary = data.get("rooms", {})
+		if merge:
+			var cur: Dictionary = _sim_shards.get(shard, {})
+			for cid in rooms:
+				var e: Dictionary = cur.get(cid, {})
+				for k in (rooms[cid] as Dictionary):
+					e[k] = rooms[cid][k]
+				cur[cid] = e
+			_sim_shards[shard] = cur
+		else:
+			_sim_shards[shard] = rooms.duplicate(true)
+		_queue_lobby_emit()
+		return
+	Firebase.firestore.set_document(_LOBBY_COLL, "s%d" % shard, data, merge)
+	await Firebase.firestore.write_task_completed
+
+# Claims a slot for a new public room: the shard with the most free space.
+# Returns {ok:true, shard, compact, live} or {ok:false} when all LOBBY_MAX slots
+# are held by live rooms. `compact` means the shard is at its key cap with dead
+# entries in it, so the caller must rewrite it rather than merge into it.
+func _lobby_pick_shard() -> Dictionary:
+	var shards := await _lobby_read_all()
+	var now := _now()
+	var best := -1
+	var best_live: Dictionary = {}
+	var best_compact := false
+	for n in LOBBY_SHARDS:
+		var rooms: Dictionary = shards.get(n, {})
+		var live: Dictionary = {}
+		for cid in rooms:
+			var e: Variant = rooms[cid]
+			if not (e is Dictionary):
+				continue
+			var open_at := int((e as Dictionary).get("o", 0))
+			if open_at > 0 and now < open_at + START_WINDOW:
+				live[cid] = e
+		if live.size() >= LOBBY_SHARD_CAP:
+			continue                      # genuinely full of open rooms
+		if best >= 0 and live.size() >= best_live.size():
 			continue
-		if float(m.get("lobby_key", -1.0)) >= pivot:
-			out.append(m.duplicate(true))
-	out.sort_custom(func(a, b): return float(a.get("lobby_key", 0.0)) < float(b.get("lobby_key", 0.0)))
-	return out.slice(0, LOBBY_FETCH)
+		best = n
+		best_live = live
+		# A merge write can only add a key; if the raw map is already at the cap,
+		# rules would reject it — so the dead keys have to be swept first.
+		best_compact = rooms.size() >= LOBBY_SHARD_CAP
+	if best < 0:
+		return {"ok": false}
+	return {"ok": true, "shard": best, "compact": best_compact, "live": best_live}
+
+# Every shard's rooms map, keyed by shard index. Uses the live snapshots when the
+# lobby is already being watched (free); otherwise one REST list of the whole
+# (5-document) collection.
+func _lobby_read_all() -> Dictionary:
+	var out: Dictionary = {}
+	for n in LOBBY_SHARDS:
+		out[n] = {}
+	if _is_editor:
+		for n in LOBBY_SHARDS:
+			out[n] = (_sim_shards.get(n, {}) as Dictionary).duplicate(true)
+		return out
+	if _watching_lobby and not _shards.is_empty():
+		for n in LOBBY_SHARDS:
+			out[n] = _shards.get(n, {})
+		return out
+	var r := await _http_get(_FB_BASE + "/" + _LOBBY_COLL)
+	if r[1] != 200:
+		return out                        # treat an unreadable index as empty
+	var j := JSON.new()
+	j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+	if not (j.data is Dictionary):
+		return out
+	for doc in (j.data as Dictionary).get("documents", []):
+		if not (doc is Dictionary):
+			continue
+		var name := String((doc as Dictionary).get("name", ""))
+		var sid := name.substr(name.rfind("/") + 1)
+		if not sid.begins_with("s"):
+			continue
+		var idx := int(sid.substr(1))
+		if idx < 0 or idx >= LOBBY_SHARDS:
+			continue
+		var f := _fields((doc as Dictionary).get("fields", {}))
+		var rooms: Variant = f.get("rooms", {})
+		out[idx] = rooms if rooms is Dictionary else {}
+	return out
 
 # =====================================================================
 #  ID helpers
@@ -662,6 +993,10 @@ func _shape_room(raw: Variant, cid: String) -> Dictionary:
 		"created_at": int(src.get("created_at", 0)),
 		"started_at": int(src.get("started_at", 0)),
 		"finished_at": int(src.get("finished_at", 0)),
+		# Public rooms only: when the host must have started by, and which lobby
+		# shard lists the room (-1 / 0 = not listed, i.e. private or pre-deadline build).
+		"start_deadline": int(src.get("start_deadline", 0)),
+		"lobby_shard": int(src.get("lobby_shard", -1)),
 		"players": players,
 	}
 
@@ -680,18 +1015,6 @@ func _http_get(url: String) -> Array:
 	http.queue_free()
 	return r
 
-func _http_post(url: String, body: Dictionary) -> Array:
-	var http := HTTPRequest.new()
-	http.timeout = 6.0
-	add_child(http)
-	var headers := PackedStringArray(["Content-Type: application/json"])
-	if http.request(url, headers, HTTPClient.METHOD_POST, JSON.stringify(body)) != OK:
-		http.queue_free()
-		return [0, 0, [], PackedByteArray()]
-	var r: Array = await http.request_completed
-	http.queue_free()
-	return r
-
 func _rest_get(collection: String, doc_id: String) -> Dictionary:
 	var r := await _http_get(_FB_BASE + "/" + collection + "/" + doc_id)
 	if r[1] != 200:
@@ -702,39 +1025,39 @@ func _rest_get(collection: String, doc_id: String) -> Dictionary:
 		return {"exists": false}
 	return {"exists": true, "data": _fields(j.data.get("fields", {}))}
 
-# runQuery on contests: a single ranged query for public lobby rooms. Filters on
-# `lobby_key >= pivot` and orders by it (one auto-indexed field, no composite index
-# — private/started rooms carry no in-range key, so they're excluded). Returns
-# Array of decoded room dicts (id folded in from the doc name is already a field).
-func _rest_query_lobby(pivot: float) -> Array:
-	var body := {"structuredQuery": {
-		"from": [{"collectionId": _COLL}],
-		"where": {"fieldFilter": {
-			"field": {"fieldPath": "lobby_key"},
-			"op": "GREATER_THAN_OR_EQUAL",
-			"value": {"doubleValue": pivot},
-		}},
-		"orderBy": [{"field": {"fieldPath": "lobby_key"}, "direction": "ASCENDING"}],
-		"limit": LOBBY_FETCH,
-	}}
-	for attempt in 3:
-		var r := await _http_post(_FB_BASE + ":runQuery", body)
-		if r[1] == 200:
-			var j := JSON.new()
-			j.parse((r[3] as PackedByteArray).get_string_from_utf8())
-			var out: Array = []
-			if j.data is Array:
-				for env in j.data:
-					if not (env is Dictionary):
-						continue
-					var doc: Variant = env.get("document", null)
-					if not (doc is Dictionary):
-						continue
-					out.append(_fields(doc.get("fields", {})))
-			return out
-		if attempt < 2:
-			await get_tree().create_timer(1.0).timeout
-	return []
+# Runs a Firestore structured query and returns [{id, data}, ...] — empty on any
+# failure, since the only caller is a best-effort sweep. Reads need no auth
+# header (contests is `allow read: if true`); the DELETES that follow go through
+# the plugin so rules see request.auth.
+func _rest_run_query(query: Dictionary) -> Array:
+	var http := HTTPRequest.new()
+	http.timeout = 6.0
+	add_child(http)
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	var body := JSON.stringify({"structuredQuery": query})
+	if http.request(_FB_BASE + ":runQuery", headers, HTTPClient.METHOD_POST, body) != OK:
+		http.queue_free()
+		return []
+	var r: Array = await http.request_completed
+	http.queue_free()
+	if r[1] != 200:
+		return []
+	var j := JSON.new()
+	j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+	if not (j.data is Array):
+		return []
+	var out: Array = []
+	for env in j.data:
+		# A zero-match query answers with a single metadata-only envelope that has
+		# no `document` key — skip anything that isn't a real result.
+		if not (env is Dictionary):
+			continue
+		var doc: Variant = (env as Dictionary).get("document", null)
+		if not (doc is Dictionary):
+			continue
+		var parts: PackedStringArray = String((doc as Dictionary).get("name", "")).split("/")
+		out.append({"id": parts[-1], "data": _fields((doc as Dictionary).get("fields", {}))})
+	return out
 
 func _val(v: Variant) -> Variant:
 	if not v is Dictionary: return null

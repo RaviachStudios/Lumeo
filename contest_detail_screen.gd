@@ -6,13 +6,20 @@ const SimonFlyer := preload("res://simon_flyer.gd")
 
 # Live room — three faces driven by the room's status, kept in sync by a Firestore
 # document listener (ContestManager.room_changed):
-#   lobby    : share ID, live roster (+kick), Start (creator), Leave/Cancel
+#   lobby    : share ID, live roster (+kick), start countdown, Start (creator), Leave/Cancel
 #   playing  : if I haven't raced yet -> jump straight into the game; otherwise a
 #              live "who's still racing / who finished" board (+ creator Finish now)
 #   finished : podium + full standings, Exit only
 #
 # When the creator presses Start, the status flips to "playing" for everyone at
 # once and every client auto-launches its match on the shared seed.
+#
+# A PUBLIC room also carries a start deadline (`start_deadline`, ContestManager.
+# START_WINDOW after it opened) so a room listed in the public lobby can't sit
+# there dead: the host's client auto-starts the race at 0:00 when someone else is
+# in the room, or closes the room when nobody joined. Everyone else waits out a
+# short grace period (in case the host is backgrounded and never fires) and then
+# leaves, which tears the room down through the ordinary last-member-out path.
 
 var game_manager: Node
 var contest_id: String = ""
@@ -32,6 +39,17 @@ var _toast: Label
 var _confirm: Panel
 var _confirm_lbl: Label
 var _confirm_yes_cb: Callable
+
+# Start-deadline chrome (public rooms only). Lives on the screen, not in _content,
+# because it sits in the top bar; torn down per render like _corner_btn.
+var _timer_chip: Panel
+var _timer_lbl: Label
+var _timer_hint: Label
+var _tick: Timer
+var _deadline_fired := false     # guard: the deadline resolves exactly once
+# Set when the deadline closed this room, so the face explains WHY rather than
+# falling through to the generic "no longer exists".
+var _closed_reason := ""
 
 var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
 var _busy := false
@@ -108,6 +126,7 @@ func _layout_static() -> void:
 	if _toast:
 		_toast.size = Vector2(sz.x, 30)
 		_toast.position = Vector2(0, sz.y - 70)
+	_position_timer_chip(sz)
 	_layout_confirm(sz)
 
 # ---------------- load / live watch ----------------
@@ -141,6 +160,11 @@ func _render() -> void:
 	if _corner_btn:
 		_corner_btn.queue_free()
 		_corner_btn = null
+	_clear_timer_chip()
+	if not _closed_reason.is_empty():
+		_render_message(_closed_reason, "Back to Arena",
+			func() -> void: game_manager.show_arena())
+		return
 	if _room.is_empty():
 		_render_message("This room no longer exists.", "Back to Arena",
 			func() -> void: game_manager.show_arena())
@@ -214,6 +238,10 @@ func _render_lobby() -> void:
 	# behind the centre of the screen, slow gold motes and faint twinkling stars (added
 	# first so all widgets sit on top).
 	_add_lobby_ambience(w, h)
+
+	# Public rooms run on a clock: show it, and let it resolve itself at 0:00.
+	if int(_room.get("start_deadline", 0)) > 0:
+		_build_timer_chip(is_creator)
 
 	# The difficulty setting under the title: a tracked caption, the sculpted badge and a
 	# short gold divider — the lobby's single, quiet secondary line (no tagline beneath).
@@ -1376,6 +1404,133 @@ func _render_message(msg: String, btn_text: String, cb: Callable) -> void:
 	b.position = Vector2(w * 0.5 - 110, _content.size.y * 0.4 + 60)
 	b.pressed.connect(cb)
 	_content.add_child(b)
+
+# ---------------- start deadline (public rooms) ----------------
+
+const TIMER_W := 150.0
+const TIMER_H := 44.0
+# How long a non-host waits past 0:00 before closing the room itself — enough for
+# a live host's auto-start to land, short enough that a dead host isn't a wait.
+const DEADLINE_GRACE := 10
+
+func _build_timer_chip(is_creator: bool) -> void:
+	_timer_chip = Panel.new()
+	_timer_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.16, 0.10, 0.06, 0.78)
+	s.set_corner_radius_all(14)
+	s.border_color = Color(ArenaUI.SAND.r, ArenaUI.SAND.g, ArenaUI.SAND.b, 0.5)
+	s.set_border_width_all(1)
+	s.shadow_color = Color(ArenaUI.ACCENT.r, ArenaUI.ACCENT.g, ArenaUI.ACCENT.b, 0.22)
+	s.shadow_size = 8
+	_timer_chip.add_theme_stylebox_override("panel", s)
+	add_child(_timer_chip)
+
+	var cap := Label.new()
+	cap.text = "S T A R T   I N"
+	cap.add_theme_font_size_override("font_size", 10)
+	cap.add_theme_color_override("font_color", Color(0.82, 0.86, 0.98, 0.65))
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cap.position = Vector2(0, 5); cap.size = Vector2(TIMER_W, 12)
+	_timer_chip.add_child(cap)
+
+	_timer_lbl = Label.new()
+	_timer_lbl.add_theme_font_size_override("font_size", 21)
+	_timer_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_timer_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_timer_lbl.position = Vector2(0, 17); _timer_lbl.size = Vector2(TIMER_W, 24)
+	_timer_chip.add_child(_timer_lbl)
+
+	_timer_hint = Label.new()
+	_timer_hint.text = "Auto-starts at 0:00" if is_creator else "Waiting on the host"
+	_timer_hint.add_theme_font_size_override("font_size", 11)
+	_timer_hint.add_theme_color_override("font_color", Color(0.82, 0.86, 0.98, 0.55))
+	_timer_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_timer_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_timer_hint)
+
+	if _tick == null:
+		_tick = Timer.new()
+		_tick.wait_time = 1.0
+		_tick.timeout.connect(_on_tick)
+		add_child(_tick)
+	_tick.start()
+	_position_timer_chip(get_viewport_rect().size)
+	_on_tick()
+
+func _clear_timer_chip() -> void:
+	if _tick:
+		_tick.stop()
+	if _timer_chip:
+		_timer_chip.queue_free()
+		_timer_chip = null
+	_timer_lbl = null
+	if _timer_hint:
+		_timer_hint.queue_free()
+		_timer_hint = null
+
+func _position_timer_chip(sz: Vector2) -> void:
+	if _timer_chip == null:
+		return
+	# Top-right, mirroring the back button's inset (the lobby face leaves it free).
+	_timer_chip.size = Vector2(TIMER_W, TIMER_H)
+	_timer_chip.position = Vector2(sz.x - TIMER_W - 18.0, 20.0)
+	if _timer_hint:
+		_timer_hint.size = Vector2(TIMER_W, 14)
+		_timer_hint.position = Vector2(sz.x - TIMER_W - 18.0, 20.0 + TIMER_H + 3.0)
+
+# Once a second while a public room sits in its lobby: move the clock, and resolve
+# the deadline when it runs out.
+func _on_tick() -> void:
+	# A timeout already in flight when the room ended must not resolve a deadline
+	# against a room that's gone (or already racing).
+	if _timer_lbl == null or _room.is_empty() or String(_room.get("status", "")) != "lobby":
+		return
+	var deadline := int(_room.get("start_deadline", 0))
+	var left: int = deadline - int(Time.get_unix_time_from_system())
+	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
+	_timer_lbl.text = "%d:%02d" % [maxi(left, 0) / 60, maxi(left, 0) % 60]
+	var col := Color(0.98, 0.94, 0.86)
+	if left <= 15:
+		col = Color(0.97, 0.45, 0.52)
+	elif left <= 60:
+		col = Color(1.00, 0.75, 0.35)
+	_timer_lbl.add_theme_color_override("font_color", col)
+	# The host acts on the deadline; everyone else only steps in if the host didn't.
+	var fire_at := 0 if is_creator else DEADLINE_GRACE
+	if left <= -fire_at:
+		_on_deadline(is_creator)
+
+func _on_deadline(is_creator: bool) -> void:
+	if _deadline_fired or _busy:
+		return
+	_deadline_fired = true
+	if _tick:
+		_tick.stop()
+	if is_creator:
+		if _active_players().size() >= 2:
+			_timer_hint.text = "Starting…"
+			_do_start()             # everyone's listener flips to "playing"
+			return
+		# Nobody came — close the room rather than leave it listed.
+		_set_overlay(true, "Closing…")
+		await ContestManager.cancel_room(contest_id)
+		if not is_inside_tree():
+			return
+		_set_overlay(false)
+		_closed_reason = "Nobody joined in time.\nThe room has closed."
+		_render()
+		return
+	# Not the host, and the grace period passed without a start: leave. The last
+	# member out deletes the room (ContestManager.leave_contest).
+	_set_overlay(true, "Closing…")
+	await ContestManager.leave_contest(contest_id)
+	if not is_inside_tree():
+		return
+	_set_overlay(false)
+	_closed_reason = "The host didn't start in time.\nThe room has closed."
+	_render()
 
 # ---------------- actions ----------------
 

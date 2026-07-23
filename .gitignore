@@ -1,3 +1,8 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Firebase admin credentials (tools/purge_expired.js). Full-admin keys — never commit.
+serviceAccount*.json
+*-firebase-adminsdk-*.json
+node_modules/
