@@ -177,7 +177,7 @@ func _build_step1() -> void:
 	sf.shadow_color = Color(ArenaUI.GOLD.r, ArenaUI.GOLD.g, ArenaUI.GOLD.b, 0.25)
 	sf.shadow_size = 11
 	_name_edit.add_theme_stylebox_override("focus", sf)
-	_name_edit.text_submitted.connect(func(_t: String) -> void: _on_primary())
+	_name_edit.text_submitted.connect(_on_name_submitted)
 	_step1.add_child(_name_edit)
 
 	# Frame ornaments over the field: top-edge highlight, recessed inner shadow, and
@@ -665,6 +665,15 @@ func _show_step() -> void:
 	else:
 		if _name_edit:
 			_name_edit.release_focus()
+
+# Enter / "Done" on the name field advances to step 2 — it must NEVER create the
+# room directly. Android's soft keyboard can emit a second text_submitted as focus
+# is released during the step transition; without this guard that stray event would
+# arrive with _step already at the final step and call _on_create(), creating the
+# room before the player ever taps "Create Room".
+func _on_name_submitted(_t: String) -> void:
+	if _step == 0:
+		_on_primary()
 
 func _on_prev() -> void:
 	if _step > 0:

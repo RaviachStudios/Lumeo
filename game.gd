@@ -983,10 +983,23 @@ func _game_over() -> void:
 		var ctx := GameState.contest_context.duplicate()
 		GameState.contest_context = {}   # clear so a later normal game can't inherit it
 		var cid := String(ctx.get("id", ""))
-		# Race games still count toward engagement/score badges (they don't touch the
-		# solo global/daily leaderboards — the timed race is its own mode).
+		var rounds := level - 1
+		# Race games count toward engagement/score badges AND the solo leaderboards.
+		# A race is still a real Simon run at the room's difficulty, so its score
+		# updates the player's personal best and the daily / all-time boards exactly
+		# like a solo game — in addition to being recorded on the room itself.
 		BadgeManager.note_game_played(GameState.difficulty)
-		BadgeManager.note_score(GameState.difficulty, level - 1)
+		BadgeManager.note_score(GameState.difficulty, rounds)
+		# submit_score updates the in-memory best (and the guest file for signed-out
+		# players); the return flags a new personal best, which gates the all-time
+		# board write just as it does on the solo game-over screen.
+		var is_new_high := GameState.submit_score(rounds)
+		if FirebaseManager.is_signed_in() and FirebaseManager.has_display_name():
+			# Daily best can move on any run (a non-PB run can still be today's best),
+			# so submit unconditionally; the manager only writes if it beats today's row.
+			LeaderboardManager.submit_score_daily(GameState.difficulty, rounds)
+			if is_new_high:
+				LeaderboardManager.submit_score(GameState.difficulty, rounds)
 		await get_tree().create_timer(1.2).timeout
 		await ContestManager.submit_result(cid, level - 1)
 		if not is_inside_tree():
