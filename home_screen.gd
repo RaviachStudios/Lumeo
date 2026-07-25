@@ -168,14 +168,15 @@ func _ready() -> void:
 		# in editor) emission.
 		CoinsManager.daily_rank_reward_granted.connect(_on_daily_rank_reward)
 		# Opening the home screen is the heartbeat of the login-streak system AND
-		# the moment we collect the previous day's leaderboard-standing reward.
+		# the moment we surface the previous day's leaderboard-standing reward
+		# (already credited server-side; this just shows/clears the receipt).
 		# If the wallet hasn't finished loading yet, defer both until it has.
 		if CoinsManager.is_loaded():
 			CoinsManager.register_login()
-			CoinsManager.grant_daily_rewards_if_due()
+			CoinsManager.consume_pending_daily_rewards()
 		else:
 			CoinsManager.loaded.connect(CoinsManager.register_login, CONNECT_ONE_SHOT)
-			CoinsManager.loaded.connect(CoinsManager.grant_daily_rewards_if_due, CONNECT_ONE_SHOT)
+			CoinsManager.loaded.connect(CoinsManager.consume_pending_daily_rewards, CONNECT_ONE_SHOT)
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)

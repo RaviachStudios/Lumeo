@@ -157,6 +157,24 @@ service cloud.firestore {
           && request.resource.data.counts.size() <= 10001;
     }
 
+    // ---- Materialized top-N boards (server-written) -----------------------
+    // One doc per leaderboard family holds all three difficulties' top-N lists:
+    //   board_top/global -> { boards:{easy:[...],moderate:[...],hard:[...]}, updated_unix }
+    //   board_top/daily  -> { date, boards:{...}, updated_unix }
+    // Clients READ this so a whole family's top lists cost ONE read instead of
+    // 3x20. Unlike the boards/histogram/lobby (which are client-trusted because
+    // there's no server on those paths), this doc has a real writer: a scheduled
+    // Cloud Function (functions/index.js) using the Admin SDK, which bypasses
+    // these rules. So we can lock writes off for ALL clients — the materialized
+    // list is therefore un-forgeable, unlike a client-maintained aggregate would
+    // be. A tampered client can't inject fake podium entries here; the worst it
+    // can still do is skew its OWN per-uid row (guarded above) which the function
+    // re-derives the list from anyway.
+    match /board_top/{docId} {
+      allow read: if true;
+      allow write: if false;   // server-only (Admin SDK bypasses rules)
+    }
+
     // Private wallet doc: coin balance, owned/equipped theme, login streak
     // (streak_days + first_login_at), display name, last claim date.
     // Owner-only. Fields are validated only when present so partial (merge)
@@ -223,10 +241,36 @@ service cloud.firestore {
             || (request.resource.data.alltime_reward_bands is map
                 && request.resource.data.alltime_reward_bands.size() <= 8))
         // Most recent day whose daily-standing reward has been resolved (UTC
-        // YYYY-MM-DD). Same shape/bound as last_claim_date.
+        // YYYY-MM-DD). Now written by the midnight Cloud Function as its idempotency
+        // high-watermark (Admin SDK bypasses these rules); the shape is still
+        // validated so a client merge that carries the field forward stays legal.
         && (!('last_daily_reward_date' in request.resource.data)
             || (request.resource.data.last_daily_reward_date is string
-                && request.resource.data.last_daily_reward_date.size() <= 10));
+                && request.resource.data.last_daily_reward_date.size() <= 10))
+        // Server-written receipts for closed-day daily rewards, keyed by date:
+        // { "YYYY-MM-DD": {total, results, date} }. The Cloud Function writes them
+        // (and credits the coins); the client only ever CLEARS consumed keys (writes
+        // back an empty / smaller map), which has no economic effect on its own —
+        // the coins live in the separate `coins` field. Bounded so it can't bloat.
+        && (!('pending_daily_rewards' in request.resource.data)
+            || (request.resource.data.pending_daily_rewards is map
+                && request.resource.data.pending_daily_rewards.size() <= 60))
+        // Arena "one room at a time" pointer: the CID of the room this player is
+        // currently seated in, or "" when in none. A 6-char room ID (ID_LEN) at
+        // most; validated only when present so other merge writes needn't set it.
+        && (!('current_room' in request.resource.data)
+            || (request.resource.data.current_room is string
+                && request.resource.data.current_room.size() <= 6))
+        // Display cache for the seated room, so the Arena hub paints its "return to
+        // your room" card instantly (no network read). The room's NAME (<= TITLE_MAX,
+        // with slack) and whether we host it. Both purely cosmetic — the authoritative
+        // room read still governs everything — so they're trusted like the rest of the
+        // wallet and validated only for shape when present.
+        && (!('current_room_title' in request.resource.data)
+            || (request.resource.data.current_room_title is string
+                && request.resource.data.current_room_title.size() <= 32))
+        && (!('current_room_host' in request.resource.data)
+            || request.resource.data.current_room_host is bool);
     }
 
     // ---- Arena rooms -------------------------------------------------------
@@ -345,6 +389,32 @@ service cloud.firestore {
         && request.resource.data.rooms is map
         && request.resource.data.rooms.size() <= 20;
       allow delete: if false;
+    }
+
+    // ---- Arena materialized room state (server-written) --------------------
+    // A coalesced, read-only mirror of contests/{cid} that UPDATED clients watch
+    // instead of the raw room doc — so a burst of joins/scores no longer wakes
+    // every member on every write. Written ONLY by the syncContest Cloud Function
+    // (Admin SDK bypasses these rules); locked off for all clients, so — like
+    // board_top — the standings it carries can't be forged. A missing doc (before
+    // the function has run, or right after a room is created) just means the
+    // client falls back to reading contests/{cid} directly.
+    match /contest_state/{cid} {
+      allow read: if true;
+      allow write: if false;   // server-only (Admin SDK bypasses rules)
+    }
+
+    // ---- Arena public-lobby index (server-written, single doc) -------------
+    // The entire open-public-room list in ONE doc (lobby_index/open), maintained
+    // by syncContest. Updated clients READ it once per Refresh (one read for the
+    // whole list) instead of holding 5 live shard listeners that take a push per
+    // room event. Server-only, so the list is un-forgeable; clients still filter
+    // liveness by now < o + START_WINDOW and the scheduled sweep prunes dead
+    // entries. (The legacy lobby/s{N} shards above stay for not-yet-updated
+    // clients.)
+    match /lobby_index/{docId} {
+      allow read: if true;
+      allow write: if false;   // server-only (Admin SDK bypasses rules)
     }
   }
 }

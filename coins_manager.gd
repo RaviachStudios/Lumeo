@@ -541,60 +541,45 @@ func maybe_reward_alltime(diff: String, rank: int) -> int:
 	})
 	return reward
 
-# On first login of the day, pay the daily-standing reward for the most recent
-# uncollected day(s) the player placed in. Bounded to the retention window; in
-# normal play this resolves exactly one day (you cannot stack rewards — playing a
-# day requires opening the app that day, which already collects the day before).
-# The scan exists for DELAYED collection (returning a day or two later) and as a
-# safety net for a dropped write. Idempotent within a day via
-# `last_daily_reward_date`, which is stamped in the SAME merge write as the coins.
-func grant_daily_rewards_if_due() -> void:
+# The daily-standing reward is now computed and CREDITED server-side by the
+# midnight Cloud Function (functions/index.js -> closeDailyBoards): it increments
+# the wallet's coins/earned_coins and writes a receipt into pending_daily_rewards
+# on /users/{uid}, keyed by the closed day's date. The client no longer reads the
+# leaderboards or credits coins for this — it just surfaces the receipt popup for
+# any day(s) not yet shown and clears them. The coins are already reflected in
+# `balance` (loaded from the doc on sign-in), so this ONLY shows the celebratory
+# receipt; it never changes the balance.
+#
+# pending_daily_rewards shape (server-written):
+#   { "YYYY-MM-DD": { total:int, results:[{diff,rank,reward}], date:String }, ... }
+func consume_pending_daily_rewards() -> void:
 	if not is_loaded():
 		return
-	var yesterday_idx := _today_day_index() - 1
-	if yesterday_idx < 0:
+	var pending: Variant = raw_user_doc.get("pending_daily_rewards", {})
+	if not (pending is Dictionary) or (pending as Dictionary).is_empty():
 		return
-	# Fresh / migrating wallet: start the cycle from yesterday with no retroactive
-	# pay (there are no pre-existing date-partitioned rows to reward anyway).
-	if last_daily_reward_date.is_empty():
-		last_daily_reward_date = _date_str_from_day_index(yesterday_idx)
-		_save_partial({"last_daily_reward_date": last_daily_reward_date})
-		return
-	var last_idx := _day_index_from_date(last_daily_reward_date)
-	if last_idx >= yesterday_idx:
-		return                                       # already resolved through yesterday
-	var start_idx: int = maxi(last_idx + 1, yesterday_idx - (DAILY_RANK_WINDOW_DAYS - 1))
-	var total := 0
-	var results: Array = []
-	var di := start_idx
-	while di <= yesterday_idx:
-		var date_str := _date_str_from_day_index(di)
-		for diff in ["easy", "moderate", "hard"]:
-			# Explicit type: 4.6 won't infer a `:=` through `await` across an autoload.
-			var rank: int = await LeaderboardManager.my_daily_rank_for(diff, date_str)
-			if rank < 0:
-				# A read failed — abort the WHOLE pass without stamping or paying,
-				# so nothing is lost and the next login retries cleanly.
-				return
-			var reward := daily_reward_for_rank(rank)
-			if reward > 0:
-				total += reward
-				results.append({"diff": diff, "rank": rank, "reward": reward})
-		di += 1
-	# Guard against a concurrent sign-out mid-await (wallet no longer loaded).
-	if not is_loaded():
-		return
-	last_daily_reward_date = _date_str_from_day_index(yesterday_idx)
-	var fields := {"last_daily_reward_date": last_daily_reward_date}
-	if total > 0:
-		balance += total
-		earned_coins += total
-		fields["coins"] = balance
-		fields["earned_coins"] = earned_coins
-		balance_changed.emit(balance)
-	_save_partial(fields)
-	if total > 0:
-		daily_rank_reward_granted.emit(total, results)
+	# Merge every not-yet-shown day into one receipt (normally exactly one; more
+	# only if the player was away several days). Chronological by date key.
+	var dates: Array = (pending as Dictionary).keys()
+	dates.sort()
+	var grand_total := 0
+	var all_results: Array = []
+	for date_str in dates:
+		var entry: Variant = (pending as Dictionary)[date_str]
+		if entry is Dictionary:
+			grand_total += int((entry as Dictionary).get("total", 0))
+			var rs: Variant = (entry as Dictionary).get("results", [])
+			if rs is Array:
+				for r in rs:
+					all_results.append(r)
+	# Clear the receipt so it never shows twice. We consumed every current key, so
+	# write an empty map. (A key the server might add in the very same instant would
+	# be lost here, but the coins are already banked — only the popup would be
+	# missed, an acceptable once-a-day-at-most race.)
+	raw_user_doc["pending_daily_rewards"] = {}
+	_save_partial({"pending_daily_rewards": {}})
+	if grand_total > 0:
+		daily_rank_reward_granted.emit(grand_total, all_results)
 
 # --- real-money coin purchases ---
 

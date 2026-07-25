@@ -824,6 +824,7 @@ func _on_create() -> void:
 		return
 	match String(res.get("error", "")):
 		"auth":         _msg.text = "Sign in and pick a name first."
+		"in_room":      _msg.text = "You already have a room open."
 		"id_collision": _msg.text = "Couldn't allocate an ID. Try again."
 		_:              _msg.text = "Couldn't create the room. Try again."
 

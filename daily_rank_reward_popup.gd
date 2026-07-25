@@ -1,10 +1,11 @@
 extends Control
 
 # Modal shown on login when the previous day's daily-leaderboard standing reward
-# is granted (see CoinsManager.grant_daily_rewards_if_due). The coins are ALREADY
-# banked by the time this opens — this popup is purely the celebratory receipt,
-# so its button just closes. Self-built (no scene, no PNGs), overlaid on the home
-# screen, mirroring daily_claim_popup.gd's construction.
+# is surfaced (see CoinsManager.consume_pending_daily_rewards). The coins are
+# ALREADY banked server-side (the midnight Cloud Function credited them) by the
+# time this opens — this popup is purely the celebratory receipt, so its button
+# just closes. Self-built (no scene, no PNGs), overlaid on the home screen,
+# mirroring daily_claim_popup.gd's construction.
 #
 # Inputs (set by the caller before add_child):
 #   total   : int    summed coins granted

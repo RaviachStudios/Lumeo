@@ -51,10 +51,23 @@ var _deadline_fired := false     # guard: the deadline resolves exactly once
 # falling through to the generic "no longer exists".
 var _closed_reason := ""
 
+# Race-phase straggler countdown (results board): a 1s tick updates the "auto-finish"
+# clock and, past the grace deadline, force-finalizes so a no-show can't freeze the
+# room. Separate from _tick (which is the lobby start-countdown).
+var _results_tick: Timer
+var _grace_deadline := 0         # unix sec the room may be force-finished at (0 = n/a)
+var _grace_note: Label           # the countdown label on the results board
+
+# Keepalive: while this screen is open on a live (unfinished) room, push its expiry
+# horizon out so the 20-min sweep doesn't reap a quiet-but-active room out from under
+# us (see ContestManager.TTL_SECS). Must be comfortably under TTL_SECS.
+const KEEPALIVE_SECS := 5 * 60
+var _keepalive: Timer
+
 var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
 var _busy := false
 var _launched := false           # guard: only auto-launch my match once
-var _finalize_sent := false      # guard: only nudge the all-done finalize once
+var _finalize_sent := false      # guard: only nudge the all-done / overdue finalize once
 var _seen_uids := {}             # roster uids already animated in (slide-in only for newcomers)
 var _host_popped := false        # host badge "pop" plays once, not on every re-render
 
@@ -90,7 +103,35 @@ func _ready() -> void:
 	_build_toast()
 	_layout_static()
 	get_viewport().size_changed.connect(_on_resize)
+	# Heartbeat the room's expiry while we sit on it (keeps a quiet lobby / long game
+	# from being reaped by the 20-min sweep). The handler is a no-op once finished/gone.
+	_keepalive = Timer.new()
+	_keepalive.wait_time = KEEPALIVE_SECS
+	_keepalive.timeout.connect(_on_keepalive)
+	add_child(_keepalive)
+	_keepalive.start()
 	_initial_load()
+
+# Push the room's expiry horizon out so a quiet-but-open room isn't swept. Only when
+# we're an ACTIVE member of a live (unfinished) room: never resurrect a deleted doc,
+# and don't let a kicked/left viewer keep the room alive.
+func _on_keepalive() -> void:
+	# Don't issue a background write on top of an in-flight user action (start / leave /
+	# finish) — keep writes on this screen serialized. We'll catch up next tick.
+	if _busy or _room.is_empty() or not _closed_reason.is_empty():
+		return
+	var status := String(_room.get("status", ""))
+	if status != "lobby" and status != "playing":
+		return
+	var my: Dictionary = (_room.get("players", {}) as Dictionary).get(FirebaseManager.uid, {})
+	if my.is_empty() or String(my.get("state", "")) == "left":
+		return
+	# Host-only keepalive: one heartbeat per room instead of one per member (which
+	# fanned out ~member_count reads every cycle). A guest-only room has no host to
+	# keep it alive, but that room has nothing to start — it's swept as intended.
+	if String(_room.get("creator_uid", "")) != FirebaseManager.uid:
+		return
+	ContestManager.touch_room(contest_id)
 
 func _exit_tree() -> void:
 	if ContestManager.room_changed.is_connected(_on_room_changed):
@@ -161,6 +202,9 @@ func _render() -> void:
 		_corner_btn.queue_free()
 		_corner_btn = null
 	_clear_timer_chip()
+	# _grace_note lives in _content (just freed) and the tick pauses between renders;
+	# _render_results restarts it if the room is still awaiting stragglers.
+	_stop_results_tick()
 	if not _closed_reason.is_empty():
 		_render_message(_closed_reason, "Back to Arena",
 			func() -> void: game_manager.show_arena())
@@ -518,6 +562,19 @@ func _render_results() -> void:
 	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(note)
 
+	# Straggler timeout: once someone has finished, the rest get FINISH_GRACE to post a
+	# score, after which any client force-finalizes (so a no-show / force-closed player
+	# can't freeze the board). The note becomes a live countdown; a 1s tick drives it
+	# and fires finalize at 0. When nobody's finished yet there's no one waiting, so we
+	# leave the plain "waiting" note and no timer.
+	_grace_deadline = ContestManager.play_grace_deadline(_room)
+	if not racing.is_empty() and _grace_deadline > 0:
+		_grace_note = note
+		_ensure_results_tick()
+		_update_grace_note()
+	else:
+		_stop_results_tick()
+
 	# One combined table: finished first (with score + rank), then still-racing.
 	var ordered: Array = done.duplicate()
 	ordered.append_array(racing)
@@ -561,6 +618,45 @@ func _render_results() -> void:
 		endnow.position = Vector2(cx - 90, h - 52 - 20)
 		endnow.pressed.connect(_on_finish_now)
 		_content.add_child(endnow)
+
+# ---- results-board straggler countdown ----
+
+func _ensure_results_tick() -> void:
+	if _results_tick == null:
+		_results_tick = Timer.new()
+		_results_tick.wait_time = 1.0
+		_results_tick.timeout.connect(_on_results_tick)
+		add_child(_results_tick)
+	_results_tick.start()
+
+func _stop_results_tick() -> void:
+	if _results_tick:
+		_results_tick.stop()
+	_grace_note = null
+
+# Once a second while finishers wait on a straggler: update the countdown, and at 0
+# force-finalize the room (any participant may — see ContestManager.finalize_overdue).
+func _on_results_tick() -> void:
+	if _room.is_empty() or String(_room.get("status", "")) != "playing":
+		_stop_results_tick()
+		return
+	_update_grace_note()
+	if _grace_deadline > 0 and int(Time.get_unix_time_from_system()) >= _grace_deadline \
+			and not _finalize_sent:
+		_finalize_sent = true
+		ContestManager.finalize_overdue(contest_id)
+
+func _update_grace_note() -> void:
+	if _grace_note == null or _grace_deadline <= 0:
+		return
+	var left: int = _grace_deadline - int(Time.get_unix_time_from_system())
+	if left <= 0:
+		_grace_note.text = "Finishing the contest…"
+		_grace_note.add_theme_color_override("font_color", Color(0.97, 0.55, 0.42))
+	else:
+		_grace_note.text = "Auto-finishing in %d:%02d if others don't finish" % [left / 60, left % 60]
+		var col := Color(1.00, 0.75, 0.35) if left <= 30 else ArenaUI.MUTED
+		_grace_note.add_theme_color_override("font_color", col)
 
 # A results-board row: rank circle (or "•" while racing), name, and score or a
 # "Racing…" tag.

@@ -6,3 +6,9 @@
 serviceAccount*.json
 *-firebase-adminsdk-*.json
 node_modules/
+
+# Build artifacts (too large for GitHub; keep local only)
+Simon.apk
+Simon.aab
+*.apk
+*.aab

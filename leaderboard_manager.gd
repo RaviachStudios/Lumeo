@@ -57,34 +57,46 @@ const _FB_PROJECT_DOCS := "projects/simon-6bc39/databases/(default)/documents"
 # writes spread across HIST_SHARDS docs; the true count for a score is the SUM of
 # that score's field across all shards. Reads batch-get all shards in one request.
 # HIST_SHARDS is a small constant, so rank stays a fixed read cost. Raising it
-# later is backward-compatible: new shards simply start empty at 0.
+# later is backward-compatible: new shards simply start empty at 0 (bump the client
+# const first — reads must always cover every shard a writer might use — then, for
+# daily, the matching HIST_SHARDS in functions/index.js). LOWERING it is NOT free:
+# counts in dropped shards go unread, so re-run the histogram rebuild afterwards.
 #
-# Maintenance is via Firestore's atomic `increment` field-transform over the REST
-# :commit endpoint (the Android plugin can't do atomic increments). Increments are
-# applied server-side, so concurrent submits never clobber even without a
-# transaction. On a new best, the client does +1 at the new score and -1 at the
-# old score (in ONE commit to ONE shard). Only the all-time boards are
-# histogrammed — daily boards are naturally bounded to one day's players, so their
-# aggregation never scales.
+# Maintenance differs per family:
+#  * ALL-TIME (global_{diff}): maintained by the CLIENT via Firestore's atomic
+#    `increment` field-transform over REST :commit (the Android plugin can't do
+#    atomic increments). On a new best the client does +1 at the new score and -1
+#    at the old, in ONE commit to ONE random shard. (Kept client-side because the
+#    shipped app already does this — moving it to the trigger would double-count
+#    until old apps age out.)
+#  * DAILY (daily_{diff}): maintained SERVER-SIDE by the syncDaily_* Cloud Function
+#    trigger, which fires on every daily row write (any client version). The board
+#    is PER-DAY — "daily_{diff}_{date}" — since a daily rank is only among that
+#    day's players; the midnight closeDailyBoards job deletes each closed day's
+#    histogram shards. This client only READS the daily histogram (never writes it).
 #
 # Trust: the histogram doc is world-writable (there's no native-auth token on the
 # REST path), so a bad client can skew rank NUMBERS — but not the podium, which
 # still derives from the auth-guarded per-uid rows. Same client-trusted posture as
 # the boards themselves. Drift (a crash between the -1/+1, or a deleted account) is
 # self-healing: rebuild_histograms() recomputes every shard from the rows.
-const HIST_SHARDS := 10
+# 3 shards sustain ~3 concurrent new-highs/sec — plenty until the game is much
+# bigger — and keep a rank lookup at 3 reads. Raise later if a day genuinely sees
+# thousands of simultaneous high scores (see the "Raising it" note above).
+const HIST_SHARDS := 3
 const _HIST_COLL := "board_hist"
-# The all-time boards that carry a histogram (daily boards intentionally don't).
+# The all-time boards the CLIENT rebuild path re-tallies. Daily histograms are
+# per-day and rebuilt server-side (functions/index.js rebuildHistogramsNow).
 const _HIST_BOARDS: Array[String] = ["global_easy", "global_moderate", "global_hard"]
 
-# Daily rows are now HISTORICAL: keyed by `{date}__{uid}` (not `{uid}`), so a
-# later replay never overwrites a prior day's row, and each closed day's board
-# survives for the leaderboard-reward collection to read it back. We retain a
-# rolling window of days, then sweep it (see sweep_expired_daily — a Firestore
-# TTL policy does NOT work here). The window doubles as "how long a
-# player has to return and still collect a day's reward" (see CoinsManager's
-# grant_daily_rewards_if_due). The screen's `date == today` filter keeps the
-# extra history from ever showing on the live board.
+# Daily rows are keyed by `{date}__{uid}` (not `{uid}`), so a later replay never
+# overwrites a prior day's row. Closed-day boards are now consumed SERVER-SIDE:
+# the midnight Cloud Function (functions/index.js -> closeDailyBoards) reads
+# yesterday's top 50, credits placement rewards, then deletes yesterday's rows —
+# so the old "retain N days until the player returns to collect" reason is gone
+# (rewards are pushed to /users, not pulled from these rows). The retention window
+# + client sweep below remain only as a harmless backstop if the server job ever
+# lags. The screen's `date == today` filter keeps history off the live board.
 const _DAILY_RETENTION_DAYS := 14
 # Buffer added past the retention window before writing the expiry, so a sweep
 # never races a player active right at the day flip. 6h is plenty of slack.
@@ -619,6 +631,46 @@ func _next_midnight_utc(now_unix: int) -> int:
 func _ts_value(unix_seconds: int) -> Dictionary:
 	return {"timestampValue": Time.get_datetime_string_from_unix_time(unix_seconds) + "Z"}
 
+# ---- materialized top-N boards (board_top, server-written) -----------------
+# The top-N list is 100% of the fixed board read cost (3 diffs x 20 rows per
+# family). A scheduled Cloud Function (functions/index.js) recomputes each
+# family's three top-N lists every few minutes and writes them into ONE doc per
+# family:
+#   board_top/global -> { boards:{ easy:[{uid,name,score}...], moderate:[...],
+#                                   hard:[...] }, updated_unix }
+#   board_top/daily  -> { date:"YYYY-MM-DD", boards:{...}, updated_unix }
+# So a whole family's top lists cost ONE read here instead of 3x20. board_top is
+# READ-ONLY for clients in firestore.rules — only the trusted function (Admin
+# SDK, which bypasses rules) writes it — so the visible lists can't be forged.
+#
+# Graceful degradation: if the doc is missing/unreadable (function not deployed
+# yet, or a brand-new board) each board transparently falls back to its own
+# live top-N query, so behaviour is identical to before the materialization.
+const _BOARD_TOP_COLL := "board_top"
+
+# "global" for the all-time family, "daily" for the daily family.
+func _family_doc_for(prefix: String) -> String:
+	return "daily" if prefix.begins_with("daily") else "global"
+
+# Reads a family's materialized top-N doc and returns { diff: Array<{uid,name,
+# score}> }, or {} when it's unavailable / stale (caller then falls back to live
+# top-N queries). For daily we require the doc's `date` to match today's — a doc
+# left over from before the day flipped is stale and must not paint yesterday's
+# board.
+func _fetch_family_tops(prefix: String, extra_eq: Dictionary) -> Dictionary:
+	if _is_editor:
+		return {}
+	var res := await _rest_get(_BOARD_TOP_COLL, _family_doc_for(prefix))
+	if not bool(res.get("exists", false)):
+		return {}
+	var data: Dictionary = res.get("data", {})
+	if extra_eq.has("date") and String(data.get("date", "")) != String(extra_eq["date"]):
+		return {}
+	var boards: Variant = data.get("boards", {})
+	if not (boards is Dictionary):
+		return {}
+	return boards as Dictionary
+
 # ---- public API: all-time ----
 
 # Reads the signed-in user's stored all-time score for one difficulty. Returns
@@ -766,7 +818,8 @@ func _my_daily_rank_for_sim(difficulty: String, date_str: String) -> int:
 # the top 20). Returns the same shape as the daily loader so the screen treats
 # them interchangeably.
 func load_global(difficulty: String) -> Dictionary:
-	var res := await _load_board("global_" + difficulty, {})
+	var tops := await _fetch_family_tops("global_", {})
+	var res := await _load_board("global_" + difficulty, {}, tops.get(difficulty, null))
 	if bool(res.get("ok", false)):
 		_cache_rank(difficulty, int(res.get("my_rank", 0)))
 	return res
@@ -774,7 +827,9 @@ func load_global(difficulty: String) -> Dictionary:
 # Loads one daily board (filtered to today's date) with the same shape as
 # load_global.
 func load_daily(difficulty: String) -> Dictionary:
-	return await _load_board("daily_" + difficulty, {"date": _today_utc()})
+	var today := _today_utc()
+	var tops := await _fetch_family_tops("daily_", {"date": today})
+	return await _load_board("daily_" + difficulty, {"date": today}, tops.get(difficulty, null))
 
 # Emitted by a worker each time one board finishes, so _load_all can wait for the
 # whole batch without awaiting the boards one-at-a-time.
@@ -899,10 +954,15 @@ func is_warming() -> bool:
 # batch via the _board_loaded signal. Cuts the screen-open wait from ~6 serial
 # round-trips to ~1.
 func _load_all(prefix: String, extra_eq: Dictionary) -> Dictionary:
+	# One read of the family's materialized top-N doc supplies all three boards'
+	# top lists; each board then only pays for its own my-row/neighborhood, and
+	# only when the player sits outside the top. A missing doc leaves tops == {}
+	# so each board falls back to its own live top-N query (old behaviour).
+	var tops := await _fetch_family_tops(prefix, extra_eq)
 	var out := {}
 	var pending := {"left": DIFFS.size()}
 	for diff in DIFFS:
-		_load_board_into(prefix + diff, extra_eq, diff, out, pending)
+		_load_board_into(prefix + diff, extra_eq, diff, out, pending, tops.get(diff, null))
 	while pending["left"] > 0:
 		await _board_loaded
 	var ok := true
@@ -914,8 +974,8 @@ func _load_all(prefix: String, extra_eq: Dictionary) -> Dictionary:
 # Worker: loads one board into `out[key]`, then decrements the batch counter and
 # signals completion. Called WITHOUT await so the boards run in parallel.
 func _load_board_into(collection: String, extra_eq: Dictionary, key: String,
-		out: Dictionary, pending: Dictionary) -> void:
-	var res := await _load_board(collection, extra_eq)
+		out: Dictionary, pending: Dictionary, top_rows: Variant = null) -> void:
+	var res := await _load_board(collection, extra_eq, top_rows)
 	out[key] = res
 	# Warm the rank cache off the all-time boards the leaderboards screen loads,
 	# so a later profile open shows the rank without waiting on the network.
@@ -933,31 +993,42 @@ func _load_board_into(collection: String, extra_eq: Dictionary, key: String,
 #
 # `extra_eq` is an optional {field: stringValue} equality filter applied to
 # every query, used for the daily collections to scope to today's date.
-func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
+func _load_board(collection: String, extra_eq: Dictionary, top_rows: Variant = null) -> Dictionary:
 	if _is_editor:
 		return _load_board_sim(collection, extra_eq)
 
-	# 1) Top N — server-ordered, real top regardless of total board size.
-	var top := await _rest_run_query(_build_top_query(collection, extra_eq, GLOBAL_TOP_N))
-	if not bool(top.get("ok", false)):
-		return {"ok": false, "rows": [], "my_row": {}, "my_rank": 0, "neighborhood": []}
-
-	var rows: Array = []
 	var my_uid := _uid()
 	# For daily boards a row's doc id is `{date}__{uid}`, so my own row lives at
 	# that composite id, not at `{uid}`. All-time boards read at `{uid}`.
 	var my_doc_id := my_uid
 	if extra_eq.has("date"):
 		my_doc_id = _daily_doc_id(String(extra_eq["date"]), my_uid)
+
+	# 1) Top N rows. Prefer the pre-fetched materialized list (from board_top —
+	# one read for the whole family); when it's absent fall back to a per-board
+	# server-ordered top-N query, the real top regardless of board size.
+	var rows: Array = []
+	if top_rows == null:
+		var top := await _rest_run_query(_build_top_query(collection, extra_eq, GLOBAL_TOP_N))
+		if not bool(top.get("ok", false)):
+			return {"ok": false, "rows": [], "my_row": {}, "my_rank": 0, "neighborhood": []}
+		for doc in top.get("items", []):
+			var d: Dictionary = doc.get("data", {})
+			rows.append({"uid": _doc_uid(doc), "name": d.get("name", "Player"),
+				"score": int(d.get("score", 0))})
+	else:
+		for r in (top_rows as Array):
+			var rr: Dictionary = r
+			rows.append({"uid": String(rr.get("uid", "")), "name": rr.get("name", "Player"),
+				"score": int(rr.get("score", 0))})
+
+	# Tag each top row with whether it belongs to the signed-in player.
 	var found_me_in_top := false
-	for doc in top.get("items", []):
-		var d: Dictionary = doc.get("data", {})
-		var uid := _doc_uid(doc)
-		var is_me := uid == my_uid
+	for r in rows:
+		var is_me: bool = String(r["uid"]) == my_uid
+		r["is_me"] = is_me
 		if is_me:
 			found_me_in_top = true
-		rows.append({"uid": uid, "name": d.get("name", "Player"),
-			"score": int(d.get("score", 0)), "is_me": is_me})
 
 	# 2) My row (if signed in). We always look it up so the screen can show
 	# "your best today: N" even when the player has zero leaderboard standing.
@@ -1020,11 +1091,19 @@ func _load_board(collection: String, extra_eq: Dictionary) -> Dictionary:
 # histogram read hard-fails. Daily boards use the aggregation directly (one day's
 # field is naturally bounded, so it never scales).
 func _rank_above(collection: String, extra_eq: Dictionary, my_score: int) -> int:
+	# Both families carry a fixed-cost histogram. All-time board is "global_{diff}";
+	# the daily one is PER-DAY, board "daily_{diff}_{date}" (server-maintained by the
+	# syncDaily_* trigger). A hard read failure / unseeded histogram (-1) falls back
+	# to the exact count() aggregation, so ranks are always correct, just costlier.
+	var hist_board := ""
 	if collection.begins_with("global_"):
-		var r := await _hist_rank(collection, my_score)
+		hist_board = collection
+	elif collection.begins_with("daily_") and extra_eq.has("date"):
+		hist_board = collection + "_" + String(extra_eq["date"])
+	if not hist_board.is_empty():
+		var r := await _hist_rank(hist_board, my_score)
 		if r > 0:
 			return r
-		# Histogram unreachable/unseeded — fall back to the exact aggregation.
 	var agg := await _rest_run_aggregation(
 		_build_score_compare_query(collection, extra_eq, ">", my_score, ""),
 		"above_count")

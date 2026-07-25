@@ -34,6 +34,17 @@ var _subtitle: Label
 var _create_btn: Button
 var _join_btn: Button
 
+# When this client is already seated in a live room, BOTH entrances are replaced by
+# a single centered "return to your room" card showing the room's ID — you can only
+# be in one room at a time, so there's nothing to create or join. `_return_cid` holds
+# that room's ID (empty when there's no such room); `_room_btn` is the single card.
+var _return_cid := ""
+var _room_btn: Button
+# Signature of the room card currently drawn ("cid:host:label"), so the async
+# validation can skip a redundant rebuild (and its icon bake) when it confirms exactly
+# what the cache already painted — the common case for a seated player.
+var _room_card_sig := ""
+
 var _toast: Label
 
 # Create-contest popup (name + difficulty + visibility, all on one modal).
@@ -62,7 +73,8 @@ var _lobby_count: Label
 var _lobby_prev: Button
 var _lobby_next: Button
 var _lobby_page_lbl: Label
-var _lobby_tick: Timer          # 1s: refreshes the countdown pills / retires dead rows
+var _lobby_refresh: Button      # re-reads the CF-maintained index (1 read per press)
+var _lobby_tick: Timer          # 1s: local countdown pills / retires dead rows (no reads)
 var _lobby_rows: Array = []
 var _lobby_page := 0
 var _lobby_busy := false
@@ -117,6 +129,19 @@ func _ready() -> void:
 	_layout()
 	get_viewport().size_changed.connect(_layout)
 
+	# If we're already in a live room (e.g. the host backed out of their own lobby, or
+	# force-quit mid-game and relaunched), reflect it as the single "return to your room"
+	# card instead of the CREATE / JOIN entrances. Paint it FIRST off the synchronous
+	# cache (ContestManager restored the room's id/title/host from the user doc at
+	# startup) so there's no CREATE/JOIN flash before the network confirms. Then validate
+	# async: active_room() reads the room to confirm/refresh it, or — if the pointer is
+	# stale (room deleted, we were kicked, or the race finished) — self-heals and we fall
+	# back to the two entrances.
+	if ContestManager.has_cached_room():
+		_show_room_card(ContestManager.cached_room_id(),
+			ContestManager.cached_room_title(), ContestManager.cached_room_is_host())
+	_refresh_active_room()
+
 # ---------------- layout ----------------
 
 func _layout() -> void:
@@ -136,8 +161,15 @@ func _layout() -> void:
 	# The crown (Create) and door (Join) now stand directly on the enlarged
 	# podium, evenly spaced either side of the championship shield — no
 	# separate menu row below it anymore. Card footprint is derived from the
-	# (scaled) icon + pedestal so the 3x choices are never clipped.
-	if _create_btn:
+	# (scaled) icon + pedestal so the 3x choices are never clipped. When the player
+	# is already in a room, a SINGLE card (the room ID) takes the shield's spot
+	# instead — see _refresh_active_room.
+	if _room_btn:
+		var ps: Vector2 = _room_btn.get_meta("plaque_size")
+		var crest: float = _room_btn.get_meta("crest")
+		ArenaUI.layout_action_card(_room_btn, ArenaFX.side_slot_pos(sz, 0.0),
+			Vector2(ps.x + 60.0, ps.y + crest + 90.0))
+	elif _create_btn:
 		var ps: Vector2 = _create_btn.get_meta("plaque_size")
 		var crest: float = _create_btn.get_meta("crest")
 		var cw := ps.x + 60.0
@@ -166,6 +198,79 @@ func _on_join() -> void:
 		_build_choice_modal()
 	_collapse_private()
 	_choice_modal.visible = true
+
+# ---------------- active-room reflection ----------------
+
+# A player can be in at most one Arena room at a time. When we already hold one, the
+# two CREATE / JOIN entrances are replaced by a SINGLE centered card engraved with the
+# room's NAME: tapping it drops straight back into that lobby. There's nothing to
+# create or join while you're seated, so the one card is the whole hub.
+#
+# This is the async VALIDATOR: active_room() reads the room (self-healing/persisting a
+# stale pointer) and reconciles the hub to the truth — confirming the card the cache
+# already painted, or reverting to the entrances if the pointer was stale. The instant
+# paint happens separately in _ready off the synchronous cache; this corrects it.
+func _refresh_active_room() -> void:
+	var room: Dictionary = await ContestManager.active_room()
+	if not is_inside_tree():
+		return
+	var cid := String(room.get("id", ""))
+	if cid.is_empty():
+		# No live room — either we never had one, or the cached pointer we optimistically
+		# painted from turned out stale and active_room() just self-healed it. Either way
+		# the two entrances are the correct state; revert to them if a room card is up.
+		if not _return_cid.is_empty():
+			_show_entrances()
+		return
+	# Live room confirmed — (re)paint the return card with the authoritative title/host.
+	_show_room_card(cid, String(room.get("title", "Contest")),
+		String(room.get("creator_uid", "")) == FirebaseManager.uid)
+
+# Paints the hub for "seated in a room": folds away both entrances and shows the
+# single centered return card, engraved with the room's NAME. Host reads as the gold
+# crown (your room), a guest as the blue door (a room you entered). Rebuilds the card
+# if one is already up (so the async validation can refresh a cache-painted label).
+func _show_room_card(cid: String, title: String, is_host: bool) -> void:
+	_return_cid = cid
+	if _create_btn:
+		_create_btn.visible = false
+	if _join_btn:
+		_join_btn.visible = false
+	var label := title if not title.is_empty() else "Your room"
+	# Already showing exactly this card? Leave it (skips a needless icon rebuild/bake).
+	var sig := "%s:%s:%s" % [cid, is_host, label]
+	if _room_btn != null and sig == _room_card_sig:
+		return
+	_room_card_sig = sig
+	if _room_btn:
+		_room_btn.queue_free()
+		_room_btn = null
+	var accent: Color = ArenaUI.ACCENT if is_host else ArenaUI.JOIN_BLUE
+	var glow: Color = ArenaUI.TORCH if is_host else ArenaUI.JOIN_CYAN
+	var crest := "crown" if is_host else "door"
+	_room_btn = ArenaUI.action_card(label, "", crest, accent, true, glow, ACTION_SCALE)
+	_room_btn.pressed.connect(func() -> void: game_manager.show_contest_detail(cid))
+	add_child(_room_btn)
+
+	# The ID lives on the subtitle now (still shareable) alongside the "tap to return".
+	_subtitle.text = ("Your room · ID %s — tap to jump back in" % cid) if is_host \
+		else ("You're in room · ID %s — tap to jump back in" % cid)
+	_layout()
+
+# Paints the hub for "not in a room": the two CREATE / JOIN entrances, no return card.
+# Used when the cache-painted card is validated away as stale.
+func _show_entrances() -> void:
+	_return_cid = ""
+	_room_card_sig = ""
+	if _room_btn:
+		_room_btn.queue_free()
+		_room_btn = null
+	if _create_btn:
+		_create_btn.visible = true
+	if _join_btn:
+		_join_btn.visible = true
+	_subtitle.text = "Race friends in a live Simon showdown"
+	_layout()
 
 # ---------------- create-contest popup ----------------
 
@@ -202,12 +307,15 @@ func _close_create_modal() -> void:
 		_fx.resume()
 	_set_action_cards_visible(true)
 
-# Show/hide the two primary entrances (Create / Join) behind the create popup.
+# Show/hide the two primary entrances (Create / Join) behind the create popup. When
+# the player is in a room the entrances are permanently folded away (the single room
+# card stands in their place), so never re-reveal them here.
 func _set_action_cards_visible(on: bool) -> void:
+	var show := on and _room_btn == null
 	if _create_btn:
-		_create_btn.visible = on
+		_create_btn.visible = show
 	if _join_btn:
-		_join_btn.visible = on
+		_join_btn.visible = show
 
 const CREATE_MODAL_W := 440.0
 const CREATE_MODAL_H := 452.0
@@ -264,7 +372,13 @@ func _build_create_modal() -> void:
 	var ff := fs.duplicate() as StyleBoxFlat
 	ff.border_color = ArenaUI.GOLD.lightened(0.16)
 	_cname_edit.add_theme_stylebox_override("focus", ff)
-	_cname_edit.text_submitted.connect(func(_t: String) -> void: _do_create())
+	# Enter / "Done" on the name field must NEVER create the room directly — it only
+	# dismisses the keyboard. Android's soft keyboard emits text_submitted whenever it's
+	# closed (e.g. tapping the 🎲 dice or anywhere off the field), not just on the Done
+	# key; wiring that straight to _do_create() made the room create itself ~1s after the
+	# keyboard closed, without the player ever tapping Create. (The full-screen wizard
+	# guards the same quirk.)
+	_cname_edit.text_submitted.connect(func(_t: String) -> void: _cname_edit.release_focus())
 	_create_modal.add_child(_cname_edit)
 
 	var dice := _sculpt_button("", ArenaUI.SAND)
@@ -742,6 +856,7 @@ func _do_create() -> void:
 	_cmsg.add_theme_color_override("font_color", Color(1.0, 0.7, 0.6))
 	match String(res.get("error", "")):
 		"auth":         _cmsg.text = "Sign in and pick a name first."
+		"in_room":      _cmsg.text = "You already have a room open."
 		"id_collision": _cmsg.text = "Couldn't allocate an ID. Try again."
 		# One line: _cmsg is a fixed 22px row with no autowrap.
 		"lobby_full":   _cmsg.text = "Public lobby is full (%d rooms) — try again shortly." % ContestManager.LOBBY_MAX
@@ -802,6 +917,7 @@ func _do_join() -> void:
 		"not_found": _id_msg.text = "No room found with that ID."
 		"ended":     _id_msg.text = "That room has already started."
 		"full":      _id_msg.text = "That room is full."
+		"in_room":   _id_msg.text = "Leave your current room first."
 		"auth":      _id_msg.text = "Sign in and pick a name first."
 		_:           _id_msg.text = "Couldn't join. Try again."
 
@@ -991,7 +1107,10 @@ func _layout_choice_modal(sz: Vector2) -> void:
 # A 1s tick updates the per-row countdowns and retires rows whose 5-minute start
 # window ran out (expiry is a local time predicate, so it needs no server event).
 
-const LOBBY_MODAL_W := 520.0
+# Wider than the other popups on purpose: each row packs name · diff · players ·
+# countdown · Join, and the fixed right-hand columns used to squeeze the name column
+# down to ~100px (even short titles clipped). The extra width all flows into the name.
+const LOBBY_MODAL_W := 680.0
 const LOBBY_ROW_H := 56.0
 const LOBBY_JOIN_W := 88.0
 const LOBBY_LEVEL_W := 74.0
@@ -1011,14 +1130,10 @@ func _open_lobby_modal() -> void:
 	_layout_lobby_modal(get_viewport_rect().size)
 	_lobby_page = 0
 	_lobby_rows = []
-	_lobby_status.text = "Finding contests…"
-	_lobby_status.visible = true
-	# Go live. The listeners fire with the current index immediately, so the
-	# "Finding…" state is only up for the round-trip.
-	if not ContestManager.lobby_changed.is_connected(_on_lobby_changed):
-		ContestManager.lobby_changed.connect(_on_lobby_changed)
-	ContestManager.watch_lobby()
+	# One read of the CF-maintained index; a local 1s tick keeps the countdowns
+	# moving and retires expired rows (no further reads until the player refreshes).
 	_lobby_tick.start()
+	_do_lobby_refresh()
 
 func _close_lobby_modal() -> void:
 	_stop_lobby_watch()
@@ -1030,12 +1145,11 @@ func _close_lobby_modal() -> void:
 		_fx.resume()
 	_set_action_cards_visible(true)
 
-# Drop the live listeners the moment the list isn't on screen — an idle lobby
-# listener is a per-change read for every backgrounded client.
+# Halt the local countdown tick when the list leaves the screen. (There are no live
+# listeners now — the list is read once on open and again on each Refresh press.)
 func _stop_lobby_watch() -> void:
-	if ContestManager.lobby_changed.is_connected(_on_lobby_changed):
-		ContestManager.lobby_changed.disconnect(_on_lobby_changed)
-	ContestManager.unwatch_lobby()
+	# No live listeners to drop anymore — the list is Refresh-driven. Just halt the
+	# local countdown tick.
 	if _lobby_tick:
 		_lobby_tick.stop()
 
@@ -1126,6 +1240,13 @@ func _build_lobby_modal() -> void:
 	_lobby_tick.timeout.connect(_on_lobby_tick)
 	add_child(_lobby_tick)
 
+	_lobby_refresh = _sculpt_button("⟳  Refresh", ArenaUI.ACCENT, true)
+	_lobby_refresh.name = "refresh"
+	_lobby_refresh.add_theme_font_size_override("font_size", 18)
+	_lobby_refresh.add_theme_color_override("font_color", Color(1.0, 0.98, 0.90))
+	_lobby_refresh.pressed.connect(_do_lobby_refresh)
+	_lobby_modal.add_child(_lobby_refresh)
+
 	var close := _sculpt_button("Close", Color(0.62, 0.42, 0.42))
 	close.name = "close"
 	close.add_theme_font_size_override("font_size", 19)
@@ -1181,32 +1302,56 @@ func _layout_lobby_modal(sz: Vector2) -> void:
 		_lobby_page_lbl.position = Vector2(pad + arrow_w, by)
 		_lobby_page_lbl.size = Vector2(maxf(bw - arrow_w * 2.0, 10.0), btn_h)
 	if _lobby_modal.has_node("close"):
+		# Right half splits into Refresh + Close.
+		var rhalf_x := pad + bw + gap
+		var rgap := 10.0
+		var rw := (bw - rgap) * 0.5
+		if _lobby_refresh:
+			_lobby_refresh.position = Vector2(rhalf_x, by)
+			_lobby_refresh.size = Vector2(rw, btn_h)
 		var close: Button = _lobby_modal.get_node("close")
-		close.position = Vector2(pad + bw + gap, by)
-		close.size = Vector2(bw, btn_h)
+		close.position = Vector2(rhalf_x + rw + rgap, by)
+		close.size = Vector2(rw, btn_h)
 	# Reflow rows so columns line up at the new width.
 	if _lobby_list and not _lobby_list.get_children().is_empty():
 		_lobby_render()
 
-# Live push from the lobby index (rooms opened / joined / started / closed).
-func _on_lobby_changed(rows: Array) -> void:
-	if not is_inside_tree() or _lobby_modal == null or not _lobby_modal.visible:
+# Load the open-public-room list with ONE read of the CF-maintained index doc
+# (lobby_index/open). Called on open and on every Refresh press — there are no live
+# listeners, so the list is only as fresh as the last press. That's the deliberate
+# trade-off that kills the per-room-event fan-out to every browser.
+func _do_lobby_refresh() -> void:
+	if _lobby_busy:
 		return
+	_lobby_busy = true
+	if _lobby_refresh:
+		_lobby_refresh.disabled = true
+	for c in _lobby_list.get_children():
+		c.queue_free()
+	_lobby_status.text = "Finding contests…"
+	_lobby_status.visible = true
+	var rows: Array = await ContestManager.refresh_lobby()
+	if not is_inside_tree() or _lobby_modal == null or not _lobby_modal.visible:
+		_lobby_busy = false
+		return
+	_lobby_busy = false
+	if _lobby_refresh:
+		_lobby_refresh.disabled = false
 	_lobby_rows = rows
 	_lobby_render()
 
-# Once a second: the countdowns move, and rows whose window closed have to go even
-# though no write happened. Re-filtering locally is what makes expiry look instant.
+# Once a second, purely LOCALLY (no reads): move the countdowns and retire rows whose
+# start window has closed — expiry is a time predicate, so it needs no server event.
 func _on_lobby_tick() -> void:
 	if _lobby_modal == null or not _lobby_modal.visible or _lobby_busy:
 		return
+	var now := int(Time.get_unix_time_from_system())
 	var before := _lobby_rows.size()
-	_lobby_rows = ContestManager.lobby_rows()
+	_lobby_rows = _lobby_rows.filter(func(r): return int(r.get("deadline", 0)) > now)
 	if _lobby_rows.size() != before:
 		_lobby_render()
 		return
 	# Same row set — just move the clocks, no rebuild.
-	var now := int(Time.get_unix_time_from_system())
 	for child in _lobby_list.get_children():
 		var lbl: Variant = child.get_node_or_null("time")
 		if lbl is Label:
@@ -1237,7 +1382,7 @@ func _lobby_render() -> void:
 	if _lobby_page_lbl:
 		_lobby_page_lbl.text = "Page %d / %d" % [_lobby_page + 1, pages]
 	if not has:
-		_lobby_status.text = "No public contests are open right now.\nCreate your own — it's listed instantly!"
+		_lobby_status.text = "No public contests open right now.\nTap ⟳ Refresh, or create your own!"
 		_lobby_count.text = ""
 		return
 	var first := _lobby_page * LOBBY_PAGE
@@ -1365,6 +1510,7 @@ func _on_lobby_join(cid: String) -> void:
 		"not_found":     _show_toast("That room just closed.")
 		"ended":         _show_toast("That race has already started.")
 		"full":          _show_toast("That room is full.")
+		"in_room":       _show_toast("Leave your current room first.")
 		"auth":          _show_toast("Sign in and pick a name first.")
 		_:               _show_toast("Couldn't join. Try again.")
 	# Drop the stale row immediately; the index listener catches up a beat later.
