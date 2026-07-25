@@ -248,7 +248,11 @@ func _render() -> void:
 		_render_lobby()
 	else:
 		# status == "playing"
-		if String(my.get("state", "")) == "done":
+		# has_played() is the authoritative local record that we've already raced this
+		# room. It guards against a stale post-finish room read (REST reads are eventually
+		# consistent) still showing our state as not-"done" and re-launching the match —
+		# which otherwise exits the game straight into a new one in an infinite loop.
+		if String(my.get("state", "")) == "done" or ContestManager.has_played(contest_id):
 			_render_results()
 		else:
 			_route_into_game()
@@ -494,6 +498,12 @@ func _render_lobby() -> void:
 # ---------------- playing: auto-launch my match ----------------
 
 func _route_into_game() -> void:
+	# Never re-enter the game for a room we've already raced (single attempt). Guards
+	# any call path that reaches here with a stale not-"done" room read — show the
+	# results board instead of launching a second match.
+	if ContestManager.has_played(contest_id):
+		_render_results()
+		return
 	if _launched:
 		_set_overlay(true, "Get ready…")
 		return

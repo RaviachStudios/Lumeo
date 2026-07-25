@@ -79,8 +79,8 @@ const THEMES := {
 # /users/{uid} as a map (owned_levels: {moderate: true, hard: true}) — same
 # storage shape as owned_themes (see _owned_levels_map_for_save).
 const LEVEL_PRICES := {
-	"moderate": 50,
-	"hard": 80,
+	"moderate": 10,
+	"hard": 20,
 }
 
 # Simon-wheel customization. Three independently-coloured parts of the wheel

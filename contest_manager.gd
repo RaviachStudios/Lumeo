@@ -172,6 +172,17 @@ var current_room_id: String = ""
 var current_room_title: String = ""
 var current_room_is_host: bool = false
 
+# Contest ids this client has already finished its single race in (this session).
+# The room is single-attempt: once we've submitted our result we must NEVER route
+# back into the game for that room. The detail screen is rebuilt fresh on every
+# navigation (so a per-screen guard resets) and its routing decision reads the
+# player's "done" state from a room fetch — but Firestore REST reads are eventually
+# consistent, so the fetch right after finishing can still report us as not-done and
+# re-launch the match, exiting straight into a new game in an infinite loop. This
+# authoritative local record closes that race: has_played(cid) stays true regardless
+# of read staleness. Keyed by cid; cleared on sign-out.
+var _played_contests: Dictionary = {}
+
 func _ready() -> void:
 	if not _is_editor:
 		Firebase.firestore.document_changed.connect(_on_document_changed)
@@ -193,6 +204,13 @@ func _clear_room_cache() -> void:
 	current_room_id = ""
 	current_room_title = ""
 	current_room_is_host = false
+	_played_contests.clear()
+
+# True once this client has submitted its single race result for `cid` (see
+# _played_contests). The detail screen consults this so a stale post-finish room
+# read can't re-launch the match.
+func has_played(cid: String) -> bool:
+	return _played_contests.has(cid)
 
 # Synchronous view of the persisted room pointer, for painting the hub before (or
 # without) a network read. has_cached_room() may be optimistic — active_room() is the
@@ -579,6 +597,9 @@ func begin_contest_game(cid: String, difficulty: String, seed: int) -> void:
 func submit_result(cid: String, score: int) -> Dictionary:
 	if cid.is_empty() or _uid().is_empty():
 		return {}
+	# Record locally BEFORE the network write: from this point the detail screen must
+	# treat us as done even if the room read that follows is a stale (pre-write) copy.
+	_played_contests[cid] = true
 	var s := clampi(score, 0, MAX_SCORE)
 	var now := _now()
 	# Fold an expiry refresh into the score write: with keepalive now host-only, this

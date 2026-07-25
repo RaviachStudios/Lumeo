@@ -1004,13 +1004,19 @@ func _game_over() -> void:
 		await ContestManager.submit_result(cid, level - 1)
 		if not is_inside_tree():
 			return
+		# Dedicated arena interstitial as the race ends and the results screen appears.
+		# Skipped for players who bought remove-ads (same treatment as the solo
+		# game-over interstitial). The scene swap runs behind the full-screen ad, so
+		# the results board is ready underneath once the ad is dismissed.
+		if not CoinsManager.has_remove_ads:
+			AdManager.try_show_arena_interstitial()
 		game_manager.show_contest_detail(cid)
 		return
 	# Skip the post-game interstitial for players who bought the remove-ads
 	# entitlement. Rewarded ads (the in-game "watch ad to replay" button) are
 	# user-initiated and unaffected — the purchase only suppresses ads we'd
 	# otherwise force on the player.
-	if level > 5 and not CoinsManager.has_remove_ads:
+	if level > 4 and not CoinsManager.has_remove_ads:
 		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)

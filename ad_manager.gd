@@ -2,12 +2,18 @@ extends Node
 
 const REWARDED_ID := "ca-app-pub-4855985167611175/5696511973"
 const INTERSTITIAL_ID := "ca-app-pub-4855985167611175/5072180074"
+# Dedicated arena/contest interstitial, shown when a race ends and the results
+# screen appears. Kept as its own unit so its performance is tracked separately
+# from the solo game-over interstitial (INTERSTITIAL_ID).
+const ARENA_INTERSTITIAL_ID := "ca-app-pub-4855985167611175/8487558745"
 
 var rewarded_ready: bool = false
 var interstitial_ready: bool = false
+var arena_interstitial_ready: bool = false
 
 var _rewarded_ad: RewardedAd = null
 var _interstitial_ad: InterstitialAd = null
+var _arena_interstitial_ad: InterstitialAd = null
 var _pending_reward: Callable = Callable()
 var _reward_earned: bool = false
 
@@ -15,6 +21,7 @@ func _ready() -> void:
 	MobileAds.initialize()
 	_load_rewarded()
 	_load_interstitial()
+	_load_arena_interstitial()
 
 # ── Rewarded ──────────────────────────────────────────────────────────────────
 
@@ -90,3 +97,34 @@ func try_show_interstitial() -> void:
 		return
 	interstitial_ready = false
 	_interstitial_ad.show()
+
+# ── Arena interstitial (dedicated unit) ─────────────────────────────────────────
+
+func _load_arena_interstitial() -> void:
+	arena_interstitial_ready = false
+	var cb := InterstitialAdLoadCallback.new()
+	cb.on_ad_loaded = _on_arena_interstitial_loaded
+	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void: pass
+	InterstitialAdLoader.new().load(ARENA_INTERSTITIAL_ID, AdRequest.new(), cb)
+
+func _on_arena_interstitial_loaded(ad: InterstitialAd) -> void:
+	var content_cb := FullScreenContentCallback.new()
+	content_cb.on_ad_dismissed_full_screen_content = func() -> void:
+		if _arena_interstitial_ad:
+			_arena_interstitial_ad.destroy()
+			_arena_interstitial_ad = null
+		_load_arena_interstitial()
+	content_cb.on_ad_failed_to_show_full_screen_content = func(_e: AdError) -> void:
+		if _arena_interstitial_ad:
+			_arena_interstitial_ad.destroy()
+			_arena_interstitial_ad = null
+		_load_arena_interstitial()
+	ad.full_screen_content_callback = content_cb
+	_arena_interstitial_ad = ad
+	arena_interstitial_ready = true
+
+func try_show_arena_interstitial() -> void:
+	if not arena_interstitial_ready or _arena_interstitial_ad == null:
+		return
+	arena_interstitial_ready = false
+	_arena_interstitial_ad.show()

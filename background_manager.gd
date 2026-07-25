@@ -6455,11 +6455,18 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 					vec3 gc = lpHue(float(i) / 12.0 + 0.03);
 					vec2 q = a - cp;
 					float lit = mix(haze, 1.0, 0.6);
-					col = mix(col, steel, aaline(lpSeg(a, anchor, cp - down * 0.013), 0.0016) * haze);   // suspension hanger
-					col = mix(col, gc * 0.5, aafill(sdBox(q + down * 0.016, vec2(0.017, 0.0035)) - 0.002) * lit);   // roof cap
-					col = mix(col, gc * 0.92, aafill(sdBox(q, vec2(0.014, 0.0125)) - 0.0072) * lit);                // rounded cabin body
-					col = mix(col, mix(gc, vec3(1.0), 0.6), aafill(sdBox(q, vec2(0.0085, 0.0068)) - 0.004) * lit);  // lit window
-					col = mix(col, vec3(1.0), aafill(sdCircle(q - vec2(-0.004, -0.004), 0.0026)) * 0.55 * lit);     // glossy glint
+					// Derivative-free window: the aafill/aaline terms below use fwidth(), which is
+					// undefined along this hard bounding-box guard's seam (neighbouring quad
+					// fragments took the early return) — that seam otherwise shows as a coloured
+					// square around each gondola. gw reaches 0 just inside the guard and is 1
+					// across all visible cabin content, killing the seam without changing the look.
+					float gw = win1(a.x, cp.x - 0.05, cp.x + 0.05, 0.008)
+						* win1(a.y, cp.y - 0.055, cp.y + 0.055, 0.008);
+					col = mix(col, steel, aaline(lpSeg(a, anchor, cp - down * 0.013), 0.0016) * haze * gw);   // suspension hanger
+					col = mix(col, gc * 0.5, aafill(sdBox(q + down * 0.016, vec2(0.017, 0.0035)) - 0.002) * lit * gw);   // roof cap
+					col = mix(col, gc * 0.92, aafill(sdBox(q, vec2(0.014, 0.0125)) - 0.0072) * lit * gw);                // rounded cabin body
+					col = mix(col, mix(gc, vec3(1.0), 0.6), aafill(sdBox(q, vec2(0.0085, 0.0068)) - 0.004) * lit * gw);  // lit window
+					col = mix(col, vec3(1.0), aafill(sdCircle(q - vec2(-0.004, -0.004), 0.0026)) * 0.55 * lit * gw);     // glossy glint
 					col += gc * smoothstep(0.03, 0.0, length(q)) * 0.45 * litAmt * haze;                            // colour bloom
 				}
 			}
