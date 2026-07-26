@@ -50,6 +50,9 @@ const HIST_MAX_SHARD_SWEEP = 16;
 function nowUnix() {
   return Math.floor(Date.now() / 1000);
 }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 function utcDate(d) {
   return d.toISOString().slice(0, 10); // "YYYY-MM-DD"
 }
@@ -383,6 +386,12 @@ function shapeContestState(cid, d) {
     member_count: Number.isFinite(d.member_count) ? d.member_count : 0,
     started_at: Number.isFinite(d.started_at) ? d.started_at : 0,
     finished_at: Number.isFinite(d.finished_at) ? d.finished_at : 0,
+    // The host ended the room (contest_manager.gd _close_room). It rides on top of
+    // status "finished" and MUST be mirrored: it is the only thing distinguishing
+    // "the host closed this" from "the race ran to its end", and the client renders
+    // it as the room's closing message. Dropping it here would leave every watcher
+    // on a podium of zeroes instead.
+    cancelled: d.cancelled === true,
     players,
   };
 }
@@ -398,7 +407,7 @@ function stableContestKey(s) {
   });
   return JSON.stringify([
     s.status, s.seed, s.member_count, s.started_at, s.finished_at,
-    s.title, s.creator_uid, s.difficulty, s.is_public, players,
+    s.title, s.creator_uid, s.difficulty, s.is_public, s.cancelled, players,
   ]);
 }
 
@@ -426,7 +435,24 @@ async function maintainContestState(cid, after) {
     if (prev && stableContestKey(prev) === stableContestKey(summary)) return;
     // Coalesce roster/score bursts to ~one push per window.
     const age = nowUnix() - ((stored && stored.updated_unix) || 0);
-    if (age < CONTEST_STATE_COALESCE_SECS) return;
+    if (age < CONTEST_STATE_COALESCE_SECS) {
+      // ...but the LAST write of a burst must not be the one that's dropped. Nothing
+      // else is coming to flush it, so a player who joined as the third of three
+      // within the window would stay invisible to everyone until some unrelated write
+      // happened to touch the room. Wait out the window and publish the room as it
+      // stands THEN — re-read from the source rather than replaying our own (by then
+      // possibly superseded) snapshot, so concurrent skippers all converge on the
+      // truth and whoever gets there first makes the rest a no-op.
+      await sleep((CONTEST_STATE_COALESCE_SECS - age) * 1000);
+      const fresh = await db.collection("contests").doc(cid).get();
+      if (!fresh.exists) return;          // gone meanwhile — the delete event cleans up
+      const trailing = shapeContestState(cid, fresh.data());
+      const now = await ref.get();
+      const nowPrev = now.exists ? now.data().summary : null;
+      if (nowPrev && stableContestKey(nowPrev) === stableContestKey(trailing)) return;
+      await ref.set({summary: trailing, updated_unix: nowUnix()});
+      return;
+    }
   }
   await ref.set({summary, updated_unix: nowUnix()});
 }
@@ -478,11 +504,59 @@ exports.sweepExpiredRooms = onSchedule({schedule: "every 15 minutes"}, async () 
       .where("expires_unix", "<", nowUnix())
       .limit(ROOM_TTL_SWEEP_LIMIT)
       .get();
-  if (snap.empty) return;
-  const batch = db.batch();
-  snap.forEach((doc) => batch.delete(doc.ref));
-  await batch.commit();
+  if (!snap.empty) {
+    const batch = db.batch();
+    snap.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+  await sweepOrphanState();
+  await pruneLobbyIndex();
 });
+
+// A room write and the delete that follows it are two SEPARATE trigger invocations
+// with NO ordering guarantee, so the delete's cleanup can run first and the earlier
+// write then re-creates the mirror of a room that no longer exists — a doc nothing
+// will ever touch again. Same story for a lobby_index entry re-added by a late
+// create event. Neither is visible to players (clients filter both by liveness), but
+// both leak forever, so the scheduled sweep collects them.
+const STATE_ORPHAN_AGE_SECS = 30 * 60;
+// Bounds the orphan pass. The query also matches LIVE long-running rooms' mirrors
+// (each costs one existence read to clear), so keep it small — orphans are rare and
+// the pass runs every 15 minutes, which drains a backlog quickly enough.
+const STATE_ORPHAN_LIMIT = 50;
+// Mirrors how long a public room stays listed (START_WINDOW in contest_manager.gd):
+// an entry older than this is dead by the same predicate every client applies.
+const LOBBY_ENTRY_TTL_SECS = 5 * 60;
+
+async function sweepOrphanState() {
+  const snap = await db.collection("contest_state")
+      .where("updated_unix", "<", nowUnix() - STATE_ORPHAN_AGE_SECS)
+      .limit(STATE_ORPHAN_LIMIT)
+      .get();
+  if (snap.empty) return;
+  for (const doc of snap.docs) {
+    const room = await db.collection("contests").doc(doc.id).get();
+    if (!room.exists) await doc.ref.delete().catch(() => {});
+  }
+}
+
+async function pruneLobbyIndex() {
+  const ref = db.collection("lobby_index").doc("open");
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const rooms = (snap.data() || {}).rooms || {};
+  const cutoff = nowUnix() - LOBBY_ENTRY_TTL_SECS;
+  const dead = {};
+  let any = false;
+  for (const [cid, e] of Object.entries(rooms)) {
+    if (!e || !Number.isFinite(e.o) || e.o < cutoff) {
+      dead[cid] = FieldValue.delete();
+      any = true;
+    }
+  }
+  if (!any) return;
+  await ref.set({rooms: dead, updated_unix: nowUnix()}, {merge: true});
+}
 
 // =====================================================================
 // Manual heal / seed — full recompute of both board_top docs

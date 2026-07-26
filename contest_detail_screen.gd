@@ -39,6 +39,8 @@ var _toast: Label
 var _confirm: Panel
 var _confirm_lbl: Label
 var _confirm_yes_cb: Callable
+# The room status the open confirm was raised against (see _render / _show_confirm).
+var _confirm_status: String = ""
 
 # Start-deadline chrome (public rooms only). Lives on the screen, not in _content,
 # because it sits in the top bar; torn down per render like _corner_btn.
@@ -70,6 +72,7 @@ var _launched := false           # guard: only auto-launch my match once
 var _finalize_sent := false      # guard: only nudge the all-done / overdue finalize once
 var _seen_uids := {}             # roster uids already animated in (slide-in only for newcomers)
 var _host_popped := false        # host badge "pop" plays once, not on every re-render
+var _result_awarded := false     # placement badge is awarded once, not per re-render
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -196,6 +199,14 @@ func _on_room_changed(cid: String, room: Dictionary) -> void:
 # ---------------- render dispatch ----------------
 
 func _render() -> void:
+	# The confirm modal is screen-level, so it survives the re-render its own question
+	# was asked against. A dialog raised on one face and answered on another acts on a
+	# room that has moved on — "Cancel this room?" tapped through after the race
+	# finalized would close a room that legitimately finished. Roster pushes must NOT
+	# dismiss it (that would snatch the dialog away mid-decision), so it's dropped only
+	# when the room actually changed FACE underneath it.
+	if _confirm and _confirm.visible and _confirm_status != String(_room.get("status", "")):
+		_confirm.visible = false
 	for c in _content.get_children():
 		c.queue_free()
 	if _corner_btn:
@@ -211,6 +222,17 @@ func _render() -> void:
 		return
 	if _room.is_empty():
 		_render_message("This room no longer exists.", "Back to Arena",
+			func() -> void: game_manager.show_arena())
+		return
+	# The host ended the room. This arrives as a normal state push (ContestManager.
+	# _close_room deliberately closes the room with a WRITE rather than a delete, because
+	# a deleted document never reaches a listener) — so everyone sitting in the lobby, or
+	# waiting on the results board, is told instead of being left staring at a room that
+	# isn't there any more. Latched into _closed_reason so the sweep that eventually
+	# deletes the doc can't swap this message for the blanker "no longer exists".
+	if bool(_room.get("cancelled", false)):
+		_closed_reason = "The host closed this room."
+		_render_message(_closed_reason, "Back to Arena",
 			func() -> void: game_manager.show_arena())
 		return
 
@@ -520,6 +542,8 @@ func _route_into_game() -> void:
 # ---------------- playing: live results / waiting board ----------------
 
 func _render_results() -> void:
+	# Returning here from a match — the game stopped the music, so bring it back.
+	AudioManager.play_bg_music()
 	var w := _content.size.x
 	var h := _content.size.y
 	var cx := w * 0.5
@@ -749,6 +773,7 @@ func _rank_circle(d: float, text: String, font_size: int, text_col: Color) -> Pa
 func _make_empty_row(width: float, rh: float) -> Control:
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(width, rh)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.05, 0.07, 0.16, 0.22)
 	s.set_corner_radius_all(10)
@@ -769,15 +794,24 @@ func _make_empty_row(width: float, rh: float) -> Control:
 # ---------------- finished ----------------
 
 func _render_finished() -> void:
+	# Returning here from a match — the game stopped the music, so bring it back.
+	AudioManager.play_bg_music()
 	var w := _content.size.x
 	var cx := w * 0.5
 	var standings: Array = ContestManager.standings_from_room(_room)
 
-	# Award contest-placement badges (win / podium) from the player's final rank.
-	for r: Dictionary in standings:
-		if bool(r.get("is_me", false)):
-			BadgeManager.note_contest_result(int(r.get("rank", 0)))
-			break
+	# Award contest-placement badges (win / podium) from the player's final rank — ONCE,
+	# and only for a race that was actually contested. This face re-renders on every
+	# push and on every resize, and note_contest_result increments a lifetime win
+	# counter, so a rotation (or a duplicate finalize from two clients racing to write
+	# "finished") used to award the win again each time. And a room started alone always
+	# ranks its one player first, which made a solo start a one-tap win farm.
+	if not _result_awarded and standings.size() >= 2:
+		_result_awarded = true
+		for r: Dictionary in standings:
+			if bool(r.get("is_me", false)):
+				BadgeManager.note_contest_result(int(r.get("rank", 0)))
+				break
 
 	_add_finish_confetti()
 	_add_finish_flashes()
@@ -796,17 +830,31 @@ func _render_finished() -> void:
 	champ.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(champ)
 
-	_add_stage(standings, cx, 44.0)
+	var stage_top := 44.0
+	_add_stage(standings, cx, stage_top)
 
-	# Top 3 stand on the podium; the table lists places 4+.
+	var exit := ArenaUI.pill_button("Exit", ArenaUI.ACCENT, true)
+	exit.size = Vector2(240, 56)
+	exit.position = Vector2(cx - 120, _content.size.y - 70.0)
+	exit.pressed.connect(_on_exit)
+	_content.add_child(exit)
+
+	# Top 3 stand on the podium; the table lists places 4+. It shows 4 rows at a time
+	# (scrolling for the rest) and is centred vertically in the free space between the
+	# podium's base and the Exit button so no row overlaps the podium.
 	var rest: Array = standings.slice(3)
 	var res_row_h := 44.0
 	var res_sep := 6.0
-	var res_visible := 5
-	var table_top := 300.0
+	var res_visible := 4
 	var tw: float = minf(620.0, w - 80.0)
 	var table_h := res_visible * res_row_h + (res_visible - 1) * res_sep
-	table_h = minf(table_h, _content.size.y - table_top - 80.0)
+	# Podium base + glow reaches ~300px below the stage origin; clear it before the list.
+	var gap_top := stage_top + 300.0
+	var gap_bottom := exit.position.y - 16.0
+	var avail := gap_bottom - gap_top
+	table_h = minf(table_h, avail)
+	# Sit just under the podium rather than centred in the gap.
+	var table_top := gap_top
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.position = Vector2(cx - tw * 0.5, table_top)
@@ -820,12 +868,6 @@ func _render_finished() -> void:
 		vb.add_child(_make_result_row(r, tw))
 	for i in range(rest.size(), res_visible):
 		vb.add_child(_make_empty_row(tw, res_row_h))
-
-	var exit := ArenaUI.pill_button("Exit", ArenaUI.ACCENT, true)
-	exit.size = Vector2(240, 56)
-	exit.position = Vector2(cx - 120, _content.size.y - 70.0)
-	exit.pressed.connect(_on_exit)
-	_content.add_child(exit)
 
 func _add_finish_confetti() -> void:
 	var cols: Array = SimonFlyer.SIMON_COLS.duplicate()
@@ -891,6 +933,9 @@ func _confetti_flake() -> Texture2D:
 func _make_result_row(r: Dictionary, width: float) -> Control:
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(width, 44)
+	# Let touch drags pass through to the ScrollContainer — a STOP filter on the row
+	# panel eats the gesture so the list won't scroll when you grab a row.
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var is_me: bool = bool(r.get("is_me", false))
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.16, 0.13, 0.05, 0.6) if is_me else Color(0.10, 0.10, 0.20, 0.5)
@@ -1621,20 +1666,34 @@ func _on_deadline(is_creator: bool) -> void:
 			return
 		# Nobody came — close the room rather than leave it listed.
 		_set_overlay(true, "Closing…")
-		await ContestManager.cancel_room(contest_id)
+		var closed: Dictionary = await ContestManager.cancel_room(contest_id)
 		if not is_inside_tree():
 			return
 		_set_overlay(false)
+		# Only claim it closed if it actually did; otherwise let the deadline arm again
+		# on the next tick rather than showing a room that's still open as shut.
+		if not bool(closed.get("ok", false)):
+			_deadline_fired = false
+			if _tick:
+				_tick.start()
+			_show_toast("Couldn't close the room. Retrying…")
+			return
 		_closed_reason = "Nobody joined in time.\nThe room has closed."
 		_render()
 		return
 	# Not the host, and the grace period passed without a start: leave. The last
-	# member out deletes the room (ContestManager.leave_contest).
+	# member out closes the room (ContestManager.leave_contest).
 	_set_overlay(true, "Closing…")
-	await ContestManager.leave_contest(contest_id)
+	var left: bool = await ContestManager.leave_contest(contest_id)
 	if not is_inside_tree():
 		return
 	_set_overlay(false)
+	if not left:
+		_deadline_fired = false
+		if _tick:
+			_tick.start()
+		_show_toast("Couldn't leave the room. Retrying…")
+		return
 	_closed_reason = "The host didn't start in time.\nThe room has closed."
 	_render()
 
@@ -1670,8 +1729,14 @@ func _on_finish_now() -> void:
 func _on_cancel() -> void:
 	_show_confirm("Cancel this room for everyone?\nThis can't be undone.", func() -> void:
 		_set_overlay(true, "Cancelling…")
-		await ContestManager.cancel_room(contest_id)
+		var res: Dictionary = await ContestManager.cancel_room(contest_id)
 		if not is_inside_tree():
+			return
+		# Leaving the screen on a FAILED close would tell the host the room is gone
+		# while everyone else is still sitting in it.
+		if not bool(res.get("ok", false)):
+			_set_overlay(false)
+			_show_toast("Couldn't close the room. Try again.")
 			return
 		game_manager.show_arena())
 
@@ -1685,8 +1750,15 @@ func _on_leave() -> void:
 
 func _do_leave() -> void:
 	_set_overlay(true, "Leaving…")
-	await ContestManager.leave_contest(contest_id)
+	var ok: bool = await ContestManager.leave_contest(contest_id)
 	if not is_inside_tree():
+		return
+	# A failed leave must not look like a successful one: the player would walk away
+	# believing they're out while their row still holds a seat (and still blocks
+	# everyone else's all-done check).
+	if not ok:
+		_set_overlay(false)
+		_show_toast("Couldn't leave the room. Try again.")
 		return
 	game_manager.show_arena()
 
@@ -1740,6 +1812,8 @@ func _show_confirm(msg: String, on_yes: Callable) -> void:
 	if _confirm == null:
 		_build_confirm()
 	_confirm_yes_cb = on_yes
+	# The face this question was asked on; _render drops the dialog if the room leaves it.
+	_confirm_status = String(_room.get("status", ""))
 	_confirm_lbl.text = msg
 	_confirm.visible = true
 

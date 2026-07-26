@@ -916,6 +916,7 @@ func _do_join() -> void:
 	match String(res.get("error", "")):
 		"not_found": _id_msg.text = "No room found with that ID."
 		"ended":     _id_msg.text = "That room has already started."
+		"closed":    _id_msg.text = "That room has closed."
 		"full":      _id_msg.text = "That room is full."
 		"in_room":   _id_msg.text = "Leave your current room first."
 		"auth":      _id_msg.text = "Sign in and pick a name first."
@@ -973,12 +974,17 @@ func _build_choice_modal() -> void:
 	_id_edit.placeholder_text = "ROOM ID"
 	_id_edit.max_length = ContestManager.ID_LEN
 	_id_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_id_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
 	_id_edit.add_theme_font_size_override("font_size", 26)
+	# Room codes are 6 digits — strip anything that isn't a number as it's typed.
 	_id_edit.text_changed.connect(func(t: String) -> void:
-		var up := t.to_upper()
-		if up != t:
-			_id_edit.text = up
-			_id_edit.caret_column = up.length())
+		var digits := ""
+		for c in t:
+			if c >= "0" and c <= "9":
+				digits += c
+		if digits != t:
+			_id_edit.text = digits
+			_id_edit.caret_column = digits.length())
 	_id_edit.text_submitted.connect(func(_t: String) -> void: _do_join())
 	_choice_modal.add_child(_id_edit)
 
@@ -1509,13 +1515,14 @@ func _on_lobby_join(cid: String) -> void:
 	match String(res.get("error", "")):
 		"not_found":     _show_toast("That room just closed.")
 		"ended":         _show_toast("That race has already started.")
+		"closed":        _show_toast("That room just closed.")
 		"full":          _show_toast("That room is full.")
 		"in_room":       _show_toast("Leave your current room first.")
 		"auth":          _show_toast("Sign in and pick a name first.")
 		_:               _show_toast("Couldn't join. Try again.")
 	# Drop the stale row immediately; the index listener catches up a beat later.
 	var err := String(res.get("error", ""))
-	if err == "not_found" or err == "full" or err == "ended":
+	if err == "not_found" or err == "full" or err == "ended" or err == "closed":
 		_lobby_rows = _lobby_rows.filter(func(r): return String(r.get("id", "")) != cid)
 		_lobby_render()
 

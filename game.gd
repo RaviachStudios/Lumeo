@@ -882,6 +882,23 @@ func _on_replay() -> void:
 func _on_quit() -> void:
 	get_node("QuitDialog").visible = true
 
+# The Android back gesture, offered to us by GameManager before it falls back to
+# "go home". A RACE takes it: going home clears GameState.contest_context, so the run
+# would be voided with no score submitted to the room — and, since nothing recorded
+# that we played, the hub card would let us re-enter and race the same room again.
+# Back therefore raises the same forfeit prompt as the on-screen quit button (and
+# closes it if it's already up). A normal solo game keeps the old behaviour.
+func handle_back() -> bool:
+	if not _is_contest:
+		return false
+	var dlg := get_node_or_null("QuitDialog")
+	if dlg == null:
+		return true                      # mid-teardown: swallow it rather than void the run
+	if _state == "gameover":
+		return true                      # the result is already being submitted
+	dlg.visible = not dlg.visible
+	return true
+
 # "Yes" in the quit dialog. Normal play → home. Race play → forfeit, which runs
 # the game-over flow so the current score is submitted to the room and we route
 # back to the live room (see _game_over's _is_contest branch).

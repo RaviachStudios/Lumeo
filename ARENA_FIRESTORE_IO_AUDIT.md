@@ -138,3 +138,27 @@ bill **~2,025 listener reads on top**.
    per-player score writes; have only the host heartbeat; and — the big one — server-side
    lobby pagination would cut the V-fan-out, but it needs Cloud Functions the Arena
    deliberately does without today.
+
+---
+
+## Addendum — the room watchdog (`WATCHDOG_SECS`)
+
+The Android plugin's listener only fires for a snapshot that **exists**, so a deleted
+room never reaches a watcher. Rooms that end while people are still in them are
+therefore **closed with a write** (`cancelled: true` + `status: "finished"`, see
+`ContestManager._close_room`) rather than deleted — that costs the same **1 write + M
+listener reads** as any other status flip, and replaces a delete that cost the same and
+told nobody.
+
+Deletes that no watcher can be left behind by (last member out, the expiry sweep) stay
+as deletes, and an already-released host still deletes on cancel — so a **watchdog**
+covers them: while a room screen is open, if no listener push has landed for
+`WATCHDOG_SECS = 45`, one REST `GET` of `contests/{cid}` confirms the room is still
+there.
+
+- **Cost:** ≤ 1 read per 45 s **per open room screen**, i.e. ≤ M/45 reads/s for a full
+  room — ~60 reads for a 45-player room sitting a full minute in silence. Nothing while
+  pushes are flowing (any push resets the clock), and nothing at all once the room
+  reaches a terminal state or is confirmed gone.
+- It is a **backstop, not a poll**: a busy lobby or an active race never reaches the
+  idle window, so in practice it bills on quiet private lobbies only.

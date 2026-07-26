@@ -49,6 +49,13 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_WM_GO_BACK_REQUEST:
+			# A screen may OWN the back gesture. An Arena race does: dropping straight to
+			# home clears GameState.contest_context, so the run was silently voided —
+			# never submitted, and re-enterable from the hub card for another attempt at a
+			# single-attempt race. game.gd raises its forfeit prompt instead.
+			if _current and _current.has_method("handle_back") \
+					and bool(_current.call("handle_back")):
+				return
 			if _current is HomeScreen:
 				get_tree().quit()
 			else:

@@ -326,6 +326,28 @@ service cloud.firestore {
       return !('seed' in request.resource.data)
           || request.resource.data.seed is int;
     }
+    // Set when the HOST ended the room rather than the race running to its end
+    // (contest_manager.gd _close_room). Closing is a WRITE, not a delete, because the
+    // Android listener never fires for a deleted document — so this flag, riding along
+    // with status "finished", is how everyone still sitting in the room finds out.
+    // Shape-checked only; like everything else on a shared room doc it is trusted.
+    function cancelledOk() {
+      return !('cancelled' in request.resource.data)
+          || request.resource.data.cancelled is bool;
+    }
+    // A room's expiry may only ever be pushed INTO THE FUTURE. On a per-user doc a
+    // backdated stamp can only shorten the life of your own data — but a room doc is
+    // SHARED, and isExpired() lets any signed-in client delete an expired room, so on
+    // `contests` a backdated stamp was a one-write way to hand a live 45-player race to
+    // anyone who wanted it gone. Every real writer stamps now + TTL (or now +
+    // CLOSED_LINGER), so this rejects nothing legitimate; a device whose clock is more
+    // than the TTL slow can't write to rooms, which is the correct outcome — its
+    // stamps would make its own rooms instantly reapable.
+    function expiresFutureOk() {
+      return !('expires_unix' in request.resource.data)
+          || (request.resource.data.expires_unix is int
+              && request.resource.data.expires_unix * 1000 > request.time.toMillis());
+    }
 
     match /contests/{cid} {
       allow read: if true;
@@ -335,8 +357,8 @@ service cloud.firestore {
         && request.resource.data.status == 'lobby'
         && request.resource.data.difficulty in ['easy', 'moderate', 'hard']
         && request.resource.data.member_count is int
-        && playersOk() && seedOk()
-        && titleOk() && lobbyFieldsOk() && expiresUnixOk();
+        && playersOk() && seedOk() && cancelledOk()
+        && titleOk() && lobbyFieldsOk() && expiresFutureOk();
 
       // Any signed-in participant may update the room (join adds their player key;
       // the creator starts it and stamps the seed; anyone racing writes their own
@@ -351,18 +373,29 @@ service cloud.firestore {
         && request.resource.data.member_count >= 0
         && request.resource.data.member_count <= 45
         && request.auth.uid in request.resource.data.players
-        && playersOk() && seedOk()
-        && titleOk() && lobbyFieldsOk() && expiresUnixOk();
+        && playersOk() && seedOk() && cancelledOk()
+        && titleOk() && lobbyFieldsOk() && expiresFutureOk();
 
-      // The creator can delete anytime (cancel); anyone can delete an empty room
-      // (last member out). member_count is lowered to 0 before that delete, so the
-      // empty-delete path is reachable by a non-creator. The third arm reaps
-      // ORPHANS: rooms abandoned without member_count ever reaching 0 (app killed
-      // mid-race, network drop) used to be unreachable by every path — that's what
-      // TTL was supposed to catch, and never did.
+      // Deleting a room is now a CLEANUP operation, not a way to end one.
+      //
+      // There used to be an "anyone may delete a room whose member_count <= 0" arm, for
+      // the last member out. But any participant may write member_count (it's just a
+      // field on the shared doc), so that pair was a two-write recipe for destroying a
+      // live 45-player race — from any member, at any moment, with everyone's standings
+      // in it. Ending a room is a WRITE now (contest_manager.gd _close_room), including
+      // for the last member out, so nothing in the client needs that arm any more.
+      //
+      // What's left: the creator may delete their own room, and ANY signed-in client may
+      // reap a genuinely expired one (isExpired) — which, with expiresFutureOk above
+      // guarding the stamp, can no longer be forced early. Closed and abandoned rooms
+      // are collected by that arm and by the scheduled server sweep.
+      //
+      // ROLLOUT NOTE: already-released clients still try the empty-room delete when the
+      // last member leaves. That delete now fails, harmlessly — the room simply stays
+      // until it expires, exactly like every other abandoned room, and it has already
+      // left the browse list by the liveness predicate.
       allow delete: if request.auth != null
         && (resource.data.creator_uid == request.auth.uid
-            || resource.data.member_count <= 0
             || isExpired());
     }
 

@@ -6498,7 +6498,14 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			float cy = lpTrackY(cxp) - 0.013; vec2 cp = vec2(cxp, cy);
 			if (abs(a.x - cxp) < 0.03 && abs(a.y - cy) < 0.03) {
 				float f = win1(cxp, 1.06, 1.71, 0.06);
-				col = mix(col, vec3(0.90, 0.25, 0.20), aafill(sdBox(a - cp, vec2(0.016, 0.009)) - 0.003) * f);
+				// Same fwidth seam as the Ferris gondolas: the aafill below is undefined along
+				// this hard bounding-box guard's edge (neighbouring quad fragments skipped it),
+				// which otherwise paints a coloured square around each coaster cabin. gw reaches
+				// 0 just inside the guard and is 1 across all visible cabin content, killing the
+				// seam without changing the look.
+				float gw = win1(a.x, cxp - 0.03, cxp + 0.03, 0.006)
+					* win1(a.y, cy - 0.03, cy + 0.03, 0.006);
+				col = mix(col, vec3(0.90, 0.25, 0.20), aafill(sdBox(a - cp, vec2(0.016, 0.009)) - 0.003) * f * gw);
 				col += warm * smoothstep(0.02, 0.0, distance(a, cp)) * 0.25 * f;
 			}
 		}
@@ -6521,7 +6528,11 @@ vec3 lunaMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			if (cxp < 1.03 || cxp > 1.73) continue;
 			float cy = lpTrackY(cxp) - 0.013; vec2 cp = vec2(cxp, cy);
 			if (abs(a.x - cxp) < 0.03 && abs(a.y - cy) < 0.03) {
-				col = mix(col, vec3(1.0, 0.85, 0.30), aafill(sdBox(a - cp, vec2(0.017, 0.010)) - 0.003));
+				// Kill the guard-box fwidth seam (a coloured square around each car) — see the
+				// idle coaster train above.
+				float gw = win1(a.x, cxp - 0.03, cxp + 0.03, 0.006)
+					* win1(a.y, cy - 0.03, cy + 0.03, 0.006);
+				col = mix(col, vec3(1.0, 0.85, 0.30), aafill(sdBox(a - cp, vec2(0.017, 0.010)) - 0.003) * gw);
 				col += warm * smoothstep(0.03, 0.0, distance(a, cp)) * 0.5;
 			}
 		}

@@ -29,8 +29,26 @@ extends Node
 # Each client writes ONLY its own player key via set_document(merge:true) — a
 # Firestore deep-merge preserves sibling keys, so concurrent joins/score writes
 # never clobber each other. "Leaving" tombstones the key (state="left") because a
-# merge can't delete a map key; the UI filters tombstones out. The whole doc is
-# deleted when the creator cancels in lobby, or the last real player leaves.
+# merge can't delete a map key; the UI filters tombstones out.
+#
+# --- WHY A CLOSED ROOM IS A WRITE, NEVER A DELETE ---------------------------
+# The Android plugin's document listener only emits when the snapshot EXISTS
+# (Firestore.kt: `if (snapshot != null && snapshot.exists())`) — so a DELETED
+# document is never delivered to a single watcher. Every "the room ended" signal
+# therefore has to be a WRITE that leaves the doc in place; deleting the room while
+# people are still sitting in it froze them on a live-looking lobby forever (the
+# host's Cancel Room did exactly that).
+#
+# So a room that ends while others may still be watching it is CLOSED, not deleted:
+# `cancelled: true` plus status "finished" (see _close_room). Status is deliberately
+# kept inside the released ['lobby','playing','finished'] set so already-shipped
+# clients — which route any UNKNOWN status straight into the game — degrade to the
+# final-standings face instead of launching a phantom match. The doc itself is reaped
+# later by the expiry sweep, when nobody is watching any more.
+#
+# Deletes still happen where no watcher can be left behind (last member out, expiry
+# sweep) — and _watchdog covers even those, because an already-released host still
+# deletes the room on cancel. See WATCHDOG_SECS.
 #
 # Reads (initial fetch + lobby browse) use Firestore's REST endpoints (the
 # plugin's collection callbacks are unreliable on Android — same as the
@@ -123,14 +141,40 @@ const DIFFS: Array[String] = ["easy", "moderate", "hard"]
 # has it open, and dies within TTL_SECS once everyone closes it.
 const TTL_SECS := 20 * 60
 
+# Expiry horizon stamped when a race STARTS, instead of TTL_SECS. Nobody heartbeats a
+# room while the race is on — every player is in the game, not on the room screen, and
+# the keepalive is host-only — so a race longer than TTL_SECS with no finishers yet used
+# to expire out from under everyone still playing, and the sweep would delete it
+# mid-run. One write at start (and one per finish) covers the whole race window without
+# adding a single heartbeat. Generous on purpose: a strong player on Easy can run a very
+# long time, and an over-long room costs nothing but a doc waiting to be swept.
+const RACE_TTL_SECS := 60 * 60
+
 # How many expired rooms one sweep pass reaps. Deletes are a round-trip each, so
 # this bounds what a single lobby-open contributes in the background; every
 # client that opens the lobby runs a pass, so the backlog drains collectively.
 const SWEEP_LIMIT := 10
 
+# How long a CLOSED room (host cancelled — see _close_room) lingers before it becomes
+# sweepable. It only has to outlive the push that tells everyone it closed; a couple of
+# minutes also means a player who opens the room from a stale hub card right afterwards
+# still reads "the host closed this room" instead of the blanker "no longer exists".
+const CLOSED_LINGER := 2 * 60
+
+# --- watchdog (the backstop for invisible deletes) --------------------------
+# The plugin never reports a DELETED document (see the header note), so a watched room
+# that disappears — reaped by the expiry sweep, emptied by the last member out, or
+# cancelled by an ALREADY-RELEASED host, which still deletes the doc — would leave this
+# client frozen on a stale screen forever. So while a room is watched and still live, we
+# confirm it exists over REST whenever no push has landed for WATCHDOG_SECS, and emit the
+# "gone" state ourselves. Costs one read per idle window per open room screen, and
+# nothing at all while pushes are flowing (any push resets the clock).
+const WATCHDOG_SECS := 45
+const WATCHDOG_TICK := 15
+
 const ID_LEN := 6
-# Crockford base32 minus I,L,O,U — unambiguous when shared verbally / typed.
-const ID_ALPHABET := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+# Digits only — the shareable room code is 6 numbers, no letters.
+const ID_ALPHABET := "0123456789"
 const MAX_SCORE := 9999   # mirror scoreOk() in firestore.rules
 
 const _COLL := "contests"
@@ -156,6 +200,11 @@ var _sim_shards: Dictionary = {}      # shard index -> rooms map (lobby index)
 # Rooms this client currently has a live listener attached to (so document_changed
 # only re-emits for docs a screen actually asked to watch).
 var _watching: Dictionary = {}        # cid -> true
+# Watchdog bookkeeping per watched room: {t: unix of the last emit, st: the status we
+# last emitted, gone: we've already reported it missing}. See WATCHDOG_SECS.
+var _watch_seen: Dictionary = {}      # cid -> {t:int, st:String, gone:bool}
+var _watchdog: Timer
+var _watchdog_busy := false           # one presence read in flight at a time
 
 # ---- public lobby live state ----
 var _watching_lobby := false
@@ -258,6 +307,49 @@ func active_room() -> Dictionary:
 	current_room_title = String(room.get("title", ""))
 	current_room_is_host = String(room.get("creator_uid", "")) == _uid()
 	return room
+
+# Keep the instant-display room cache honest against a room state we've just observed
+# (a live-listener push or a one-shot load). The Arena hub paints its "return to your
+# room" card synchronously off current_room_id BEFORE it can validate over the network;
+# if the room we point at has gone terminal for us — finished, deleted, or we were
+# kicked / left — clearing the pointer the instant we see that means the hub never
+# paints the stale card, so there's no card→CREATE/JOIN flash on the way back from a
+# race that just ended (or a room the host cancelled). This is the in-session partner
+# to active_room()'s self-heal and the loading-screen validation: whichever observes
+# the terminal state first clears the pointer. Fire-and-forget — _set_current_room
+# clears the in-memory pointer SYNCHRONOUSLY (all a same-frame hub paint reads) and
+# persists the empty pointer in the background. The `!= current_room_id` guard makes
+# it idempotent: once cleared, repeat pushes for the same room no longer match.
+func _reconcile_room_cache(cid: String, room: Dictionary) -> void:
+	if cid.is_empty() or cid != current_room_id:
+		return
+	if _room_terminal_for_me(room):
+		_set_current_room("")
+
+# A room no longer holds a seat for us: it's gone/deleted ({}), the race is finished,
+# or our own player row is missing or tombstoned (kicked, or left from elsewhere). A
+# room that's still in the lobby or playing with us an active member is NOT terminal —
+# we can still return to it, so the hub's card stays.
+func _room_terminal_for_me(room: Dictionary) -> bool:
+	if room.is_empty():
+		return true
+	if String(room.get("status", "")) == "finished":
+		return true
+	var mine: Dictionary = (room.get("players", {}) as Dictionary).get(_uid(), {})
+	return mine.is_empty() or String(mine.get("state", "")) == "left"
+
+# Reconcile the cache off the freshest room state, then fan the change out to watchers.
+# Every room_changed emission goes through here so the pointer self-heals wherever the
+# terminal transition is first seen (finish, host-cancel, kick, delete).
+func _emit_room(cid: String, room: Dictionary) -> void:
+	_reconcile_room_cache(cid, room)
+	if _watching.has(cid):
+		_watch_seen[cid] = {
+			"t": _now(),
+			"st": String(room.get("status", "")),
+			"gone": room.is_empty(),
+		}
+	emit_signal("room_changed", cid, room)
 
 # Sets the room pointer AND persists it to /users/{uid}.current_room (merge write, so
 # it never clobbers the wallet/cosmetics on that same doc). This is what makes the
@@ -431,6 +523,10 @@ func join_contest(raw_id: String) -> Dictionary:
 	var room := await _load_room(cid)
 	if room.is_empty():
 		return {"ok": false, "error": "not_found"}
+	# A room the host closed sticks around (see _close_room) instead of vanishing, so
+	# it's worth telling those two cases apart: "already racing" vs "closed for good".
+	if String(room.get("status", "")) == "finished":
+		return {"ok": false, "error": "closed"}
 	if String(room.get("status", "")) != "lobby":
 		return {"ok": false, "error": "ended"}
 
@@ -475,24 +571,35 @@ func _count_active(players: Dictionary) -> int:
 
 # A normal participant leaves (also used when the creator leaves a lobby, which
 # tears the whole room down for everyone).
-func leave_contest(cid: String) -> void:
+# Returns true when the leave was actually recorded. A caller that navigates away on a
+# FAILED leave would strand the player: their row still holds a seat in a room the hub
+# no longer points at (and their unfinished row blocks everyone else's all-done check).
+func leave_contest(cid: String) -> bool:
 	var room := await _load_room(cid)
-	if current_room_id == cid:
-		await _set_current_room("")
 	if room.is_empty():
-		return
+		# Nothing to leave — but a pointer at a room that's gone is exactly the stale
+		# pointer active_room() would clear anyway, so drop it.
+		if current_room_id == cid:
+			await _set_current_room("")
+		return true
 	var is_creator := String(room.get("creator_uid", "")) == _uid()
 	var status := String(room.get("status", ""))
 
-	# Creator abandoning a lobby cancels the room entirely.
+	# Creator abandoning a lobby cancels the room entirely — same terminal write as
+	# Cancel Room, so everyone still sitting in the lobby is actually told.
 	if is_creator and status == "lobby":
-		await _lobby_close(room, cid)
-		await _delete_room(cid)
-		return
+		var closed := await _close_room(cid, room)
+		if closed and current_room_id == cid:
+			await _set_current_room("")
+		return closed
 
-	# Tombstone my own row, then republish the active count. The delete rule keys on
-	# member_count <= 0, so a last-leaver must lower it before the doc can be removed.
-	await _write_player(cid, _uid(), {"state": "left"})
+	# Tombstone my own row, then republish the active count.
+	if not await _write_player(cid, _uid(), {"state": "left"}):
+		return false
+	# Only now is the seat really given up; clearing the pointer before this point meant
+	# a rejected/failed write left the client believing it had left a room it hadn't.
+	if current_room_id == cid:
+		await _set_current_room("")
 	var players: Dictionary = room.get("players", {})
 	if players.has(_uid()):
 		players[_uid()]["state"] = "left"
@@ -502,9 +609,14 @@ func leave_contest(cid: String) -> void:
 		"expires_at": _expires_iso(_now()),
 		"expires_unix": _expires_unix(_now()),
 	}, true)
+	# Last one out CLOSES the room rather than deleting it. Deleting needed the
+	# "member_count <= 0" delete rule, which any member could reach by simply writing
+	# that count — a one-write way to destroy a live 45-player race. With the room
+	# closed instead, it leaves the browse list the same way every other ended room
+	# does and the server sweep reaps the doc once it expires.
 	if remaining <= 0:
-		await _lobby_close(room, cid)
-		await _delete_room(cid)
+		await _close_room(cid, room)
+	return true
 
 # Best-effort cleanup on account deletion: leave whatever room we're currently in.
 # The single-doc model has no per-uid query, so we can only reach the active room;
@@ -513,20 +625,59 @@ func leave_all() -> void:
 	if not current_room_id.is_empty():
 		await leave_contest(current_room_id)
 
-# Creator explicitly deletes the whole room (any status).
+# Creator closes the whole room (any status). See _close_room: this is a WRITE, not a
+# delete, because a delete is invisible to everyone still sitting in the room.
 func cancel_room(cid: String) -> Dictionary:
 	var room := await _load_room(cid)
-	if current_room_id == cid:
-		await _set_current_room("")
 	if room.is_empty():
+		if current_room_id == cid:
+			await _set_current_room("")
 		return {"ok": true}
 	if String(room.get("creator_uid", "")) != _uid():
 		return {"ok": false, "error": "not_creator"}
-	# Drop member_count to 0 first so the empty-delete rule path also covers us.
-	await _write_room(cid, {"member_count": 0}, true)
-	await _lobby_close(room, cid)
-	await _delete_room(cid)
+	# A room that already reached its end is NOT re-closable. Now that closing is a
+	# write everyone sees (it used to be a delete nobody saw), writing it over a room
+	# that finished on its own would replace a legitimate final podium with "the host
+	# closed this room" on every watcher's screen — for a race that genuinely ran to its
+	# end. Reachable via a confirm dialog opened on the results board that the host taps
+	# through after the race finalized underneath it. Nothing left to close: succeed.
+	if String(room.get("status", "")) == "finished":
+		if current_room_id == cid:
+			await _set_current_room("")
+		return {"ok": true}
+	if not await _close_room(cid, room):
+		return {"ok": false, "error": "write_failed"}
+	if current_room_id == cid:
+		await _set_current_room("")
 	return {"ok": true}
+
+# Ends a room that other people may still be watching. The doc STAYS — a deleted
+# document never reaches a listener (see the header note), so the only way to tell the
+# room it's over is to leave a state behind that says so:
+#
+#   cancelled: true    the real signal; screens render "the host closed this room"
+#   status: "finished" so ALREADY-RELEASED clients (which know only lobby/playing/
+#                      finished, and treat anything else as "playing" — i.e. launch the
+#                      match) land on the final-standings face instead
+#   member_count: 0    frees the room for the plain empty-room delete rule
+#   expires_unix       CLOSED_LINGER out, so the sweep reaps the doc once the push has
+#                      long since landed and nobody is watching any more
+#
+# The lobby entry is closed the same way it always was, so the room stops being listed
+# for browsers immediately.
+func _close_room(cid: String, room: Dictionary) -> bool:
+	var now := _now()
+	if not await _write_room(cid, {
+		"status": "finished",
+		"cancelled": true,
+		"member_count": 0,
+		"finished_at": now,
+		"expires_at": _expires_iso(now),
+		"expires_unix": now + CLOSED_LINGER,
+	}, true):
+		return false
+	await _lobby_close(room, cid)
+	return true
 
 # Creator removes a member (tombstones their row).
 func kick_member(cid: String, target_uid: String) -> Dictionary:
@@ -571,7 +722,9 @@ func start_room(cid: String) -> Dictionary:
 		# Legacy key: drop below the [0,1) range so older builds stop listing it.
 		"lobby_key": -1.0,
 		"expires_at": _expires_iso(now),
-		"expires_unix": _expires_unix(now),
+		# The race horizon, not the lobby one: from here until the results are in,
+		# nobody is on a screen that heartbeats this room (see RACE_TTL_SECS).
+		"expires_unix": now + RACE_TTL_SECS,
 	}, true)
 	# A started race is no longer joinable — take it out of the public lobby.
 	await _lobby_close(room, cid)
@@ -602,21 +755,38 @@ func submit_result(cid: String, score: int) -> Dictionary:
 	_played_contests[cid] = true
 	var s := clampi(score, 0, MAX_SCORE)
 	var now := _now()
-	# Fold an expiry refresh into the score write: with keepalive now host-only, this
-	# keeps a long race from being reaped by the sweep while the host is absent.
+
+	# Read BEFORE writing (this is the same single read the all-done check always
+	# needed — just moved ahead of the write, so it costs nothing extra). It buys the
+	# membership check: a score merge writes `state:"done"` over our row, so a player
+	# the host kicked mid-race would otherwise UN-tombstone themselves and reappear on
+	# the board. Reading first is the only point at which we can still see that we're
+	# out. A room that's simply gone falls through — there is nothing to write into
+	# (rules deny a merge that would re-create it) and we're already recorded locally.
+	var room := await _load_room(cid)
+	var players: Dictionary = room.get("players", {})
+	# Only skip the write when we actually READ a room that says we're out. An empty
+	# read is ambiguous — the room is gone, OR the request just failed — and a score is
+	# far too expensive to drop on a maybe, so we still write: a merge into a room that
+	# really is gone is denied by the rules anyway, which costs nothing.
+	var mine: Dictionary = players.get(_uid(), {})
+	if not room.is_empty() and not mine.is_empty() \
+			and String(mine.get("state", "")) == "left":
+		return room                      # kicked / left: our race no longer counts
+	# Fold an expiry refresh into the score write, on the RACE horizon: every finish
+	# buys the room another window, so stragglers can't be reaped mid-race.
 	await _write_room(cid, {
 		"players": {_uid(): {
 			"name": _name(), "state": "done", "score": s, "finished_at": now,
 		}},
-		"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
+		"expires_at": _expires_iso(now), "expires_unix": now + RACE_TTL_SECS,
 	}, true)
 
-	var room := await _load_room(cid)
 	if room.is_empty() or String(room.get("status", "")) != "playing":
 		return room
-	var players: Dictionary = room.get("players", {})
-	# Guard read-after-write staleness for OUR row (REST reads are eventually
-	# consistent): force our just-written done values in before the all-done check.
+	# The roster we read predates our own write, so fold our result in before the
+	# all-done check (the same correction the post-write read used to need for REST's
+	# eventual consistency — either way this row is authoritative locally).
 	if not players.has(_uid()):
 		players[_uid()] = _new_player(false, now)
 	players[_uid()]["state"] = "done"
@@ -774,7 +944,11 @@ func standings_from_room(room: Dictionary) -> Array:
 # One-shot fetch of a room's current state (shaped, or {} if gone). Screens use it
 # for an immediate paint; watch_room() then keeps it live.
 func load_room(cid: String) -> Dictionary:
-	return await _load_room(cid)
+	var room := await _load_room(cid)
+	# A one-shot paint of a room that's already terminal for us (e.g. opening a stale
+	# hub card into a since-finished room) self-heals the pointer too.
+	_reconcile_room_cache(cid, room)
+	return room
 
 # Attach a live listener for `cid`. Fires room_changed(cid, room) with the current
 # state immediately and on every subsequent change (an empty room = deleted).
@@ -782,18 +956,76 @@ func watch_room(cid: String) -> void:
 	if cid.is_empty():
 		return
 	_watching[cid] = true
+	_watch_seen[cid] = {"t": _now(), "st": "", "gone": false}
 	if _is_editor:
 		call_deferred("_sim_emit", cid)
 	else:
 		# Watch the coalesced materialized mirror, not the raw room (see _STATE_COLL).
 		Firebase.firestore.listen_to_document(_STATE_COLL + "/" + cid)
+		_start_watchdog()
 
 func unwatch_room(cid: String) -> void:
 	if not _watching.has(cid):
 		return
 	_watching.erase(cid)
+	_watch_seen.erase(cid)
 	if not _is_editor:
 		Firebase.firestore.stop_listening_to_document(_STATE_COLL + "/" + cid)
+		if _watching.is_empty() and _watchdog:
+			_watchdog.stop()
+
+# ---- watchdog: notice a room that vanished (see WATCHDOG_SECS) ----
+
+func _start_watchdog() -> void:
+	if _watchdog == null:
+		_watchdog = Timer.new()
+		_watchdog.wait_time = WATCHDOG_TICK
+		_watchdog.timeout.connect(_on_watchdog)
+		add_child(_watchdog)
+	if _watchdog.is_stopped():
+		_watchdog.start()
+
+# A listener push always resets the clock, so this only ever reads for a room that has
+# gone quiet. Rooms already reported gone, and rooms whose last state was terminal, are
+# skipped — there's nothing left to learn about them.
+func _on_watchdog() -> void:
+	if _watchdog_busy or _watching.is_empty():
+		return
+	var now := _now()
+	for cid in _watching.keys():
+		var seen: Dictionary = _watch_seen.get(cid, {})
+		if bool(seen.get("gone", false)) or String(seen.get("st", "")) == "finished":
+			continue
+		if now - int(seen.get("t", now)) < WATCHDOG_SECS:
+			continue
+		_watchdog_busy = true
+		var room := await _load_room(cid)
+		_watchdog_busy = false
+		if not _watching.has(cid):
+			continue
+		if room.is_empty():
+			_emit_room(cid, {})       # deleted out from under us — nobody would have told us
+			continue
+		# Still there: don't re-emit an unchanged room (that would rebuild the screen
+		# every window and restart its animations), but DO push a status we somehow
+		# missed — that's a dropped listener, and the room moving on without us.
+		var seen2: Dictionary = _watch_seen.get(cid, {})
+		if String(room.get("status", "")) != String(seen2.get("st", "")):
+			_emit_room(cid, room)
+		else:
+			seen2["t"] = _now()
+			_watch_seen[cid] = seen2
+
+# Coming back from the background is the likeliest moment to have missed something (the
+# listener was torn down while we were away, and anything deleted meanwhile is invisible
+# either way), so age every watched room out and let the next tick re-confirm it.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_APPLICATION_RESUMED:
+		return
+	for cid in _watch_seen:
+		var seen: Dictionary = _watch_seen[cid]
+		seen["t"] = 0
+		_watch_seen[cid] = seen
 
 # Android live-listener callback. `data` is the changed document (decoded by the
 # plugin, or REST-style with a "fields" wrapper). An empty / identity-less payload
@@ -815,9 +1047,9 @@ func _on_document_changed(document_path: String, data: Dictionary) -> void:
 	if data.has("fields"):
 		raw = _fields(data["fields"])
 	if raw.is_empty() or not raw.has("creator_uid"):
-		emit_signal("room_changed", cid, {})   # deleted / gone
+		_emit_room(cid, {})   # deleted / gone
 		return
-	emit_signal("room_changed", cid, _shape_room(raw, cid))
+	_emit_room(cid, _shape_room(raw, cid))
 
 # Live-listener callback for the materialized contest_state/{cid} the client watches
 # in place of the raw room. Payload is { summary:{...}, updated_unix }. An empty /
@@ -835,7 +1067,7 @@ func _on_state_changed(document_path: String, data: Dictionary) -> void:
 	if not (summary is Dictionary) or (summary as Dictionary).is_empty():
 		call_deferred("_confirm_room_presence", cid)
 		return
-	emit_signal("room_changed", cid, _shape_room(summary, cid))
+	_emit_room(cid, _shape_room(summary, cid))
 
 # Resolve an empty contest_state push against the source of truth: the room still
 # exists (not yet materialized) → emit its current raw state; it's really gone → {}.
@@ -845,14 +1077,14 @@ func _confirm_room_presence(cid: String) -> void:
 	var room := await _load_room(cid)
 	if not _watching.has(cid):
 		return
-	emit_signal("room_changed", cid, room)
+	_emit_room(cid, room)
 
 # Editor-sim emit for a watched room.
 func _sim_emit(cid: String) -> void:
 	if not _watching.has(cid):
 		return
 	var r: Variant = _sim_rooms.get(cid, null)
-	emit_signal("room_changed", cid, _shape_room(r, cid) if r is Dictionary else {})
+	_emit_room(cid, _shape_room(r, cid) if r is Dictionary else {})
 
 # Called after every sim write so watchers see the change live.
 func _sim_touch(cid: String) -> void:
@@ -1236,11 +1468,18 @@ func _gen_id() -> String:
 		s += ID_ALPHABET[randi() % ID_ALPHABET.length()]
 	return s
 
+# Accepts the LEGACY Crockford-base32 alphabet as well as the digits we now generate.
+# Already-released builds hand out codes with letters in them, and their rooms show up
+# in the browse list for everyone — validating only against ID_ALPHABET made every one
+# of those rooms unjoinable ("no room found") until those builds age out. New codes are
+# still digits-only; this only widens what we'll ACCEPT.
+const ID_ALPHABET_LEGACY := "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
 func _valid_id(cid: String) -> bool:
 	if cid.length() != ID_LEN:
 		return false
 	for c in cid:
-		if ID_ALPHABET.find(c) < 0:
+		if ID_ALPHABET_LEGACY.find(c) < 0:
 			return false
 	return true
 
@@ -1267,7 +1506,12 @@ func _load_room(cid: String) -> Dictionary:
 
 # Merge-write on the room doc. In the sim, `merge` deep-merges (including a nested
 # `players` map) so a partial write never drops sibling fields/players.
-func _write_room(cid: String, data: Dictionary, merge: bool) -> void:
+# Returns whether the write landed. The plugin answers every write on ONE shared
+# signal, so a result can't be correlated to its request with certainty — which is why
+# this only ever reports failure on an EXPLICIT `status:false`, never on a shape it
+# doesn't recognise. Good enough for the paths that must not pretend to have succeeded
+# (giving up a seat, closing a room), and harmless everywhere else.
+func _write_room(cid: String, data: Dictionary, merge: bool) -> bool:
 	if _is_editor:
 		if merge and _sim_rooms.has(cid):
 			var room: Dictionary = _sim_rooms[cid]
@@ -1284,19 +1528,20 @@ func _write_room(cid: String, data: Dictionary, merge: bool) -> void:
 		else:
 			_sim_rooms[cid] = data.duplicate(true)
 		_sim_touch(cid)
-		return
+		return true
 	Firebase.firestore.set_document(_COLL, cid, data, merge)
-	await Firebase.firestore.write_task_completed
+	var res: Variant = await Firebase.firestore.write_task_completed
+	return not (res is Dictionary and (res as Dictionary).get("status", true) == false)
 
 # Merge-write a single player's record (only touches players.<uid>).
-func _write_player(cid: String, uid: String, rec: Dictionary) -> void:
-	await _write_room(cid, {"players": {uid: rec}}, true)
+func _write_player(cid: String, uid: String, rec: Dictionary) -> bool:
+	return await _write_room(cid, {"players": {uid: rec}}, true)
 
 func _delete_room(cid: String) -> void:
 	if _is_editor:
 		_sim_rooms.erase(cid)
 		if _watching.has(cid):
-			emit_signal("room_changed", cid, {})
+			_emit_room(cid, {})
 		return
 	Firebase.firestore.delete_document(_COLL, cid)
 	await Firebase.firestore.delete_task_completed
@@ -1339,6 +1584,10 @@ func _shape_room(raw: Variant, cid: String) -> Dictionary:
 		# shard lists the room (-1 / 0 = not listed, i.e. private or pre-deadline build).
 		"start_deadline": int(src.get("start_deadline", 0)),
 		"lobby_shard": int(src.get("lobby_shard", -1)),
+		# Set by _close_room: the room didn't run to a finish, the host ended it. Rides
+		# alongside status "finished" (see _close_room for why the status isn't its own
+		# value), and is what screens key the "host closed this room" face on.
+		"cancelled": bool(src.get("cancelled", false)),
 		"players": players,
 	}
 

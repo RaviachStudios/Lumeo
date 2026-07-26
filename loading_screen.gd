@@ -20,6 +20,8 @@ extends Control
 # When the data is ready (or a safety timeout elapses) it calls
 # game_manager.show_home(), which frees this screen.
 
+const ArenaFX := preload("res://arena_fx.gd")
+
 var game_manager: Node
 
 # #051438 brand navy.
@@ -156,6 +158,18 @@ func _run_boot() -> void:
 		while not CoinsManager.is_loaded() and _elapsed(start) < MAX_SEC:
 			await get_tree().process_frame
 	_set_progress(P_WALLET)
+	# Validate the persisted Arena room pointer now, while the loading screen is up, so
+	# the Arena hub opens on the TRUTH. The hub paints its "return to your room" card
+	# instantly off the synchronous cache; if that pointer is stale (the room finished,
+	# we were kicked, or it was deleted) the hub used to flash the card for ~1s before
+	# active_room()'s network read self-healed it and reverted to CREATE / JOIN. Doing
+	# that read here — a single fetch, fired in parallel with the billing/boards waits
+	# below — self-heals the pointer before the hub is ever shown, so there's no flash.
+	# Guests, and signed-in players with no cached room, have nothing to check.
+	var arena_done := [true]
+	if FirebaseManager.is_signed_in() and ContestManager.has_cached_room():
+		arena_done[0] = false
+		_warm_arena_room(arena_done)
 	# Warm Google Play Billing here, while the loading screen is already up, so
 	# the coin-pack popup opens with prices in place instead of flashing
 	# "LOADING…" buttons. On devices without the billing plugin (editor,
@@ -171,10 +185,16 @@ func _run_boot() -> void:
 	# failed fetch costs nothing extra (the screen just loads on open, as before);
 	# MAX_SEC caps a stalled one.
 	if FirebaseManager.is_signed_in():
-		while LeaderboardManager.is_warming() and not LeaderboardManager.warm_ready() \
-				and _elapsed(start) < MAX_SEC:
+		while ((LeaderboardManager.is_warming() and not LeaderboardManager.warm_ready()) \
+				or not arena_done[0]) and _elapsed(start) < MAX_SEC:
 			await get_tree().process_frame
 	_set_progress(P_BOARDS)
+	# Pre-bake the Arena crowd sprites while the loading screen is still up. Each body is
+	# a per-pixel CPU rasterization; doing the whole crowd on the main thread the instant
+	# the hub opens was the ~0.5-1s hitch when tapping ARENA from home. Baking here (cached
+	# for the session, everyone gets the same crowd) makes the first open paint instantly.
+	# Guarded so it only ever runs once per size — a no-op if the cache is already warm.
+	ArenaFX.warm_crowd(get_viewport_rect().size)
 	# Whatever is left of the minimum-display hold. On a fast boot (and always for
 	# guests, who have no wallet / boards to wait on) every stage above resolves at
 	# once, so without this the bar would snap to P_BOARDS and sit dead for the whole
@@ -203,3 +223,12 @@ func _run_boot() -> void:
 
 func _elapsed(start_ms: int) -> float:
 	return float(Time.get_ticks_msec() - start_ms) / 1000.0
+
+# Fires active_room() to validate/self-heal the cached Arena room pointer, flipping
+# the shared flag when done so the boot loop can wait it out in parallel with the
+# other stages. `flag` is a single-element Array used as a mutable by-ref cell. The
+# MAX_SEC cap in _run_boot bounds a stalled read — the flag simply never flips and the
+# hand-off proceeds, leaving the hub to fall back to its own async validation.
+func _warm_arena_room(flag: Array) -> void:
+	await ContestManager.active_room()
+	flag[0] = true

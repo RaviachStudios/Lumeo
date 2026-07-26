@@ -137,6 +137,11 @@ func setup(size: Vector2) -> void:
 	set_process(true)
 
 func relayout(size: Vector2) -> void:
+	# The hub calls this from its _layout(), which fires once right after setup() with
+	# the SAME viewport size — rebuilding then would re-run the whole crowd bake for
+	# nothing. Only rebuild when the size actually changed (a rotation / resize).
+	if size == _sz:
+		return
 	_sz = size
 	_build()
 
@@ -275,24 +280,32 @@ func _build_crowd() -> void:
 	_crowd_bodies.queue_redraw()
 
 # Deterministic 0..1 hash so a person's look never re-randomises between rebuilds.
-func _rnd(seed: int) -> float:
+static func _rnd(seed: int) -> float:
 	return absf(fmod(sin(float(seed) * 12.9898 + 3.17) * 43758.5453, 1.0))
 
-func _add_person(pos: Vector2, scl: float, seed: int, face: float = 0.0, simple: bool = false) -> void:
-	_people.append({
-		"pos": pos,
+# The bake-relevant appearance of spectator `seed` at facing `face` and scale `scl` —
+# exactly the fields _bake_person reads (and nothing positional). Factored out so the
+# live crowd build and the loading-screen pre-warm derive byte-identical looks, and thus
+# identical bake cache keys. See warm_crowd / _crowd_looks.
+static func _person_look(scl: float, seed: int, face: float) -> Dictionary:
+	return {
 		"s": scl * 1.05,
 		"face": face,
-		"simple": simple,
-		"anim": int(_rnd(seed * 7 + 1) * 5.0) % 5,
-		"phase": _rnd(seed * 3 + 2) * TAU,
-		"speed": lerpf(0.85, 1.25, _rnd(seed * 5 + 4)),
 		"skin": SKIN_TONES[int(_rnd(seed * 11 + 3) * SKIN_TONES.size()) % SKIN_TONES.size()],
 		"hair": HAIR_COLS[int(_rnd(seed * 13 + 5) * HAIR_COLS.size()) % HAIR_COLS.size()],
 		"shirt": SHIRT_COLS[int(_rnd(seed * 17 + 6) * SHIRT_COLS.size()) % SHIRT_COLS.size()],
 		"pants": PANTS_COLS[int(_rnd(seed * 19 + 7) * PANTS_COLS.size()) % PANTS_COLS.size()],
 		"flip": _rnd(seed * 23 + 8) < 0.5,
-	})
+	}
+
+func _add_person(pos: Vector2, scl: float, seed: int, face: float = 0.0, simple: bool = false) -> void:
+	var d := _person_look(scl, seed, face)
+	d["pos"] = pos
+	d["simple"] = simple
+	d["anim"] = int(_rnd(seed * 7 + 1) * 5.0) % 5
+	d["phase"] = _rnd(seed * 3 + 2) * TAU
+	d["speed"] = lerpf(0.85, 1.25, _rnd(seed * 5 + 4))
+	_people.append(d)
 
 # Ground shadows sit under the bodies — static (they don't bob), so painted once.
 func _draw_crowd_shadows() -> void:
@@ -394,7 +407,44 @@ func _limb(canvas: CanvasItem, a: Vector2, c: Vector2, w: float, col: Color) -> 
 # a small RGBA image, composited back-to-front with a 1px soft edge. The result is shown
 # as a Sprite2D anchored at _PERSON_FEET, so a bob is just a cheap vertical move. Built
 # in the same local frame as the old _draw_person (origin = feet, y up = negative).
-func _bake_person(p: Dictionary) -> ImageTexture:
+# Baked spectator bodies keyed by their appearance signature, shared across every
+# ArenaFX instance for the whole session. The body art is fully determined by the
+# figure's scale, facing and palette — never by its screen position — and that scale is
+# constant (single crowd row), so the same handful of textures recur on every hub open
+# and on the redundant relayout rebuild. Rasterising each is ~4k pixels × 11 shapes of
+# GDScript, so re-baking them was the bulk of the ~0.5-1s stall when opening the Arena;
+# caching means only the FIRST time a given look is needed pays for it.
+static var _person_cache: Dictionary = {}
+
+# Pre-bake every spectator body the hub's crowd will need for a viewport of `size`,
+# populating the shared texture cache. Called from the loading screen so the FIRST
+# Arena open reuses these instead of rasterising the whole crowd on the main thread the
+# instant the hub appears (the ~0.5-1s open stall). Pure CPU work, safe off-tree — no
+# nodes are created. A no-op once the cache already holds these looks; a viewport
+# rotation between here and the open just re-bakes on demand (self-healing).
+static func warm_crowd(size: Vector2) -> void:
+	for look in _crowd_looks(size):
+		_bake_person(look)
+
+# The set of distinct spectator LOOKS for a `size`-wide viewport, matching the single
+# front row _build_crowd lays out (ROWS == 1 → constant 1.12 scale, no stagger). Only
+# the appearance (scale / facing / palette) is reproduced here; positions live in the
+# live build. Kept in lockstep with _build_crowd's per-fan derivation so both bake the
+# same cache keys — if that loop changes shape, warming simply misses and the open
+# re-bakes as it does today (no correctness impact).
+static func _crowd_looks(size: Vector2) -> Array:
+	var looks: Array = []
+	var a0 := deg_to_rad(148.0)
+	var a1 := deg_to_rad(392.0)
+	var base_n := int(clampf(size.x / 100.0, 9.0, 14.0))
+	for i in base_n:
+		var f := (float(i) + 0.5) / float(base_n)
+		var ang := lerpf(a0, a1, f)
+		var face := clampf(-cos(ang) * 1.7, -1.0, 1.0)
+		looks.append(_person_look(1.12, i, face))
+	return looks
+
+static func _bake_person(p: Dictionary) -> ImageTexture:
 	var s: float = p["s"]
 	var skin: Color = p["skin"]
 	var hair: Color = p["hair"]
@@ -402,6 +452,11 @@ func _bake_person(p: Dictionary) -> ImageTexture:
 	var pants: Color = p["pants"]
 	var fdir := -1.0 if p["flip"] else 1.0
 	var face: float = p.get("face", 0.0)
+
+	var key := "%.3f|%d|%.3f|%s|%s|%s|%s" % [s, 1 if p["flip"] else 0, face, skin, hair, shirt, pants]
+	var cached: Variant = _person_cache.get(key)
+	if cached is ImageTexture:
+		return cached
 
 	var hip_y := -15.0 * s
 	var shoulder_y := -30.0 * s
@@ -432,13 +487,35 @@ func _bake_person(p: Dictionary) -> ImageTexture:
 		{"c": head + Vector2(0, head_r * 0.55), "r": head_r * 1.0, "col": skin},     # reveal face
 	]
 
+	# Precompute an expanded AABB per shape (its extent + the 1px soft edge) so the
+	# per-pixel loop can cheaply skip the shapes a pixel is nowhere near — a pixel touches
+	# only one or two of the eleven shapes, so this rejects most of the distance math that
+	# dominated the bake.
+	var lows := PackedVector2Array()
+	var highs := PackedVector2Array()
+	for sh in shapes:
+		var rr: float = float(sh["r"]) + 1.0
+		var lo: Vector2
+		var hi: Vector2
+		if sh.has("c"):
+			var cc: Vector2 = sh["c"]
+			lo = cc - Vector2(rr, rr); hi = cc + Vector2(rr, rr)
+		else:
+			var sa: Vector2 = sh["a"]; var sb: Vector2 = sh["b"]
+			lo = Vector2(minf(sa.x, sb.x), minf(sa.y, sb.y)) - Vector2(rr, rr)
+			hi = Vector2(maxf(sa.x, sb.x), maxf(sa.y, sb.y)) + Vector2(rr, rr)
+		lows.append(lo); highs.append(hi)
+
 	var img := Image.create(_PERSON_FW, _PERSON_FH, false, Image.FORMAT_RGBA8)
 	for py in _PERSON_FH:
 		for px in _PERSON_FW:
 			# local point (drawing frame): feet at _PERSON_FEET, y up = negative
 			var lp := Vector2(float(px) + 0.5, float(py) + 0.5) - _PERSON_FEET
 			var out := Color(0, 0, 0, 0)
-			for sh in shapes:
+			for si in shapes.size():
+				if lp.x < lows[si].x or lp.x > highs[si].x or lp.y < lows[si].y or lp.y > highs[si].y:
+					continue
+				var sh: Dictionary = shapes[si]
 				var d: float
 				if sh.has("c"):
 					d = lp.distance_to(sh["c"])
@@ -449,16 +526,18 @@ func _bake_person(p: Dictionary) -> ImageTexture:
 					var col: Color = sh["col"]
 					out = _over(out, Color(col.r, col.g, col.b, col.a * cov))
 			img.set_pixelv(Vector2i(px, py), out)
-	return ImageTexture.create_from_image(img)
+	var tex := ImageTexture.create_from_image(img)
+	_person_cache[key] = tex
+	return tex
 
 # Shortest distance from point p to segment a→b.
-func _dist_to_seg(p: Vector2, a: Vector2, b: Vector2) -> float:
+static func _dist_to_seg(p: Vector2, a: Vector2, b: Vector2) -> float:
 	var ab := b - a
 	var t := clampf((p - a).dot(ab) / maxf(ab.dot(ab), 0.0001), 0.0, 1.0)
 	return p.distance_to(a + ab * t)
 
 # Straight "over" alpha compositing (src over dst).
-func _over(dst: Color, src: Color) -> Color:
+static func _over(dst: Color, src: Color) -> Color:
 	var a := src.a + dst.a * (1.0 - src.a)
 	if a <= 0.0001:
 		return Color(0, 0, 0, 0)
