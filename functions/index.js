@@ -579,23 +579,52 @@ async function sweepOrphanState() {
   }
 }
 
+// The dead keys of a lobby `rooms` map: everything no client would list, by the very
+// predicate they all apply (o > 0 && now < o + START_WINDOW). Values are
+// FieldValue.delete(), so the result merges straight in — and a MERGE naming only
+// dead keys is the point: a full rewrite would drop a room claimed in the window
+// between the read and the write, which is the race the client-side compaction always
+// carried.
+function deadLobbyKeys(rooms) {
+  const cutoff = nowUnix() - LOBBY_ENTRY_TTL_SECS;
+  const dead = {};
+  for (const [cid, e] of Object.entries(rooms || {})) {
+    // <= , not < : the clients drop an entry the moment now >= o + START_WINDOW, so
+    // one sitting exactly on the boundary is already dead to every reader.
+    if (!e || !Number.isFinite(e.o) || e.o <= cutoff) dead[cid] = FieldValue.delete();
+  }
+  return dead;
+}
+
 async function pruneLobbyIndex() {
   const ref = db.collection("lobby_index").doc("open");
   const snap = await ref.get();
   if (!snap.exists) return;
-  const rooms = (snap.data() || {}).rooms || {};
-  const cutoff = nowUnix() - LOBBY_ENTRY_TTL_SECS;
-  const dead = {};
-  let any = false;
-  for (const [cid, e] of Object.entries(rooms)) {
-    if (!e || !Number.isFinite(e.o) || e.o < cutoff) {
-      dead[cid] = FieldValue.delete();
-      any = true;
-    }
-  }
-  if (!any) return;
+  const dead = deadLobbyKeys((snap.data() || {}).rooms);
+  if (Object.keys(dead).length === 0) return;
   await ref.set({rooms: dead, updated_unix: nowUnix()}, {merge: true});
 }
+
+// Reclaim dead keys from the LEGACY 5-shard lobby index (lobby/s{N}).
+//
+// Clients still write it — create_contest claims a slot and start/cancel/leave
+// tombstone the entry to o=0, because a merge write can't delete a map key — but the
+// compaction that used to reclaim those keys ran from watch_lobby(), and the Stage-2
+// client never takes that path any more (it reads lobby_index/open instead). So the
+// shards only ever grow. Nothing player-visible: every reader filters by the liveness
+// predicate above. But the keys are real clutter, and a shard that fills up with them
+// costs the next host a compacting rewrite to claim a slot (_lobby_pick_shard).
+//
+// Cheap enough to be lazy about: 5 reads and at most 5 writes per pass, and an entry
+// is only listable for START_WINDOW anyway, so a few hours of junk hurts nobody.
+exports.sweepLobbyShards = onSchedule({schedule: "every 3 hours"}, async () => {
+  const snap = await db.collection("lobby").get();
+  for (const doc of snap.docs) {
+    const dead = deadLobbyKeys((doc.data() || {}).rooms);
+    if (Object.keys(dead).length === 0) continue;
+    await doc.ref.set({rooms: dead}, {merge: true});
+  }
+});
 
 // =====================================================================
 // Manual heal / seed — full recompute of both board_top docs
