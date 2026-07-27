@@ -161,5 +161,64 @@ func _run() -> void:
 	_check("a wrong-length code is still rejected",
 		(await ContestManager.load_room("A7K3M")).is_empty())
 
+	print("\n-- a finish this client never heard about still reaches the board --")
+	# The bug: the race ended in Firestore but the "finished" push never landed here
+	# (the materialized mirror is maintained by unordered trigger events, so an older
+	# revision can be published last and pin it at "playing"). finalize_if_done READS
+	# the room, so it is holding the news — it has to fan it out instead of returning
+	# quietly, which is what left players who had already finished on the waiting
+	# board for a full watchdog window while everyone else was on the podium.
+	var sim6: Dictionary = ContestManager.get("_sim_rooms")
+	var r6: Dictionary = await ContestManager.create_contest("easy", "Lost Push", false)
+	var cid6 := String(r6.get("id", ""))
+	await ContestManager.start_room(cid6)
+	var rival6: Dictionary = {"name": "Rival", "state": "lobby", "score": 0}
+	((sim6[cid6] as Dictionary)["players"] as Dictionary)["rival"] = rival6
+	ContestManager.watch_room(cid6)
+	await ContestManager.submit_result(cid6, 5)      # we finish; the rival is still racing
+	await _settle()
+	_check("one racer left, so the room stays open",
+		String((await ContestManager.load_room(cid6)).get("status", "")) == "playing")
+	_pushes.clear()
+	# The rival finishes and the room is finalized — all of it invisible to us (written
+	# straight into the store, no push).
+	rival6["state"] = "done"
+	rival6["score"] = 9
+	rival6["finished_at"] = int(Time.get_unix_time_from_system())
+	(sim6[cid6] as Dictionary)["status"] = "finished"
+	await ContestManager.finalize_if_done(cid6)
+	await _settle()
+	var last6: Dictionary = _pushes[-1] if not _pushes.is_empty() else {}
+	_check("the missed finish is pushed to the watcher",
+		String(last6.get("status", "")) == "finished", str(last6))
+	_check("...with the rival's score on it", int((last6.get("players", {}) as Dictionary)
+		.get("rival", {}).get("score", 0)) == 9, str(last6))
+	ContestManager.unwatch_room(cid6)
+
+	print("\n-- an all-done room nobody finalized is finished from the board --")
+	# Same board, other half: everyone is done but no client managed to write the flip
+	# (the last finisher's read was stale, or they were killed right after posting).
+	# Any participant may close it out, and must see it happen.
+	var r7: Dictionary = await ContestManager.create_contest("easy", "Nobody Closed", false)
+	var cid7 := String(r7.get("id", ""))
+	await ContestManager.start_room(cid7)
+	var rival7: Dictionary = {"name": "Rival", "state": "lobby", "score": 0}
+	((sim6[cid7] as Dictionary)["players"] as Dictionary)["rival"] = rival7
+	ContestManager.watch_room(cid7)
+	await ContestManager.submit_result(cid7, 3)
+	await _settle()
+	_pushes.clear()
+	rival7["state"] = "done"                          # done, but nobody wrote the flip
+	rival7["score"] = 4
+	rival7["finished_at"] = int(Time.get_unix_time_from_system())
+	await ContestManager.finalize_if_done(cid7)
+	await _settle()
+	var last7: Dictionary = _pushes[-1] if not _pushes.is_empty() else {}
+	_check("the room is finalized from here", String(last7.get("status", "")) == "finished",
+		str(last7))
+	_check("...and the write actually landed",
+		String((await ContestManager.load_room(cid7)).get("status", "")) == "finished")
+	ContestManager.unwatch_room(cid7)
+
 func _lobby_ids() -> Array:
 	return ContestManager.lobby_rows().map(func(r): return String(r.get("id", "")))

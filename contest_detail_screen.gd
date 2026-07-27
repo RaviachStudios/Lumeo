@@ -59,6 +59,10 @@ var _closed_reason := ""
 var _results_tick: Timer
 var _grace_deadline := 0         # unix sec the room may be force-finished at (0 = n/a)
 var _grace_note: Label           # the countdown label on the results board
+# Rate limit for the finalize nudge (see _nudge_finalize): unix sec we may next ask the
+# manager to converge the room. A nudge is one room read, so it must not run every tick.
+const FINALIZE_RETRY := 8
+var _finalize_next := 0
 
 # Keepalive: while this screen is open on a live (unfinished) room, push its expiry
 # horizon out so the 20-min sweep doesn't reap a quiet-but-active room out from under
@@ -69,7 +73,6 @@ var _keepalive: Timer
 var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
 var _busy := false
 var _launched := false           # guard: only auto-launch my match once
-var _finalize_sent := false      # guard: only nudge the all-done / overdue finalize once
 var _seen_uids := {}             # roster uids already animated in (slide-in only for newcomers)
 var _host_popped := false        # host badge "pop" plays once, not on every re-render
 var _result_awarded := false     # placement badge is awarded once, not per re-render
@@ -566,10 +569,13 @@ func _render_results() -> void:
 	done.sort_custom(func(a, b): return int(a.get("score", 0)) > int(b.get("score", 0)))
 
 	# Safety net: if everyone's already done but the room hasn't flipped to finished
-	# (e.g. the last finisher's read was stale), nudge it — any participant may.
-	if racing.is_empty() and not _finalize_sent:
-		_finalize_sent = true
-		ContestManager.finalize_if_done(contest_id)
+	# (the last finisher's read was stale, or its "finished" push never reached us),
+	# nudge it — any participant may. Rate-limited and RETRIED from the tick below
+	# rather than fired once: a single miss used to leave everyone who had already
+	# finished parked on this board until the watchdog's next sweep — tens of seconds
+	# after the other players were looking at the podium.
+	if racing.is_empty():
+		_nudge_finalize()
 
 	# Status chip: "N of M finished".
 	var chip := ArenaUI.stone_panel(ArenaUI.ACCENT)
@@ -604,10 +610,10 @@ func _render_results() -> void:
 	_grace_deadline = ContestManager.play_grace_deadline(_room)
 	if not racing.is_empty() and _grace_deadline > 0:
 		_grace_note = note
-		_ensure_results_tick()
 		_update_grace_note()
-	else:
-		_stop_results_tick()
+	# The tick runs for as long as this board is up, not just while a countdown is on
+	# screen: it is also what re-nudges an all-done room that hasn't flipped yet.
+	_ensure_results_tick()
 
 	# One combined table: finished first (with score + rank), then still-racing.
 	var ordered: Array = done.duplicate()
@@ -668,17 +674,44 @@ func _stop_results_tick() -> void:
 		_results_tick.stop()
 	_grace_note = null
 
-# Once a second while finishers wait on a straggler: update the countdown, and at 0
-# force-finalize the room (any participant may — see ContestManager.finalize_overdue).
+# Once a second while the results board is up: update the straggler countdown, and keep
+# the room converging on "finished" — either because everyone is done and the flip
+# hasn't landed, or because the grace window ran out on a no-show.
 func _on_results_tick() -> void:
 	if _room.is_empty() or String(_room.get("status", "")) != "playing":
 		_stop_results_tick()
 		return
 	_update_grace_note()
-	if _grace_deadline > 0 and int(Time.get_unix_time_from_system()) >= _grace_deadline \
-			and not _finalize_sent:
-		_finalize_sent = true
-		ContestManager.finalize_overdue(contest_id)
+	# Everyone on the roster shows "done" but the room is still "playing". Somebody's
+	# finish never made it to us, so keep asking (rate-limited) until it does — the
+	# manager reads the room and either publishes the finish it finds or writes it.
+	var members := _active_players()
+	var all_done := not members.is_empty()
+	for m: Dictionary in members:
+		if String(m.get("state", "")) != "done":
+			all_done = false
+			break
+	if all_done:
+		_nudge_finalize()
+		return
+	if _grace_deadline > 0 and int(Time.get_unix_time_from_system()) >= _grace_deadline:
+		_nudge_overdue()
+
+# One finalize attempt per FINALIZE_RETRY seconds, shared by both triggers (each costs
+# a room read, so they must not fire every tick).
+func _nudge_finalize() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	if now < _finalize_next:
+		return
+	_finalize_next = now + FINALIZE_RETRY
+	ContestManager.finalize_if_done(contest_id)
+
+func _nudge_overdue() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	if now < _finalize_next:
+		return
+	_finalize_next = now + FINALIZE_RETRY
+	ContestManager.finalize_overdue(contest_id)
 
 func _update_grace_note() -> void:
 	if _grace_note == null or _grace_deadline <= 0:

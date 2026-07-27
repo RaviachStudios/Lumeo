@@ -793,14 +793,9 @@ func submit_result(cid: String, score: int) -> Dictionary:
 	players[_uid()]["score"] = s
 	players[_uid()]["finished_at"] = now
 
-	if _all_done(players):
-		await _write_room(cid, {
-			"status": "finished", "finished_at": now,
-			"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
-		}, true)
-		room["status"] = "finished"
-		room["finished_at"] = now
 	room["players"] = players
+	if _all_done(players):
+		await _mark_finished(cid, room)
 	return room
 
 # True when there's at least one active player and every active player is "done".
@@ -815,19 +810,44 @@ func _all_done(players: Dictionary) -> bool:
 			return false
 	return any
 
+# Flip a room we've established is over to "finished" and push the result out to
+# watchers ourselves. Emitting matters: the watcher that triggered the finalize is
+# sitting on the results board waiting for exactly this transition, and waiting on the
+# mirror to echo it back costs a Cloud Function round trip we don't need — and, when
+# that echo is late or lost, up to a full watchdog window (see WATCHDOG_SECS). Returns
+# whether the room is now finished. `room` is updated in place.
+func _mark_finished(cid: String, room: Dictionary) -> bool:
+	var now := _now()
+	# Never claim a finish we couldn't write — that would podium a race that, for
+	# everyone else, is still running.
+	if not await _write_room(cid, {
+		"status": "finished", "finished_at": now,
+		"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
+	}, true):
+		return false
+	room["status"] = "finished"
+	room["finished_at"] = now
+	_emit_room(cid, room)
+	return true
+
 # Any participant may finalize once every active player is done (idempotent — a
 # stale read on the last finisher, or a client that only observed all-done from the
 # results board, still converges the room to "finished").
 func finalize_if_done(cid: String) -> void:
 	var room := await _load_room(cid)
-	if room.is_empty() or String(room.get("status", "")) != "playing":
+	if room.is_empty():
+		return
+	if String(room.get("status", "")) == "finished":
+		# It's already over and we're only hearing it now, straight from the room doc.
+		# This read is then the freshest news we have — the mirror's "finished" push
+		# either never reached us or was overtaken by a stale one — so fan it out
+		# instead of dropping it on the floor and leaving the board waiting.
+		_emit_room(cid, room)
+		return
+	if String(room.get("status", "")) != "playing":
 		return
 	if _all_done(room.get("players", {})):
-		var now := _now()
-		await _write_room(cid, {
-			"status": "finished", "finished_at": now,
-			"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
-		}, true)
+		await _mark_finished(cid, room)
 
 # The unix second at which a still-"playing" room may be force-finalized despite
 # stragglers: FINISH_GRACE after the MOST RECENT finisher (so the clock resets every
@@ -855,16 +875,17 @@ func play_grace_deadline(room: Dictionary) -> int:
 # still "playing", so several viewers firing it at once converge harmlessly.
 func finalize_overdue(cid: String) -> void:
 	var room := await _load_room(cid)
-	if room.is_empty() or String(room.get("status", "")) != "playing":
+	if room.is_empty():
+		return
+	if String(room.get("status", "")) == "finished":
+		_emit_room(cid, room)          # already over — see finalize_if_done
+		return
+	if String(room.get("status", "")) != "playing":
 		return
 	var deadline := play_grace_deadline(room)
 	if deadline <= 0 or _now() < deadline:
 		return
-	var now := _now()
-	await _write_room(cid, {
-		"status": "finished", "finished_at": now,
-		"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
-	}, true)
+	await _mark_finished(cid, room)
 
 # Keepalive: push a live room's expiry horizon out so the 20-minute sweep doesn't
 # reap it while someone still has it open (see TTL_SECS). The detail screen calls this
@@ -889,13 +910,8 @@ func finish_now(cid: String) -> Dictionary:
 		return {"ok": false, "error": "not_creator"}
 	if String(room.get("status", "")) != "playing":
 		return {"ok": false, "error": "not_active"}
-	var now := _now()
-	await _write_room(cid, {
-		"status": "finished", "finished_at": now,
-		"expires_at": _expires_iso(now), "expires_unix": _expires_unix(now),
-	}, true)
-	room["status"] = "finished"
-	room["finished_at"] = now
+	if not await _mark_finished(cid, room):
+		return {"ok": false, "error": "write_failed"}
 	return {"ok": true, "room": room}
 
 # =====================================================================
@@ -1022,10 +1038,18 @@ func _on_watchdog() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_APPLICATION_RESUMED:
 		return
+	if _watch_seen.is_empty():
+		return
 	for cid in _watch_seen:
 		var seen: Dictionary = _watch_seen[cid]
 		seen["t"] = 0
 		_watch_seen[cid] = seen
+	# And re-confirm NOW rather than on the next tick. A full-screen interstitial (the
+	# arena one runs exactly as a race ends) backgrounds us for the very window in which
+	# the room finishes, so waiting out up to WATCHDOG_TICK on top of the ad is the
+	# difference between "the podium is up when I come back" and staring at the waiting
+	# board.
+	call_deferred("_on_watchdog")
 
 # Android live-listener callback. `data` is the changed document (decoded by the
 # plugin, or REST-style with a "fields" wrapper). An empty / identity-less payload

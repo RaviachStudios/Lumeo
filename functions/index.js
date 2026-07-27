@@ -411,9 +411,44 @@ function stableContestKey(s) {
   ]);
 }
 
+// Publish a summary, but ONLY if the mirror doesn't already hold a NEWER revision of
+// the room. Firestore triggers carry no ordering guarantee and each invocation is a
+// read-then-write against this doc, so two events fired back to back — the last
+// racer's score write, then the "status: finished" write that immediately follows it —
+// can be processed out of order or interleaved. When that happened the older event's
+// summary landed last and pinned the mirror at "playing" with nothing left to write
+// the room again: every player who had already finished sat on the waiting board until
+// their client's watchdog re-read the room (~45s) while the last finisher was looking
+// at the podium. `updateTime` on the room doc is its authoritative revision stamp, so
+// carrying it here lets us move the mirror forwards only, and the transaction makes
+// the check-and-set atomic against a concurrent invocation.
+async function publishContestState(ref, summary, srcRev) {
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const stored = snap.exists ? snap.data() : null;
+    if (stored && Number.isFinite(stored.src_rev) &&
+        stored.src_rev >= srcRev) return;            // overtaken by a newer revision
+    // Identical content: nothing to publish. We deliberately DON'T bump src_rev on
+    // its own — that write would still wake every watcher for no visible change,
+    // which is the whole cost this gate exists to avoid.
+    if (stored && stored.summary &&
+        stableContestKey(stored.summary) === stableContestKey(summary)) return;
+    tx.set(ref, {summary, updated_unix: nowUnix(), src_rev: srcRev});
+  });
+}
+
+// A document revision as one comparable number: microseconds since the epoch, taken
+// from its commit time. Microseconds (not millis) so two commits landing in the same
+// millisecond still order — and it stays well inside a double's exact-integer range.
+function revOf(snap) {
+  const t = snap && snap.updateTime;
+  return t ? t.seconds * 1e6 + Math.floor(t.nanoseconds / 1000) : Date.now() * 1000;
+}
+
 // Maintain contest_state/{cid} from a room write, coalescing so we don't push
-// on every raw write.
-async function maintainContestState(cid, after) {
+// on every raw write. `srcRev` is the room revision this event carries (see
+// publishContestState).
+async function maintainContestState(cid, after, srcRev) {
   const ref = db.collection("contest_state").doc(cid);
   if (!after) {
     // Room gone → drop its mirror.
@@ -424,6 +459,8 @@ async function maintainContestState(cid, after) {
   const snap = await ref.get();
   const stored = snap.exists ? snap.data() : null;
   const prev = stored ? stored.summary : null;
+  // Already mirrored this revision or a later one — nothing this event can add.
+  if (stored && Number.isFinite(stored.src_rev) && stored.src_rev >= srcRev) return;
 
   // Start (seed set) and finish (status flip) must be visible instantly — that's
   // what auto-launches every client's match / reveals the final board.
@@ -446,15 +483,14 @@ async function maintainContestState(cid, after) {
       await sleep((CONTEST_STATE_COALESCE_SECS - age) * 1000);
       const fresh = await db.collection("contests").doc(cid).get();
       if (!fresh.exists) return;          // gone meanwhile — the delete event cleans up
-      const trailing = shapeContestState(cid, fresh.data());
-      const now = await ref.get();
-      const nowPrev = now.exists ? now.data().summary : null;
-      if (nowPrev && stableContestKey(nowPrev) === stableContestKey(trailing)) return;
-      await ref.set({summary: trailing, updated_unix: nowUnix()});
+      // The re-read carries its own (newer) revision stamp — publish under THAT, not
+      // this event's, or the flush would be gated out by the very state it just read.
+      await publishContestState(ref, shapeContestState(cid, fresh.data()),
+          revOf(fresh));
       return;
     }
   }
-  await ref.set({summary, updated_unix: nowUnix()});
+  await publishContestState(ref, summary, srcRev);
 }
 
 // Maintain the one-doc open-public-room list. Touched ONLY when a room ENTERS or
@@ -488,8 +524,11 @@ exports.syncContest = onDocumentWritten("contests/{cid}", async (event) => {
   const cid = event.params.cid;
   const before = event.data.before.exists ? event.data.before.data() : null;
   const after = event.data.after.exists ? event.data.after.data() : null;
+  // The room revision this event was fired for. Ordering token, not a clock — see
+  // publishContestState.
+  const srcRev = revOf(event.data.after);
   await Promise.all([
-    maintainContestState(cid, after),
+    maintainContestState(cid, after, srcRev),
     maintainLobbyIndex(cid, before, after),
   ]);
 });
