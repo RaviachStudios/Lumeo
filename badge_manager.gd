@@ -93,7 +93,7 @@ const BADGES: Array[Dictionary] = [
 	{"id": "themes_all",   "bit": 34, "cat": "shop", "art": "gem",     "name": "Completionist",  "desc": "Own every theme."},
 	{"id": "first_skin",   "bit": 35, "cat": "shop", "art": "wheel",   "name": "Skinned",        "desc": "Buy a Special Skin."},
 	{"id": "skins_all",    "bit": 36, "cat": "shop", "art": "diamond", "name": "Skin Deep",      "desc": "Own every Special Skin."},
-	{"id": "unlock_diff",  "bit": 37, "cat": "shop", "art": "key",     "name": "Level Up",       "desc": "Unlock a harder difficulty."},
+	{"id": "unlock_diff",  "bit": 37, "cat": "score", "art": "key",    "name": "Level Up",       "desc": "Play a harder difficulty."},
 
 	# ── Economy / coins ─────────────────────────────────────────────────────
 	{"id": "coins_1k",     "bit": 38, "cat": "economy", "art": "coin",    "name": "Pocket Change", "desc": "Hold 1,000 coins."},
@@ -246,6 +246,8 @@ func note_game_played(difficulty: String) -> void:
 	if _games_played >= 50:  award("games_50")
 	if _games_played >= 100: award("games_100")
 	if _games_played >= 500: award("games_500")
+	if difficulty == "moderate" or difficulty == "hard":
+		award("unlock_diff")
 	if _diffs_played.has("easy") and _diffs_played.has("moderate") and _diffs_played.has("hard"):
 		award("all_diffs")
 	# Time-of-day secrets (local clock).
@@ -329,9 +331,6 @@ func _eval_inventory() -> void:
 			owned_skins += 1
 	if owned_skins >= 1: award("first_skin")
 	if total_skins > 0 and owned_skins >= total_skins: award("skins_all")
-	# Difficulty unlocks (moderate/hard purchased).
-	if CoinsManager.owned_levels.size() >= 1:
-		award("unlock_diff")
 	# Remove ads.
 	if CoinsManager.has_remove_ads:
 		award("remove_ads")

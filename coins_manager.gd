@@ -74,14 +74,14 @@ const THEMES := {
 	"deepspace":{"name": "Deep Space",        "price": 1600, "category": "themes"},
 }
 
-# Difficulty unlocks. "easy" is always playable; "moderate" and "hard" are
-# locked until bought with coins. A purchase is permanent and persists on
-# /users/{uid} as a map (owned_levels: {moderate: true, hard: true}) — same
-# storage shape as owned_themes (see _owned_levels_map_for_save).
-const LEVEL_PRICES := {
-	"moderate": 10,
-	"hard": 20,
-}
+# Difficulty unlocks. Every difficulty is free to play — this is the set of
+# difficulties still behind a coin price, and is_level_unlocked treats anything
+# absent from it as playable, so an empty dict means "all unlocked". Moderate
+# and Hard used to cost 10/20; the machinery (price badge, buy popup,
+# purchase_level) stays so a difficulty can be re-priced by adding one line
+# here. Purchases persist on /users/{uid} as a map (owned_levels:
+# {moderate: true}) — same storage shape as owned_themes.
+const LEVEL_PRICES := {}
 
 # Simon-wheel customization. Three independently-coloured parts of the wheel
 # (the metallic rim rings, the centre hub, and the level numeral), each able to
