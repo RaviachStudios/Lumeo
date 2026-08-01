@@ -235,6 +235,11 @@ async function collectPayouts(date) {
       const d = doc.data() || {};
       const uid = typeof d.uid === "string" ? d.uid : null;
       if (!uid) return;
+      // Simulated rows (see section 2b) place on the board like anyone else —
+      // that's the whole point — but they have no wallet to pay into. Skipping
+      // them here avoids a pointless /users read each; creditDailyRewards would
+      // bail on the missing doc anyway, so this is purely a cost saving.
+      if (isSimUid(uid)) return;
       const reward = dailyRewardForRank(rank);
       if (reward <= 0) return;
       const cur = perUser.get(uid) || {total: 0, results: []};
@@ -315,6 +320,280 @@ exports.closeDailyBoards = onSchedule(
       await creditDailyRewards(date);
       await deleteDailyRows(date);
       await deleteDailyHistograms(date);
+    },
+);
+
+// =====================================================================
+// 2b) Simulated daily activity — keep TODAY's boards alive
+// =====================================================================
+//
+// A brand-new day's boards open empty, and on a small player base they can stay
+// that way for hours — which reads as a dead game and kills the reason to chase
+// a daily rank at all. So the server itself posts the occasional score.
+//
+// Deliberately narrow in scope:
+//   * DAILY ROWS ONLY. Nothing is written to global_{diff} (the all-time boards
+//     are a permanent record and stay 100% real) and nothing is written to
+//     /users — a simulated player has no wallet, no badges, no profile, no
+//     presence anywhere outside the one row. Every row it writes is deleted by
+//     closeDailyBoards at 00:05 UTC with the rest of that day's board, so the
+//     entire footprint is gone within a day.
+//   * One CANDIDATE every 37 minutes, taken with probability 1/2 — so ~19 rows
+//     a day spread unevenly across the three difficulties, which is the point:
+//     a board that grows in fits and starts looks lived-in, a metronome does not.
+//   * Scores are drawn from a truncated Gaussian over [SIM_SCORE_MIN,
+//     SIM_SCORE_MAX], i.e. clustered around the middle and rare at either end,
+//     so they sit among ordinary human results instead of topping the board.
+//
+// The rows are written by the Admin SDK (rules bypassed) in exactly the shape a
+// real client writes, so syncDaily_* picks them up and they flow into board_top
+// and the per-day histogram like any other score. That matters: a row the
+// clients can see but the rank arithmetic can't would make ranks disagree with
+// the visible list.
+//
+// SIMULATED UIDS: shaped like a real Firebase uid (28 base62 chars) but with a
+// keyed checksum in the last 4 characters, so the server can recognise its own
+// rows without keeping a registry document (which would be exactly the kind of
+// persistent state this feature is supposed not to leave behind). Used only to
+// skip them in the reward pass — see collectPayouts.
+
+const crypto = require("crypto");
+
+// Chance that a given 37-minute slot actually posts a score.
+const SIM_CHANCE = 0.5;
+// Score range. Inclusive; the distribution below is a Gaussian truncated to it.
+const SIM_SCORE_MIN = 4;
+const SIM_SCORE_MAX = 13;
+const SIM_SCORE_MEAN = (SIM_SCORE_MIN + SIM_SCORE_MAX) / 2;
+// ~2 puts the bulk of the mass inside the range, so rejection sampling below
+// almost always accepts on the first draw while the tails stay genuinely rare.
+const SIM_SCORE_SD = 2.0;
+// Longest name we'll post. Matches the player-facing limit in name_picker_screen
+// (max_length = 20) so a simulated name can never be one no human could have.
+const SIM_NAME_MAX = 20;
+// Not a security boundary — it only tags our own rows so the reward pass can
+// skip them. A player who worked it out could forge a "simulated" uid, and the
+// only thing that buys them is forfeiting their own daily coins.
+const SIM_UID_KEY = "simon-sim-daily-v1";
+const SIM_UID_LEN = 28;
+const SIM_UID_SUM_LEN = 4;
+const SIM_B62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+// Names are grouped by locale so a first + last pair reads as one plausible
+// person rather than two continents stapled together. Latin script throughout:
+// the game renders names in Godot's default font, which has no CJK / Arabic /
+// Hebrew / Devanagari coverage, so a native-script name would come out as empty
+// boxes on the board. Romanised spellings carry the same international feel and
+// actually render.
+const SIM_NAMES = [
+  { // English
+    first: ["James", "Emma", "Liam", "Olivia", "Noah", "Ava", "Ethan", "Grace",
+      "Mason", "Chloe", "Leo", "Ruby", "Owen", "Isla"],
+    last: ["Walker", "Bennett", "Hughes", "Carter", "Mitchell", "Foster",
+      "Brooks", "Reid", "Palmer", "Doyle"],
+  },
+  { // Spanish
+    first: ["Mateo", "Lucia", "Diego", "Sofia", "Javier", "Carmen", "Alonso",
+      "Elena", "Pablo", "Ines", "Nuria", "Alvaro"],
+    last: ["Garcia", "Torres", "Ramirez", "Navarro", "Delgado", "Iglesias",
+      "Vargas", "Serrano", "Cabrera", "Molina"],
+  },
+  { // Portuguese / Brazilian
+    first: ["Tiago", "Beatriz", "Rafael", "Larissa", "Bruno", "Camila",
+      "Vitor", "Mariana", "Caio", "Renata"],
+    last: ["Silva", "Almeida", "Pereira", "Ribeiro", "Cardoso", "Barbosa",
+      "Moreira", "Teixeira", "Rocha", "Pinto"],
+  },
+  { // French
+    first: ["Hugo", "Chloe", "Louis", "Manon", "Theo", "Camille", "Enzo",
+      "Juliette", "Nathan", "Alice"],
+    last: ["Dupont", "Lefevre", "Moreau", "Girard", "Bernard", "Fontaine",
+      "Chevalier", "Marchand", "Renaud", "Leclerc"],
+  },
+  { // German
+    first: ["Lukas", "Hanna", "Jonas", "Lena", "Felix", "Mia", "Finn",
+      "Greta", "Erik", "Frieda"],
+    last: ["Muller", "Schneider", "Fischer", "Weber", "Wagner", "Becker",
+      "Hoffmann", "Schulz", "Koehler", "Brandt"],
+  },
+  { // Italian
+    first: ["Marco", "Giulia", "Luca", "Chiara", "Matteo", "Sara", "Andrea",
+      "Elisa", "Davide", "Alessia"],
+    last: ["Rossi", "Ferrari", "Esposito", "Bianchi", "Romano", "Greco",
+      "Conti", "Marino", "Rizzo", "Gallo"],
+  },
+  { // Nordic
+    first: ["Emil", "Freja", "Oskar", "Ingrid", "Kasper", "Sigrid", "Jonas",
+      "Linnea", "Aksel", "Maja"],
+    last: ["Nilsson", "Hansen", "Lindqvist", "Bergman", "Dahl", "Solberg",
+      "Aalto", "Virtanen", "Holm", "Sandvik"],
+  },
+  { // Polish / Czech
+    first: ["Kacper", "Zofia", "Jakub", "Lena", "Tomas", "Klara", "Marek",
+      "Anezka", "Piotr", "Hanna"],
+    last: ["Nowak", "Kowalski", "Wozniak", "Zielinski", "Novak", "Svoboda",
+      "Dvorak", "Marek", "Krol", "Bartos"],
+  },
+  { // Russian / Ukrainian (romanised)
+    first: ["Dmitri", "Anya", "Nikita", "Katya", "Pavel", "Irina", "Sergei",
+      "Yulia", "Oleg", "Vira"],
+    last: ["Ivanov", "Petrova", "Sokolov", "Volkova", "Melnyk", "Kovalenko",
+      "Orlov", "Titova", "Bondar", "Zaitsev"],
+  },
+  { // Turkish
+    first: ["Emir", "Zeynep", "Kerem", "Elif", "Baris", "Defne", "Mert",
+      "Ayse", "Onur", "Selin"],
+    last: ["Yilmaz", "Demir", "Kaya", "Sahin", "Celik", "Arslan", "Dogan",
+      "Aydin", "Ozturk", "Kurt"],
+  },
+  { // Arabic (romanised)
+    first: ["Omar", "Layla", "Yousef", "Nour", "Karim", "Salma", "Tariq",
+      "Rana", "Bilal", "Hala"],
+    last: ["Haddad", "Nasser", "Khalil", "Farah", "Sultan", "Mansour",
+      "Rahim", "Aziz", "Saleh", "Darwish"],
+  },
+  { // Hebrew (romanised)
+    first: ["Noam", "Maya", "Itai", "Shira", "Yonatan", "Talia", "Eitan",
+      "Roni", "Amit", "Yael"],
+    last: ["Levi", "Cohen", "Mizrahi", "Barak", "Peretz", "Shani", "Adler",
+      "Golan", "Regev", "Amar"],
+  },
+  { // Indian (romanised)
+    first: ["Arjun", "Priya", "Rohan", "Ananya", "Vikram", "Kavya", "Aditya",
+      "Meera", "Ishaan", "Diya"],
+    last: ["Sharma", "Patel", "Nair", "Reddy", "Iyer", "Kapoor", "Menon",
+      "Chauhan", "Bose", "Rao"],
+  },
+  { // Japanese (romanised)
+    first: ["Yuki", "Haruka", "Ren", "Aoi", "Sota", "Mio", "Kaito", "Rin",
+      "Daiki", "Nanami"],
+    last: ["Tanaka", "Sato", "Nakamura", "Yamamoto", "Kobayashi", "Watanabe",
+      "Ishikawa", "Fujimoto", "Ogawa", "Hayashi"],
+  },
+  { // Korean (romanised)
+    first: ["Minjun", "Jiwoo", "Seoyeon", "Hyun", "Jisoo", "Doyun", "Haeun",
+      "Sunwoo", "Yuna", "Taemin"],
+    last: ["Kim", "Park", "Lee", "Choi", "Jung", "Kang", "Yoon", "Lim",
+      "Shin", "Oh"],
+  },
+  { // Chinese (romanised)
+    first: ["Wei", "Lian", "Hao", "Xiuying", "Jun", "Meilin", "Feng", "Yan",
+      "Bo", "Ting"],
+    last: ["Chen", "Wang", "Liu", "Zhang", "Huang", "Zhao", "Wu", "Lin",
+      "Xu", "Guo"],
+  },
+  { // Southeast Asian
+    first: ["Nadia", "Rizky", "Bayu", "Intan", "Minh", "Linh", "Thanh",
+      "Chai", "Ploy", "Andi"],
+    last: ["Wijaya", "Santoso", "Nguyen", "Tran", "Pham", "Hoang",
+      "Suparman", "Chaiyaporn", "Reyes", "Dela Cruz"],
+  },
+  { // African
+    first: ["Amara", "Kwame", "Zanele", "Chinedu", "Amina", "Tendai",
+      "Fatou", "Sipho", "Njeri", "Kofi"],
+    last: ["Okafor", "Mensah", "Dlamini", "Adeyemi", "Mwangi", "Diallo",
+      "Nkosi", "Abebe", "Traore", "Osei"],
+  },
+];
+
+function simPick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// A first name, sometimes with a surname or an initial. The mix is what makes a
+// board read as real — everyone showing "First Last" is as obviously generated
+// as everyone showing a bare first name.
+function simName() {
+  const locale = simPick(SIM_NAMES);
+  const first = simPick(locale.first);
+  const roll = Math.random();
+  let name = first;
+  if (roll < 0.40) {
+    name = first + " " + simPick(locale.last);
+  } else if (roll < 0.58) {
+    name = first + " " + simPick(locale.last).charAt(0) + ".";
+  }
+  // Fall back down the ladder rather than truncating mid-surname.
+  if (name.length > SIM_NAME_MAX) name = first + " " + name.split(" ")[1].charAt(0) + ".";
+  if (name.length > SIM_NAME_MAX) name = first.slice(0, SIM_NAME_MAX);
+  return name;
+}
+
+// Standard normal via Box-Muller.
+function simGaussian() {
+  let u = 0;
+  while (u === 0) u = Math.random(); // log(0) guard
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * Math.random());
+}
+
+// A score in [SIM_SCORE_MIN, SIM_SCORE_MAX] from a Gaussian TRUNCATED to that
+// range (redraw on a miss) rather than clamped to it — clamping would pile every
+// tail draw onto the two end values, so 4 and 13 would end up the two most common
+// scores on the board, which is the opposite of what a bell curve should look like.
+function simScore() {
+  for (let i = 0; i < 32; i++) {
+    const v = Math.round(SIM_SCORE_MEAN + simGaussian() * SIM_SCORE_SD);
+    if (v >= SIM_SCORE_MIN && v <= SIM_SCORE_MAX) return v;
+  }
+  return Math.round(SIM_SCORE_MEAN);
+}
+
+// base62 checksum of `body`, keyed so it isn't reproducible from the app.
+function simChecksum(body) {
+  const mac = crypto.createHmac("sha256", SIM_UID_KEY).update(body).digest();
+  let out = "";
+  for (let i = 0; i < SIM_UID_SUM_LEN; i++) out += SIM_B62[mac[i] % SIM_B62.length];
+  return out;
+}
+
+function simUid() {
+  const bytes = crypto.randomBytes(SIM_UID_LEN - SIM_UID_SUM_LEN);
+  let body = "";
+  for (const b of bytes) body += SIM_B62[b % SIM_B62.length];
+  return body + simChecksum(body);
+}
+
+// True for a uid this function minted. A real Firebase uid passes the length
+// test but only matches the checksum with probability 62^-4 (~1 in 15 million),
+// and the only consequence of that collision is one player missing one day's
+// daily coins — no data loss, nothing permanent.
+function isSimUid(uid) {
+  if (typeof uid !== "string" || uid.length !== SIM_UID_LEN) return false;
+  const body = uid.slice(0, SIM_UID_LEN - SIM_UID_SUM_LEN);
+  return uid.slice(-SIM_UID_SUM_LEN) === simChecksum(body);
+}
+
+// Mirrors LeaderboardManager.submit_score_daily's expiry so a simulated row is
+// swept by exactly the same paths as a real one if closeDailyBoards ever lags.
+const SIM_DAILY_RETENTION_DAYS = 14;
+const SIM_DAILY_EXPIRES_BUFFER_SECS = 6 * 3600;
+
+function nextMidnightUtc(nowU) {
+  return (Math.floor(nowU / 86400) + 1) * 86400;
+}
+
+// One 37-minute slot: coin-flip, then (maybe) one row on one difficulty.
+exports.simulateDailyScore = onSchedule(
+    {schedule: "every 37 minutes", timeZone: "Etc/UTC"},
+    async () => {
+      if (Math.random() >= SIM_CHANCE) return;
+      const diff = simPick(DIFFS);
+      const date = todayUtc();
+      const uid = simUid();
+      const nowU = nowUnix();
+      const expiresU = nextMidnightUtc(nowU) +
+        SIM_DAILY_RETENTION_DAYS * 86400 + SIM_DAILY_EXPIRES_BUFFER_SECS;
+      // Same field set, same doc-id shape (`{date}__{uid}`) as a client write, so
+      // every downstream reader (syncDaily_*, board_top, the histogram, the
+      // client's own date filter and expiry sweep) treats it identically.
+      await db.doc("daily_" + diff + "/" + date + "__" + uid).set({
+        uid,
+        name: simName(),
+        score: simScore(),
+        date,
+        expires_at: new Date(expiresU * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        expires_unix: expiresU,
+      });
     },
 );
 

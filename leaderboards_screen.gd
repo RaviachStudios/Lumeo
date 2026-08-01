@@ -223,7 +223,12 @@ var _range_segs: Array[Dictionary] = []   # per seg: { wrap, btn, stylebox, labe
 # Title text is dynamic: "TODAY'S BEST" / "ALL-TIME BEST", swapped on toggle.
 var _title_lbl: Label
 
-var _current_diff := "easy"
+# HARD is the board the screen opens on: paired with the ALL-TIME default below
+# it's the game's headline table — the one a player checks to see where the
+# ceiling actually is. Easy's all-time top is a wall of near-identical high
+# scores and reads as noise by comparison. The tab is only a starting position;
+# flipping the range toggle keeps whichever difficulty is selected.
+var _current_diff := "hard"
 var _current_range := RANGE_ALL
 # Per-range cache so flipping the toggle is instant once both ranges have been
 # fetched at least once. Shape: { diff: { rows, my_row, my_rank, neighborhood, ok } }.

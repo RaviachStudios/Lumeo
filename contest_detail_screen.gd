@@ -70,7 +70,17 @@ var _finalize_next := 0
 const KEEPALIVE_SECS := 5 * 60
 var _keepalive: Timer
 
+# Set by game_manager.show_contest_detail when we're the destination of an
+# end-of-race hand-off: raise the arena interstitial once the first face is painted.
+# The ad is deliberately OURS to fire rather than the game screen's — see the note in
+# game.gd's _game_over — so that it can never go up over a board that hasn't loaded.
+var show_ad_on_load := false
+
 var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
+# The initial read couldn't reach Firestore (as opposed to a 404). Renders a retry
+# face rather than "this room no longer exists", which would be a flat lie: the room
+# is almost certainly fine and the player is still in it.
+var _load_failed := false
 var _busy := false
 var _launched := false           # guard: only auto-launch my match once
 var _seen_uids := {}             # roster uids already animated in (slide-in only for newcomers)
@@ -181,20 +191,73 @@ func _layout_static() -> void:
 func _initial_load() -> void:
 	_busy = true
 	_set_overlay(true, "Loading…")
-	_room = await ContestManager.load_room(contest_id)
+	# Retrying + status-aware: a read that merely FAILED must never be painted as a
+	# room that no longer exists. This load runs at the single worst moment for the
+	# network — straight out of a race, with the arena interstitial about to cover
+	# the app — so a lost read here is ordinary, not exceptional.
+	var res: Dictionary = await ContestManager.load_room_retrying(contest_id)
 	if not is_inside_tree():
 		return
 	_set_overlay(false)
 	_busy = false
-	_render()
+	if String(res.get("status", "error")) == "error":
+		_load_failed = true
+		_render()
+		# Still go live below: the room listener can rescue us with a push even
+		# though our own read didn't land.
+	else:
+		_load_failed = false
+		_room = res.get("room", {})
+		_render()
 	# Go live: subsequent changes (joins, start, scores, finish) push in.
 	if not ContestManager.room_changed.is_connected(_on_room_changed):
 		ContestManager.room_changed.connect(_on_room_changed)
 	ContestManager.watch_room(contest_id)
+	_maybe_show_arrival_ad()
+
+# The post-race interstitial, raised only now that a real face is on screen and the
+# live listener is attached. One frame first so the board has actually been drawn:
+# the player should come out of the ad onto the standings they glimpsed going in,
+# not onto a screen that renders for the first time after the ad lifts.
+func _maybe_show_arrival_ad() -> void:
+	if not show_ad_on_load:
+		return
+	show_ad_on_load = false
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	# _render decided to send us back into a match rather than to a board (a stale
+	# "playing" read where our finish hasn't landed yet). Whatever the player is
+	# about to see, it isn't the standings this ad is supposed to bracket.
+	if _launched:
+		return
+	AdManager.try_show_arena_interstitial()
+
+# Retry the initial read by hand, from the "couldn't reach the room" face.
+func _retry_load() -> void:
+	if _busy:
+		return
+	_busy = true
+	_set_overlay(true, "Loading…")
+	var res: Dictionary = await ContestManager.load_room_retrying(contest_id)
+	if not is_inside_tree():
+		return
+	_set_overlay(false)
+	_busy = false
+	if String(res.get("status", "error")) == "error":
+		_render()
+		return
+	_load_failed = false
+	_room = res.get("room", {})
+	_render()
 
 func _on_room_changed(cid: String, room: Dictionary) -> void:
 	if cid != contest_id:
 		return
+	# A push is authoritative — including an empty one, which now only reaches us
+	# from a CONFIRMED 404 (the watchdog no longer reports a failed read as gone).
+	# So it supersedes a failed initial read either way.
+	_load_failed = false
 	_room = room
 	if is_inside_tree():
 		_render()
@@ -222,6 +285,13 @@ func _render() -> void:
 	if not _closed_reason.is_empty():
 		_render_message(_closed_reason, "Back to Arena",
 			func() -> void: game_manager.show_arena())
+		return
+	# Couldn't REACH the room, which is a different thing from the room being gone.
+	# Offer the read again instead of ending the player's race for them; the live
+	# listener may also land a push and clear this on its own.
+	if _load_failed and _room.is_empty():
+		_render_message("Couldn't reach this room.\nCheck your connection.", "Try Again",
+			func() -> void: _retry_load())
 		return
 	if _room.is_empty():
 		_render_message("This room no longer exists.", "Back to Arena",

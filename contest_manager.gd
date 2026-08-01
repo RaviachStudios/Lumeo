@@ -960,11 +960,44 @@ func standings_from_room(room: Dictionary) -> Array:
 # One-shot fetch of a room's current state (shaped, or {} if gone). Screens use it
 # for an immediate paint; watch_room() then keeps it live.
 func load_room(cid: String) -> Dictionary:
-	var room := await _load_room(cid)
-	# A one-shot paint of a room that's already terminal for us (e.g. opening a stale
-	# hub card into a since-finished room) self-heals the pointer too.
-	_reconcile_room_cache(cid, room)
-	return room
+	return (await load_room_status(cid)).get("room", {})
+
+# load_room, but reporting WHY the room came back empty:
+#   {status: "ok"|"missing"|"error", room: Dictionary}
+# "missing" is a real 404 — the room is gone. "error" is a network/server failure
+# and says nothing about whether the room exists; a caller must retry rather than
+# conclude anything. The distinction matters twice over, because an empty room is
+# also TERMINAL for the hub pointer: reconciling on a failed read doesn't just
+# paint the wrong screen, it deletes the card the player would use to get back.
+# So the reconcile below happens only when we actually know the answer.
+func load_room_status(cid: String) -> Dictionary:
+	var res := await _load_room_status(cid)
+	if String(res.get("status", "error")) != "error":
+		# A one-shot paint of a room that's already terminal for us (e.g. opening a stale
+		# hub card into a since-finished room) self-heals the pointer too.
+		_reconcile_room_cache(cid, res.get("room", {}))
+	return res
+
+# How many times load_room_retrying re-reads before giving up, and the gap between
+# attempts. Deliberately small: each attempt can burn the full 6s HTTP timeout, so
+# every extra try is another 6 seconds a genuinely offline player spends staring at
+# "Loading…". Two covers a transient blip; past that the manual "Try Again" face is
+# the better answer than a longer silent wait.
+const ROOM_READ_RETRIES := 2
+const ROOM_READ_RETRY_GAP := 1.5
+
+# load_room_status with retries on "error" only — a 404 is an answer and returns
+# immediately. Use this anywhere a failed read would otherwise be rendered as
+# "this room no longer exists".
+func load_room_retrying(cid: String) -> Dictionary:
+	var res := {}
+	for attempt in ROOM_READ_RETRIES:
+		res = await load_room_status(cid)
+		if String(res.get("status", "error")) != "error":
+			return res
+		if attempt < ROOM_READ_RETRIES - 1:
+			await get_tree().create_timer(ROOM_READ_RETRY_GAP).timeout
+	return res
 
 # Attach a live listener for `cid`. Fires room_changed(cid, room) with the current
 # state immediately and on every subsequent change (an empty room = deleted).
@@ -1015,10 +1048,21 @@ func _on_watchdog() -> void:
 		if now - int(seen.get("t", now)) < WATCHDOG_SECS:
 			continue
 		_watchdog_busy = true
-		var room := await _load_room(cid)
+		var res := await _load_room_status(cid)
 		_watchdog_busy = false
 		if not _watching.has(cid):
 			continue
+		var read_status := String(res.get("status", "error"))
+		# A read that FAILED tells us nothing. Declaring the room gone on it is the
+		# worst possible misread: it tears down the results board and clears the hub
+		# pointer, so the player is put out of a room that never went anywhere. This
+		# is not a rare case either — NOTIFICATION_APPLICATION_RESUMED ages every
+		# watched room out, so dismissing a full-screen ad schedules this read for
+		# the exact moment the network is least likely to answer. Leave the clock
+		# untouched and let the next window ask again.
+		if read_status == "error":
+			continue
+		var room: Dictionary = res.get("room", {})
 		if room.is_empty():
 			_emit_room(cid, {})       # deleted out from under us — nobody would have told us
 			continue
@@ -1518,15 +1562,23 @@ func _room_exists(cid: String) -> bool:
 	return bool(r.get("exists", false))
 
 func _load_room(cid: String) -> Dictionary:
+	return (await _load_room_status(cid)).get("room", {})
+
+# The read behind _load_room, keeping the 404-vs-failure distinction its callers
+# throw away. See load_room_status for why anything user-facing needs it.
+func _load_room_status(cid: String) -> Dictionary:
 	if not _valid_id(cid):
-		return {}
+		return {"status": "missing", "room": {}}
 	if _is_editor:
 		var r: Variant = _sim_rooms.get(cid, null)
-		return _shape_room(r, cid) if r is Dictionary else {}
-	var res := await _rest_get(_COLL, cid)
-	if not bool(res.get("exists", false)):
-		return {}
-	return _shape_room(res.get("data", {}), cid)
+		if r is Dictionary:
+			return {"status": "ok", "room": _shape_room(r, cid)}
+		return {"status": "missing", "room": {}}
+	var res := await _rest_get_status(_COLL, cid)
+	var status := String(res.get("status", "error"))
+	if status != "ok":
+		return {"status": status, "room": {}}
+	return {"status": "ok", "room": _shape_room(res.get("data", {}), cid)}
 
 # Merge-write on the room doc. In the sim, `merge` deep-merges (including a nested
 # `players` map) so a partial write never drops sibling fields/players.
@@ -1631,14 +1683,29 @@ func _http_get(url: String) -> Array:
 	return r
 
 func _rest_get(collection: String, doc_id: String) -> Dictionary:
+	var res := await _rest_get_status(collection, doc_id)
+	var ok := String(res.get("status", "error")) == "ok"
+	return {"exists": ok, "data": res.get("data", {})}
+
+# Like _rest_get, but separates a definitive 404 (the doc is genuinely gone) from a
+# network/server failure. Collapsing the two is how a room that is perfectly alive
+# gets rendered as "This room no longer exists": the read is issued with a 6s
+# timeout, and the one moment it is most likely to fail is exactly when a
+# full-screen ad has just backgrounded the app. Callers that decide whether a room
+# still exists MUST use this and treat "error" as "unknown, try again", never as
+# "gone". Returns {status: "ok"|"missing"|"error", data}.
+func _rest_get_status(collection: String, doc_id: String) -> Dictionary:
 	var r := await _http_get(_FB_BASE + "/" + collection + "/" + doc_id)
-	if r[1] != 200:
-		return {"exists": false}
-	var j := JSON.new()
-	j.parse((r[3] as PackedByteArray).get_string_from_utf8())
-	if not j.data is Dictionary:
-		return {"exists": false}
-	return {"exists": true, "data": _fields(j.data.get("fields", {}))}
+	var code := int(r[1])
+	if code == 200:
+		var j := JSON.new()
+		j.parse((r[3] as PackedByteArray).get_string_from_utf8())
+		if j.data is Dictionary:
+			return {"status": "ok", "data": _fields(j.data.get("fields", {}))}
+		return {"status": "error", "data": {}}
+	if code == 404:
+		return {"status": "missing", "data": {}}
+	return {"status": "error", "data": {}}
 
 # Runs a Firestore structured query and returns [{id, data}, ...] — empty on any
 # failure, since the only caller is a best-effort sweep. Reads need no auth

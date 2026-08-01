@@ -83,10 +83,34 @@ func _ready() -> void:
 	_apply_simon_skin()
 	get_viewport().size_changed.connect(_layout_wheel)
 	_build_hud()
+	# The rewarded "watch ads for replay" ad is the ONLY source of replays (they
+	# start at 0), so it's offered during arena races too — where the 10s per-press
+	# window is running the whole time the ad is on screen. Both clocks here are
+	# wall-clock, so the ad silently eats the window and the player was knocked out
+	# the instant it closed. Credit the lost time back instead.
+	AdManager.ad_closed.connect(_on_ad_closed)
 	await get_tree().process_frame
 	_start_game()
 
+# An ad just came down after `seconds_shown` on screen. Nothing about the game
+# advanced while it was up, so neither should the deadlines that measure it.
+func _on_ad_closed(seconds_shown: float) -> void:
+	if seconds_shown <= 0.0:
+		return
+	if _press_active:
+		_press_deadline += seconds_shown
+	# Otherwise the idle nudge reads the whole ad as time spent hesitating and
+	# fires the moment the player is back.
+	_last_activity = _now_secs()
+
 func _process(_dt: float) -> void:
+	# Nothing on this screen should advance behind a full-screen ad. Most Android
+	# builds pause the loop anyway, but that is the plugin's behaviour rather than a
+	# guarantee, and the one thing that must NOT happen while the player can't see
+	# the wheel is the press window timing out under the ad.
+	if AdManager.is_showing_ad():
+		return
+
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
 		_watch_ad_btn.visible = AdManager.rewarded_ready
@@ -1023,11 +1047,22 @@ func _game_over() -> void:
 			return
 		# Dedicated arena interstitial as the race ends and the results screen appears.
 		# Skipped for players who bought remove-ads (same treatment as the solo
-		# game-over interstitial). The scene swap runs behind the full-screen ad, so
-		# the results board is ready underneath once the ad is dismissed.
-		if not CoinsManager.has_remove_ads:
-			AdManager.try_show_arena_interstitial()
-		game_manager.show_contest_detail(cid)
+		# game-over interstitial).
+		#
+		# ORDER MATTERS. This used to fire the ad and THEN swap the scene, on the
+		# theory that the results board would build itself quietly underneath. It
+		# doesn't: the new screen's first act is a 6s-timeout REST read of the room,
+		# issued into an app the ad has just backgrounded. When that read lost, the
+		# screen concluded the room was gone and the player came out of the ad
+		# staring at "This room no longer exists" instead of the standings — their
+		# race finished, scored, and thrown away.
+		#
+		# So the results screen goes up FIRST and raises the ad itself once it has
+		# painted (see contest_detail_screen.show_ad_on_load). It has to own this
+		# rather than us awaiting it here, because the swap below queue_frees this
+		# very node — a coroutine parked on the new screen's signal would die with it
+		# and the ad would simply never appear.
+		game_manager.show_contest_detail(cid, not CoinsManager.has_remove_ads)
 		return
 	# Skip the post-game interstitial for players who bought the remove-ads
 	# entitlement. Rewarded ads (the in-game "watch ad to replay" button) are

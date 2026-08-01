@@ -104,9 +104,15 @@ func show_arena() -> void:
 func show_contest_create() -> void:
 	_swap(ContestCreateScreen.new())
 
-func show_contest_detail(contest_id: String) -> void:
+# `ad_on_load` is set by the end-of-race hand-off: the screen raises the arena
+# interstitial itself once its first face is painted, so the ad never covers a
+# board that hasn't loaded yet (see game.gd's _game_over and the screen's
+# show_ad_on_load). Both are set before _swap, since _swap runs the screen's
+# _ready() the moment it adds it.
+func show_contest_detail(contest_id: String, ad_on_load := false) -> void:
 	var s := ContestDetailScreen.new()
 	s.contest_id = contest_id
+	s.show_ad_on_load = ad_on_load
 	_swap(s)
 
 func show_loading() -> void:
