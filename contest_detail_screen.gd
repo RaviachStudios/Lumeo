@@ -914,6 +914,8 @@ func _render_finished() -> void:
 		for r: Dictionary in standings:
 			if bool(r.get("is_me", false)):
 				BadgeManager.note_contest_result(int(r.get("rank", 0)))
+				# Same standing feeds today's task board (podium / win / big field).
+				DailyTasks.note_contest_result(int(r.get("rank", 0)), standings.size())
 				break
 
 	_add_finish_confetti()

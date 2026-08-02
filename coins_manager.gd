@@ -581,6 +581,27 @@ func consume_pending_daily_rewards() -> void:
 	if grand_total > 0:
 		daily_rank_reward_granted.emit(grand_total, all_results)
 
+# --- daily-task rewards -------------------------------------------------------
+
+# Credit the coins for one or more claimed daily tasks. `extra_fields` carries the
+# claimant's own state (DailyTasks' `daily_tasks` map) and rides the SAME merge
+# write as the coin delta, so a failed save can never leave a task "claimed but
+# unpaid" — the server keeps both the old claimed-set AND the old balance, and the
+# player can simply claim again. Same reasoning as maybe_reward_alltime.
+#
+# Returns true if the coins were credited.
+func credit_task_reward(amount: int, extra_fields: Dictionary = {}) -> bool:
+	if amount <= 0 or not is_loaded():
+		return false
+	balance += amount
+	earned_coins += amount
+	balance_changed.emit(balance)
+	var fields := {"coins": balance, "earned_coins": earned_coins}
+	for k in extra_fields:
+		fields[k] = extra_fields[k]
+	_save_partial(fields)
+	return true
+
 # --- real-money coin purchases ---
 
 # Credit coins purchased via Google Play Billing. Called by PurchaseManager

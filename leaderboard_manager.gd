@@ -993,7 +993,23 @@ func _load_board_into(collection: String, extra_eq: Dictionary, key: String,
 #
 # `extra_eq` is an optional {field: stringValue} equality filter applied to
 # every query, used for the daily collections to scope to today's date.
+#
+# Announced whenever a DAILY board load turns up a standing for the signed-in
+# player. Every path that shows a daily board — the boot warm-up, the leaderboards
+# screen, a refresh — comes through _load_board, so a listener sees the player's
+# best-known position of the day without anything having to remember to report it,
+# and without this manager knowing who is listening (DailyTasks is).
+signal daily_rank_seen(difficulty: String, rank: int)
+
 func _load_board(collection: String, extra_eq: Dictionary, top_rows: Variant = null) -> Dictionary:
+	var res := await _load_board_impl(collection, extra_eq, top_rows)
+	if collection.begins_with("daily_") and bool(res.get("ok", false)):
+		var my_rank := int(res.get("my_rank", 0))
+		if my_rank > 0:
+			daily_rank_seen.emit(collection.trim_prefix("daily_"), my_rank)
+	return res
+
+func _load_board_impl(collection: String, extra_eq: Dictionary, top_rows: Variant = null) -> Dictionary:
 	if _is_editor:
 		return _load_board_sim(collection, extra_eq)
 

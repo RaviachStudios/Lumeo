@@ -379,120 +379,265 @@ const SIM_UID_LEN = 28;
 const SIM_UID_SUM_LEN = 4;
 const SIM_B62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-// Names are grouped by locale so a first + last pair reads as one plausible
-// person rather than two continents stapled together. Latin script throughout:
-// the game renders names in Godot's default font, which has no CJK / Arabic /
-// Hebrew / Devanagari coverage, so a native-script name would come out as empty
-// boxes on the board. Romanised spellings carry the same international feel and
-// actually render.
+// Each pool is ONE culture, not one region, because the pair is drawn at random
+// within a pool and anything broader stitches two languages onto one person:
+// a "Southeast Asian" pool produces "Minh Reyes", a "Nordic" one produces "Emil
+// Virtanen". Neither is a person. Pools whose surnames inflect for gender are
+// split by gender for the same reason ("Anya Ivanov" is as wrong as the above),
+// or given only surnames that don't inflect at all (Polish -ak/-czyk, Ukrainian,
+// Greek -ou).
+//
+// Latin script throughout: the game renders names in Godot's default font, which
+// has no CJK / Arabic / Hebrew / Devanagari coverage, so a native-script name
+// would come out as empty boxes on the board. Romanised spellings carry the same
+// international feel and actually render.
+//
+// `w` is the pick weight. Without it, splitting one culture into finer pools
+// would hand that culture a bigger share of the board purely as an artifact of
+// how the table is organised. The values sketch a global casual audience.
 const SIM_NAMES = [
   { // English
+    w: 10,
     first: ["James", "Emma", "Liam", "Olivia", "Noah", "Ava", "Ethan", "Grace",
       "Mason", "Chloe", "Leo", "Ruby", "Owen", "Isla"],
     last: ["Walker", "Bennett", "Hughes", "Carter", "Mitchell", "Foster",
       "Brooks", "Reid", "Palmer", "Doyle"],
   },
   { // Spanish
+    w: 6,
     first: ["Mateo", "Lucia", "Diego", "Sofia", "Javier", "Carmen", "Alonso",
       "Elena", "Pablo", "Ines", "Nuria", "Alvaro"],
     last: ["Garcia", "Torres", "Ramirez", "Navarro", "Delgado", "Iglesias",
       "Vargas", "Serrano", "Cabrera", "Molina"],
   },
   { // Portuguese / Brazilian
+    w: 5,
     first: ["Tiago", "Beatriz", "Rafael", "Larissa", "Bruno", "Camila",
       "Vitor", "Mariana", "Caio", "Renata"],
     last: ["Silva", "Almeida", "Pereira", "Ribeiro", "Cardoso", "Barbosa",
       "Moreira", "Teixeira", "Rocha", "Pinto"],
   },
   { // French
+    w: 3,
     first: ["Hugo", "Chloe", "Louis", "Manon", "Theo", "Camille", "Enzo",
       "Juliette", "Nathan", "Alice"],
     last: ["Dupont", "Lefevre", "Moreau", "Girard", "Bernard", "Fontaine",
       "Chevalier", "Marchand", "Renaud", "Leclerc"],
   },
   { // German
+    w: 3,
     first: ["Lukas", "Hanna", "Jonas", "Lena", "Felix", "Mia", "Finn",
       "Greta", "Erik", "Frieda"],
     last: ["Muller", "Schneider", "Fischer", "Weber", "Wagner", "Becker",
       "Hoffmann", "Schulz", "Koehler", "Brandt"],
   },
   { // Italian
+    w: 3,
     first: ["Marco", "Giulia", "Luca", "Chiara", "Matteo", "Sara", "Andrea",
       "Elisa", "Davide", "Alessia"],
     last: ["Rossi", "Ferrari", "Esposito", "Bianchi", "Romano", "Greco",
       "Conti", "Marino", "Rizzo", "Gallo"],
   },
-  { // Nordic
-    first: ["Emil", "Freja", "Oskar", "Ingrid", "Kasper", "Sigrid", "Jonas",
-      "Linnea", "Aksel", "Maja"],
-    last: ["Nilsson", "Hansen", "Lindqvist", "Bergman", "Dahl", "Solberg",
-      "Aalto", "Virtanen", "Holm", "Sandvik"],
+  { // Swedish
+    w: 2,
+    first: ["Emil", "Freja", "Oskar", "Astrid", "Axel", "Linnea", "Elias",
+      "Alva", "Viktor", "Maja"],
+    last: ["Nilsson", "Lindqvist", "Bergman", "Andersson", "Karlsson",
+      "Lundgren", "Sjoberg", "Ekstrom", "Holm", "Palm"],
   },
-  { // Polish / Czech
-    first: ["Kacper", "Zofia", "Jakub", "Lena", "Tomas", "Klara", "Marek",
-      "Anezka", "Piotr", "Hanna"],
-    last: ["Nowak", "Kowalski", "Wozniak", "Zielinski", "Novak", "Svoboda",
-      "Dvorak", "Marek", "Krol", "Bartos"],
+  { // Danish / Norwegian — one shared name stock, not two languages
+    w: 2,
+    first: ["Kasper", "Sigrid", "Mathias", "Ida", "Aksel", "Solveig",
+      "Henrik", "Kristin", "Marius", "Anne"],
+    last: ["Hansen", "Jensen", "Nielsen", "Solberg", "Dahl", "Berg",
+      "Haugen", "Sandvik", "Iversen", "Moller"],
   },
-  { // Russian / Ukrainian (romanised)
-    first: ["Dmitri", "Anya", "Nikita", "Katya", "Pavel", "Irina", "Sergei",
-      "Yulia", "Oleg", "Vira"],
-    last: ["Ivanov", "Petrova", "Sokolov", "Volkova", "Melnyk", "Kovalenko",
-      "Orlov", "Titova", "Bondar", "Zaitsev"],
+  { // Finnish
+    w: 1,
+    first: ["Eero", "Aino", "Ville", "Sanni", "Onni", "Elina", "Juho",
+      "Venla", "Mikael", "Helmi"],
+    last: ["Virtanen", "Aalto", "Makinen", "Nieminen", "Korhonen", "Laine",
+      "Heikkila", "Salminen", "Rantanen", "Koskinen"],
+  },
+  { // Polish — surnames here are the non-inflecting kind (no -ski/-ska pairs)
+    w: 2,
+    first: ["Kacper", "Zofia", "Jakub", "Lena", "Marek", "Agnieszka",
+      "Piotr", "Hanna", "Bartosz", "Julia"],
+    last: ["Nowak", "Wojcik", "Wozniak", "Kowalczyk", "Mazur", "Krol",
+      "Kaczmarek", "Pawlak", "Michalak", "Adamczyk"],
+  },
+  { // Czech — masculine
+    w: 1,
+    first: ["Tomas", "Petr", "Jiri", "Vojtech", "Ondrej", "Martin"],
+    last: ["Novak", "Svoboda", "Dvorak", "Cerny", "Prochazka", "Kucera",
+      "Vesely", "Horak", "Nemec", "Bartos"],
+  },
+  { // Czech — feminine (surnames take -ova / -a)
+    w: 1,
+    first: ["Klara", "Anezka", "Tereza", "Marketa", "Barbora", "Eliska"],
+    last: ["Novakova", "Svobodova", "Dvorakova", "Cerna", "Prochazkova",
+      "Kucerova", "Vesela", "Horakova", "Nemcova", "Bartosova"],
+  },
+  { // Russian — masculine (romanised)
+    w: 2,
+    first: ["Dmitri", "Nikita", "Pavel", "Sergei", "Oleg", "Andrei",
+      "Maksim", "Roman"],
+    last: ["Ivanov", "Sokolov", "Orlov", "Zaitsev", "Popov", "Volkov",
+      "Morozov", "Egorov", "Petrov", "Novikov"],
+  },
+  { // Russian — feminine (surnames take -ova / -ina)
+    w: 2,
+    first: ["Anya", "Katya", "Irina", "Yulia", "Larisa", "Marina", "Olga",
+      "Svetlana"],
+    last: ["Ivanova", "Sokolova", "Orlova", "Zaitseva", "Popova", "Volkova",
+      "Morozova", "Egorova", "Petrova", "Novikova"],
+  },
+  { // Ukrainian (romanised) — these surnames don't inflect
+    w: 1,
+    first: ["Taras", "Vira", "Bohdan", "Oksana", "Andriy", "Yaryna",
+      "Danylo", "Ivanna", "Nazar", "Sofiya"],
+    last: ["Melnyk", "Kovalenko", "Bondar", "Tkachenko", "Shevchenko",
+      "Kravchuk", "Boyko", "Marchenko", "Lysenko", "Kravets"],
   },
   { // Turkish
+    w: 3,
     first: ["Emir", "Zeynep", "Kerem", "Elif", "Baris", "Defne", "Mert",
       "Ayse", "Onur", "Selin"],
     last: ["Yilmaz", "Demir", "Kaya", "Sahin", "Celik", "Arslan", "Dogan",
       "Aydin", "Ozturk", "Kurt"],
   },
+  { // Greek (romanised) — the -ou/-a surnames, which are the same either way
+    w: 1,
+    first: ["Nikos", "Eleni", "Yiannis", "Katerina", "Dimitris", "Maria",
+      "Stavros", "Despina"],
+    last: ["Georgiou", "Ioannou", "Christou", "Antoniou", "Vasiliou",
+      "Nikolaou", "Konstantinou", "Stavrou"],
+  },
   { // Arabic (romanised)
+    w: 3,
     first: ["Omar", "Layla", "Yousef", "Nour", "Karim", "Salma", "Tariq",
       "Rana", "Bilal", "Hala"],
     last: ["Haddad", "Nasser", "Khalil", "Farah", "Sultan", "Mansour",
       "Rahim", "Aziz", "Saleh", "Darwish"],
   },
   { // Hebrew (romanised)
+    w: 3,
     first: ["Noam", "Maya", "Itai", "Shira", "Yonatan", "Talia", "Eitan",
       "Roni", "Amit", "Yael"],
     last: ["Levi", "Cohen", "Mizrahi", "Barak", "Peretz", "Shani", "Adler",
       "Golan", "Regev", "Amar"],
   },
-  { // Indian (romanised)
-    first: ["Arjun", "Priya", "Rohan", "Ananya", "Vikram", "Kavya", "Aditya",
-      "Meera", "Ishaan", "Diya"],
-    last: ["Sharma", "Patel", "Nair", "Reddy", "Iyer", "Kapoor", "Menon",
-      "Chauhan", "Bose", "Rao"],
+  { // North Indian (romanised)
+    w: 4,
+    first: ["Arjun", "Priya", "Rohan", "Ananya", "Vikram", "Neha", "Aditya",
+      "Ishaan", "Diya", "Sanjay"],
+    last: ["Sharma", "Kapoor", "Chauhan", "Verma", "Malhotra", "Joshi",
+      "Bhatia", "Saxena", "Chopra", "Mehra"],
+  },
+  { // South Indian (romanised)
+    w: 3,
+    first: ["Karthik", "Divya", "Aravind", "Lakshmi", "Suresh", "Anitha",
+      "Vignesh", "Meera", "Ganesh", "Kavya"],
+    last: ["Nair", "Reddy", "Iyer", "Menon", "Rao", "Pillai", "Naidu",
+      "Krishnan", "Raman", "Varma"],
   },
   { // Japanese (romanised)
+    w: 2,
     first: ["Yuki", "Haruka", "Ren", "Aoi", "Sota", "Mio", "Kaito", "Rin",
       "Daiki", "Nanami"],
     last: ["Tanaka", "Sato", "Nakamura", "Yamamoto", "Kobayashi", "Watanabe",
       "Ishikawa", "Fujimoto", "Ogawa", "Hayashi"],
   },
   { // Korean (romanised)
+    w: 2,
     first: ["Minjun", "Jiwoo", "Seoyeon", "Hyun", "Jisoo", "Doyun", "Haeun",
       "Sunwoo", "Yuna", "Taemin"],
     last: ["Kim", "Park", "Lee", "Choi", "Jung", "Kang", "Yoon", "Lim",
       "Shin", "Oh"],
   },
   { // Chinese (romanised)
+    w: 3,
     first: ["Wei", "Lian", "Hao", "Xiuying", "Jun", "Meilin", "Feng", "Yan",
       "Bo", "Ting"],
     last: ["Chen", "Wang", "Liu", "Zhang", "Huang", "Zhao", "Wu", "Lin",
       "Xu", "Guo"],
   },
-  { // Southeast Asian
-    first: ["Nadia", "Rizky", "Bayu", "Intan", "Minh", "Linh", "Thanh",
-      "Chai", "Ploy", "Andi"],
-    last: ["Wijaya", "Santoso", "Nguyen", "Tran", "Pham", "Hoang",
-      "Suparman", "Chaiyaporn", "Reyes", "Dela Cruz"],
+  { // Vietnamese (romanised)
+    w: 2,
+    first: ["Minh", "Linh", "Thanh", "Huong", "Tuan", "Mai", "Hieu",
+      "Trang", "Duc", "Ngoc"],
+    last: ["Nguyen", "Tran", "Pham", "Hoang", "Vu", "Dang", "Bui", "Do",
+      "Ngo", "Ly"],
   },
-  { // African
-    first: ["Amara", "Kwame", "Zanele", "Chinedu", "Amina", "Tendai",
-      "Fatou", "Sipho", "Njeri", "Kofi"],
-    last: ["Okafor", "Mensah", "Dlamini", "Adeyemi", "Mwangi", "Diallo",
-      "Nkosi", "Abebe", "Traore", "Osei"],
+  { // Indonesian
+    w: 3,
+    first: ["Rizky", "Nadia", "Bayu", "Intan", "Andi", "Sari", "Dimas",
+      "Putri", "Agus", "Ayu"],
+    last: ["Wijaya", "Santoso", "Kusuma", "Hidayat", "Pratama", "Setiawan",
+      "Wibowo", "Nugroho", "Halim", "Suparman"],
+  },
+  { // Thai (romanised)
+    w: 2,
+    first: ["Ploy", "Chai", "Nok", "Somchai", "Pim", "Anon", "Kwan",
+      "Fah", "Wichai", "Ratana"],
+    last: ["Sukhum", "Wongchai", "Srisai", "Thongdee", "Boonmee",
+      "Saengthong", "Kittisak", "Phanit", "Rattana", "Chaidee"],
+  },
+  { // Filipino
+    w: 3,
+    first: ["Andres", "Maricel", "Jomar", "Liza", "Paolo", "Angelica",
+      "Nico", "Cristina", "Ramon", "Divina"],
+    last: ["Reyes", "Santos", "Bautista", "Ramos", "Mendoza", "Aquino",
+      "Villanueva", "Domingo", "Salazar", "Dela Cruz"],
+  },
+  { // Nigerian — Igbo
+    w: 1,
+    first: ["Chinedu", "Adaeze", "Emeka", "Ngozi", "Obinna", "Chioma",
+      "Kelechi", "Amara", "Ikenna", "Uche"],
+    last: ["Okafor", "Okonkwo", "Eze", "Nwosu", "Chukwu", "Obi",
+      "Nwachukwu", "Anyanwu", "Okeke", "Ezeani"],
+  },
+  { // Nigerian — Yoruba
+    w: 1,
+    first: ["Tunde", "Yewande", "Segun", "Folake", "Femi", "Kemi", "Dayo",
+      "Bisi", "Wale", "Titi"],
+    last: ["Adeyemi", "Balogun", "Adebayo", "Afolabi", "Ogunleye",
+      "Bankole", "Olaniyi", "Adesina", "Oyelaran", "Fashola"],
+  },
+  { // Ghanaian — Akan
+    w: 1,
+    first: ["Kwame", "Akosua", "Kofi", "Ama", "Yaw", "Abena", "Kwesi",
+      "Adwoa", "Nana", "Efua"],
+    last: ["Mensah", "Osei", "Boateng", "Owusu", "Asante", "Agyeman",
+      "Amponsah", "Darko", "Ofori", "Addo"],
+  },
+  { // Kenyan — Kikuyu
+    w: 1,
+    first: ["Njeri", "Wanjiku", "Muthoni", "Wairimu", "Nyokabi", "Wangari",
+      "Njoki", "Wambui"],
+    last: ["Mwangi", "Kamau", "Kariuki", "Njoroge", "Maina", "Githinji",
+      "Waweru", "Macharia"],
+  },
+  { // South African — Zulu
+    w: 1,
+    first: ["Sipho", "Zanele", "Thabo", "Nomsa", "Bongani", "Thandiwe",
+      "Sibusiso", "Mandla", "Nandi", "Themba"],
+    last: ["Dlamini", "Nkosi", "Zulu", "Mkhize", "Ndlovu", "Khumalo",
+      "Mthembu", "Ngcobo", "Sithole", "Zwane"],
+  },
+  { // West African — Senegal / Mali
+    w: 1,
+    first: ["Fatou", "Amadou", "Aminata", "Ousmane", "Mariama", "Ibrahima",
+      "Awa", "Moussa", "Bineta", "Cheikh"],
+    last: ["Diallo", "Traore", "Ndiaye", "Keita", "Diop", "Cisse", "Toure",
+      "Sarr", "Camara", "Fofana"],
+  },
+  { // Ethiopian
+    w: 1,
+    first: ["Abebe", "Selam", "Dawit", "Meron", "Yonas", "Hanna", "Tigist",
+      "Biruk", "Kidist", "Samuel"],
+    last: ["Tesfaye", "Girma", "Bekele", "Haile", "Mekonnen", "Alemu",
+      "Desta", "Getachew", "Assefa", "Wolde"],
   },
 ];
 
@@ -500,23 +645,35 @@ function simPick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// A first name, sometimes with a surname or an initial. The mix is what makes a
-// board read as real — everyone showing "First Last" is as obviously generated
-// as everyone showing a bare first name.
-function simName() {
-  const locale = simPick(SIM_NAMES);
-  const first = simPick(locale.first);
-  const roll = Math.random();
-  let name = first;
-  if (roll < 0.40) {
-    name = first + " " + simPick(locale.last);
-  } else if (roll < 0.58) {
-    name = first + " " + simPick(locale.last).charAt(0) + ".";
+// Weighted pick over SIM_NAMES — see the `w` note on the table.
+function simPickLocale() {
+  let total = 0;
+  for (const l of SIM_NAMES) total += l.w;
+  let r = Math.random() * total;
+  for (const l of SIM_NAMES) {
+    r -= l.w;
+    if (r < 0) return l;
   }
-  // Fall back down the ladder rather than truncating mid-surname.
-  if (name.length > SIM_NAME_MAX) name = first + " " + name.split(" ")[1].charAt(0) + ".";
-  if (name.length > SIM_NAME_MAX) name = first.slice(0, SIM_NAME_MAX);
-  return name;
+  return SIM_NAMES[SIM_NAMES.length - 1];
+}
+
+// A first name, most of the time with a surname from the SAME pool. Two shapes
+// only, and both are shapes a real person types into the name picker:
+//   * no initials — "Talia A." reads as a name half-finished in a second
+//     alphabet, and it was the single biggest tell on the board;
+//   * no handles — no digits, no "josh123". The picker asks for a name, and
+//     inventing usernames would put a kind of player on the board that this
+//     game's own sign-up flow can't produce.
+// The mix of full names and bare first names is the point: a board where every
+// row is "First Last" is as obviously generated as one where none of them are.
+function simName() {
+  const locale = simPickLocale();
+  const first = simPick(locale.first);
+  if (Math.random() < 0.35) return first;
+  const full = first + " " + simPick(locale.last);
+  // Over the player-facing limit: drop the surname rather than clip it, since a
+  // half-surname is its own kind of tell.
+  return full.length > SIM_NAME_MAX ? first : full;
 }
 
 // Standard normal via Box-Muller.

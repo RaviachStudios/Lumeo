@@ -725,6 +725,7 @@ func _on_action() -> void:
 	if reward <= 0:
 		return
 	BadgeManager.note_daily_claimed(CoinsManager.streak_days)   # daily + streak badges
+	DailyTasks.note_daily_claimed()                             # "Daily Reward" task
 	# Celebrate: burst + pop on the just-claimed cell (or the endless medallion),
 	# refresh the states, then auto-close so the coin registers on the wallet.
 	if _is_endless and _endless_coin:

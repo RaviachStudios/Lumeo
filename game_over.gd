@@ -99,6 +99,9 @@ func _ready() -> void:
 	# Badges: a finished game (+ its score milestones) is always worth evaluating.
 	BadgeManager.note_game_played(GameState.difficulty)
 	BadgeManager.note_score(GameState.difficulty, rounds)
+	# Same two events feed today's task board ("play 3 games", "reach round 7 on Hard").
+	DailyTasks.note_game_played(GameState.difficulty)
+	DailyTasks.note_score(GameState.difficulty, rounds)
 	_build_background()
 	_spawn_confetti()
 	_build_ui()

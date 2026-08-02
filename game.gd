@@ -1013,8 +1013,10 @@ func _on_press_timeout() -> void:
 func _game_over() -> void:
 	_state = "gameover"
 	_disarm_press_timer()
-	# Bank the coins earned this session into the persistent wallet.
+	# Bank the coins earned this session into the persistent wallet. session_earned
+	# survives the commit, so the task board can count what the run paid out.
 	CoinsManager.commit_session()
+	DailyTasks.note_coins_earned(CoinsManager.session_earned)
 	AudioManager.play_lose_sound()
 	_set_status("Game Over!")
 	# Arena race: record this attempt (rounds cleared = level - 1) on the room and
@@ -1031,6 +1033,10 @@ func _game_over() -> void:
 		# like a solo game — in addition to being recorded on the room itself.
 		BadgeManager.note_game_played(GameState.difficulty)
 		BadgeManager.note_score(GameState.difficulty, rounds)
+		# …and toward today's task board, where a race also ticks the Arena task.
+		DailyTasks.note_game_played(GameState.difficulty)
+		DailyTasks.note_score(GameState.difficulty, rounds)
+		DailyTasks.note_arena_played()
 		# submit_score updates the in-memory best (and the guest file for signed-out
 		# players); the return flags a new personal best, which gates the all-time
 		# board write just as it does on the solo game-over screen.

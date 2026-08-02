@@ -433,7 +433,7 @@ func _build_right_panel() -> void:
 		flow.add_theme_constant_override("h_separation", 8)
 		flow.add_theme_constant_override("v_separation", 8)
 		for b in by_cat[cat]:
-			flow.add_child(_badge_cell(b))
+			flow.add_child(_badge_cell(b, scroll))
 		vbox.add_child(flow)
 
 func _section_header(text: String, accent: Color) -> Control:
@@ -456,7 +456,7 @@ func _section_header(text: String, accent: Color) -> Control:
 	h.add_child(lbl)
 	return h
 
-func _badge_cell(b: Dictionary) -> Control:
+func _badge_cell(b: Dictionary, scroll: ScrollContainer) -> Control:
 	var earned := BadgeManager.has_badge(String(b["id"]))
 	# A plain Button here (MOUSE_FILTER_STOP) swallows touch drags, so a swipe that
 	# happens to start on a badge never reaches the ScrollContainer and the gallery
@@ -464,13 +464,21 @@ func _badge_cell(b: Dictionary) -> Control:
 	# up to the ScrollContainer, and we detect a genuine *tap* (press + release with
 	# little movement) ourselves to open the detail card — same trade the shop cards
 	# make (see shop_screen._make_theme_card).
+	#
+	# The movement has to be measured in *screen* space: gui_input positions are local
+	# to the cell, and the cell travels under the finger while the gallery scrolls, so
+	# a swipe presses and releases on nearly the same spot inside the cell and used to
+	# read as a tap. We also remember how far the finger wandered mid-drag (a swipe
+	# that curls back to its start is still a swipe) and refuse to open the card if the
+	# gallery scrolled at all between press and release.
 	var cell := Control.new()
 	cell.custom_minimum_size = Vector2(96, 116)
 	cell.mouse_filter = Control.MOUSE_FILTER_PASS
-	var press := {"pos": Vector2.ZERO, "down": false}
+	var press := {"pos": Vector2.ZERO, "scroll": 0, "travel": 0.0, "down": false}
 	cell.gui_input.connect(func(ev: InputEvent) -> void:
 		var start := Vector2(-1, -1)
 		var release := Vector2(-1, -1)
+		var moved := Vector2(-1, -1)
 		if ev is InputEventMouseButton:
 			var mb := ev as InputEventMouseButton
 			if mb.button_index == MOUSE_BUTTON_LEFT:
@@ -480,13 +488,25 @@ func _badge_cell(b: Dictionary) -> Control:
 			var st := ev as InputEventScreenTouch
 			if st.pressed: start = st.position
 			else: release = st.position
+		elif ev is InputEventScreenDrag:
+			moved = (ev as InputEventScreenDrag).position
+		elif ev is InputEventMouseMotion and bool(press["down"]):
+			moved = (ev as InputEventMouseMotion).position
+		var xform := cell.get_global_transform()
 		if start.x >= 0.0:
-			press["pos"] = start
+			press["pos"] = xform * start
+			press["scroll"] = scroll.scroll_vertical
+			press["travel"] = 0.0
 			press["down"] = true
+		elif moved.x >= 0.0 and bool(press["down"]):
+			press["travel"] = maxf(press["travel"] as float,
+				(xform * moved).distance_to(press["pos"] as Vector2))
 		elif release.x >= 0.0 and bool(press["down"]):
 			press["down"] = false
 			# A tap, not the tail of a scroll drag.
-			if release.distance_to(press["pos"] as Vector2) < 14.0:
+			var slid := maxf(press["travel"] as float,
+				(xform * release).distance_to(press["pos"] as Vector2))
+			if slid < 14.0 and scroll.scroll_vertical == int(press["scroll"]):
 				_show_detail(b, earned))
 
 	var icon := BadgeIconControl.new()

@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Simon"
-config/version="1.0.27"
+config/version="1.0.50"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
 boot_splash/bg_color=Color(0.019607844, 0.078431375, 0.21960784, 1)
@@ -28,6 +28,7 @@ FirebaseManager="*res://firebase_manager.gd"
 LeaderboardManager="*res://leaderboard_manager.gd"
 CoinsManager="*res://coins_manager.gd"
 BadgeManager="*res://badge_manager.gd"
+DailyTasks="*res://daily_tasks_manager.gd"
 ContestManager="*res://contest_manager.gd"
 BackgroundManager="*res://background_manager.gd"
 PurchaseManager="*res://purchase_manager.gd"

@@ -235,6 +235,14 @@ service cloud.firestore {
         && (!('badges' in request.resource.data)
             || (request.resource.data.badges is string
                 && request.resource.data.badges.size() <= 64))
+        // Today's daily-task board: { date, counters:{...}, claimed:{...} }. One
+        // small map, rewritten wholesale as progress ticks. The coins it pays out
+        // land in `coins` (bounded above) — this field only records what has been
+        // completed and collected, so it is trusted like the rest of the wallet and
+        // only its top-level shape is checked here.
+        && (!('daily_tasks' in request.resource.data)
+            || (request.resource.data.daily_tasks is map
+                && request.resource.data.daily_tasks.size() <= 8))
         // All-time leaderboard reward tracker: { diff: best_band_index }. Small
         // map (3 difficulties). Values are trusted like the rest of the wallet.
         && (!('alltime_reward_bands' in request.resource.data)
