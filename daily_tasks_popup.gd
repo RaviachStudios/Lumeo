@@ -2,9 +2,10 @@ extends Control
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Daily Tasks — a MODAL POPUP over the home screen, opened from the tasks pill in
-# the top-left HUD. One scrolling column of task rows; each row carries the badge
-# medallion, the goal, a progress bar, its coin reward and its own CLAIM button,
-# with a CLAIM ALL button in the footer.
+# the top-left HUD. One scrolling column of task rows — the five DailyTasks drew
+# for today, see its active_tasks — where each row carries the badge medallion, the
+# goal, a progress bar, its coin reward and its own CLAIM button, with a CLAIM ALL
+# button in the footer.
 #
 # Three row states, which the whole row expresses at once (medallion, border,
 # bar, chip, button):
@@ -165,7 +166,7 @@ func _build_dialog() -> void:
 	close.pressed.connect(_close)
 	_dialog.add_child(close)
 
-	# ── sub-header: "N / 7 COMPLETE" on the left, the reset clock on the right ──
+	# ── sub-header: "N / 5 COMPLETE" on the left, the reset clock on the right ──
 	_done_lbl = Label.new()
 	_done_lbl.add_theme_font_size_override("font_size", 15)
 	_done_lbl.add_theme_color_override("font_color", Color(0.62, 0.90, 0.92))

@@ -124,6 +124,9 @@ const BADGES: Array[Dictionary] = [
 
 signal badge_earned(id: String)
 signal badges_changed
+# Fires whenever the "new, not yet looked at" set changes — drives the red dot
+# the home screen rides on the account pill.
+signal unseen_changed
 
 # 32-byte earned bitfield.
 var _bits := PackedByteArray()
@@ -146,8 +149,14 @@ var _contests_played := 0
 var _contests_won := 0
 var _diffs_played := {}          # difficulty -> true
 
+# "Already looked at" bitfield, same layout as `_bits`. Unseen = earned & ~seen.
+# Device-local on purpose: it answers "has THIS player, on THIS device, seen the
+# badge yet", which is a UI question, not account state worth a Firestore write.
+var _seen := PackedByteArray()
+
 func _ready() -> void:
 	_bits.resize(BYTES)
+	_seen.resize(BYTES)
 	for b in BADGES:
 		_by_id[b["id"]] = b
 		_by_bit[int(b["bit"])] = b
@@ -199,6 +208,32 @@ func badge(id: String) -> Dictionary:
 func cat_color(cat: String) -> Color:
 	return CAT_COLORS.get(cat, Color(0.6, 0.6, 0.7))
 
+# ─── "new since you last looked" ────────────────────────────────────────────
+
+# How many earned badges the player hasn't opened the gallery on yet.
+func unseen_count() -> int:
+	var n := 0
+	for i in BITS:
+		if _is_bit(i) and not _is_seen(i):
+			n += 1
+	return n
+
+func has_unseen() -> bool:
+	for i in BITS:
+		if _is_bit(i) and not _is_seen(i):
+			return true
+	return false
+
+# Called when the badge gallery is opened: everything earned counts as looked at.
+func mark_all_seen() -> void:
+	if not has_unseen():
+		return
+	for i in BITS:
+		if _is_bit(i):
+			_set_seen(i)
+	_save_stats()
+	unseen_changed.emit()
+
 # ─── awarding ───────────────────────────────────────────────────────────────
 
 # Grant a badge by id. No-op if unknown or already earned. Persists + notifies.
@@ -213,6 +248,7 @@ func award(id: String) -> void:
 	_mark_dirty()
 	badge_earned.emit(id)
 	badges_changed.emit()
+	unseen_changed.emit()
 	# Meta badge: earning any badge may push us over the 40-badge line.
 	if id != "badge_master" and earned_count() >= 40:
 		award("badge_master")
@@ -359,7 +395,17 @@ func _owns_all_themes() -> bool:
 func _on_user_loaded() -> void:
 	_loaded = true
 	var blob := String(CoinsManager.raw_user_doc.get("badges", ""))
+	# Anything the server hands us that this device didn't already know about was
+	# earned in an older session (or on another device), so it starts life already
+	# "seen" — only badges won here, now, are worth a red dot. Badges the device
+	# had before the read keep whatever seen state they had, so a guest who earns
+	# one and immediately signs in doesn't lose the dot.
+	var before := _bits.duplicate()
 	_decode(blob)
+	for i in BITS:
+		if _is_bit(i) and (before[i >> 3] & (1 << (i & 7))) == 0:
+			_set_seen(i)
+	_save_stats()
 	# Now that the wallet read is complete it's safe to award. Grant the sign-in
 	# badge here (NOT on the signed_in signal — that races the read) and reconcile
 	# inventory/economy badges the player may already qualify for. Any resulting
@@ -369,12 +415,17 @@ func _on_user_loaded() -> void:
 		award("signed_in")
 	_eval_inventory()
 	badges_changed.emit()
+	unseen_changed.emit()
 
 func _on_signed_out() -> void:
 	_loaded = false
 	_bits = PackedByteArray()
 	_bits.resize(BYTES)
+	_seen = PackedByteArray()
+	_seen.resize(BYTES)
+	_save_stats()
 	badges_changed.emit()
+	unseen_changed.emit()
 
 func _decode(blob: String) -> void:
 	_bits = PackedByteArray()
@@ -426,6 +477,16 @@ func _set_bit(bit: int) -> void:
 		return
 	_bits[bit >> 3] = _bits[bit >> 3] | (1 << (bit & 7))
 
+func _is_seen(bit: int) -> bool:
+	if bit < 0 or bit >= BITS:
+		return true
+	return (_seen[bit >> 3] & (1 << (bit & 7))) != 0
+
+func _set_seen(bit: int) -> void:
+	if bit < 0 or bit >= BITS:
+		return
+	_seen[bit >> 3] = _seen[bit >> 3] | (1 << (bit & 7))
+
 # ─── local stats file ───────────────────────────────────────────────────────
 
 func _load_stats() -> void:
@@ -439,6 +500,11 @@ func _load_stats() -> void:
 	if diffs is Array:
 		for d in diffs:
 			_diffs_played[String(d)] = true
+	var seen_blob := String(cfg.get_value("stats", "seen", ""))
+	if not seen_blob.is_empty():
+		var raw := Marshalls.base64_to_raw(seen_blob)
+		for i in mini(raw.size(), BYTES):
+			_seen[i] = raw[i]
 
 func _save_stats() -> void:
 	var cfg := ConfigFile.new()
@@ -446,6 +512,7 @@ func _save_stats() -> void:
 	cfg.set_value("stats", "contests_played", _contests_played)
 	cfg.set_value("stats", "contests_won", _contests_won)
 	cfg.set_value("stats", "diffs", _diffs_played.keys())
+	cfg.set_value("stats", "seen", Marshalls.raw_to_base64(_seen))
 	cfg.save(STATS_PATH)
 
 # ─── earn-gesture overlay ───────────────────────────────────────────────────

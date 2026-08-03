@@ -1,11 +1,14 @@
 extends Node
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DailyTasks — a small set of goals that refresh every UTC day ("play 3 games",
-# "reach round 7 on Hard", "play an Arena race", …). Progress accrues silently
-# while the player plays; the coins are only handed over when they CLAIM a
-# finished task from the tasks popup (one at a time, or all at once). The home
-# screen badges the tasks pill with a red count while anything is claimable.
+# DailyTasks — FIVE goals, drawn fresh every UTC day out of a much larger catalog
+# ("play 3 games", "reach round 7 on Hard", "play an Arena race", …). Progress
+# accrues silently while the player plays; the coins are only handed over when they
+# CLAIM a finished task from the tasks popup (one at a time, or all at once). The
+# home screen badges the tasks pill with a red count while anything is claimable.
+#
+# THE DRAW is a pure function of the date (see active_tasks) — no storage, no
+# migration, and every player in the world gets the same five today.
 #
 # STORAGE: one map field, `daily_tasks`, on /users/{uid} — the same doc the
 # wallet and the badge bitfield already live on:
@@ -59,82 +62,89 @@ const C_GIFT := Color(0.98, 0.86, 0.35)     # the daily ritual + coin earnings
 # popup floats finished tasks to the top, see ordered_tasks). `counter` names the
 # progress bucket; `art` picks the emblem BadgeIcons draws for the medallion.
 #
+# Only DAILY_COUNT of these are LIVE on any given day (see active_tasks) — the
+# table is the pool the day draws from, not the board itself. `group` is what the
+# draw picks over, so a day can't hand out "play 3 games" and "play 5 games"
+# together: one task per group, at most.
+#
 # REWARD SCALE: deliberately small — a task is a nudge, not an income. The cheapest
-# ask pays 5 and the hardest 15, so a normal session collects ~50-70 coins and a
-# full sweep of all 21 (ten games, round 20, round 12 on Hard, three Arena races…)
-# pays 205. Compare the daily claim's 30-100. Retune freely: nothing but this table
-# knows the numbers.
+# ask pays 5 and the hardest 15, so a day's five tasks are worth 40-60 coins.
+# Compare the daily claim's 30-100. Retune freely: nothing but this table knows
+# the numbers.
 const TASKS: Array[Dictionary] = [
 	# ── Play volume ─────────────────────────────────────────────────────────
-	{"id": "play_1",    "counter": "games",       "kind": COUNT, "target": 1,   "reward": 5,
+	{"id": "play_1",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 1,   "reward": 5,
 		"name": "Warm-Up",          "desc": "Play one game",                    "art": "controller", "accent": C_PLAY},
-	{"id": "play_3",    "counter": "games",       "kind": COUNT, "target": 3,   "reward": 8,
+	{"id": "play_3",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 3,   "reward": 8,
 		"name": "Triple Play",      "desc": "Play three games",                 "art": "controller", "accent": C_PLAY},
-	{"id": "play_5",    "counter": "games",       "kind": COUNT, "target": 5,   "reward": 12,
+	{"id": "play_5",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 5,   "reward": 12,
 		"name": "Marathon",         "desc": "Play five games",                  "art": "rocket",     "accent": C_PLAY},
-	{"id": "play_10",   "counter": "games",       "kind": COUNT, "target": 10,  "reward": 15,
+	{"id": "play_10",   "group": "play",   "counter": "games",       "kind": COUNT, "target": 10,  "reward": 15,
 		"name": "Unstoppable",      "desc": "Play ten games",                   "art": "flame",      "accent": C_PLAY},
 
 	# ── Breadth: rounds cleared and difficulties touched ────────────────────
-	{"id": "rounds_25", "counter": "rounds",      "kind": COUNT, "target": 25,  "reward": 8,
+	{"id": "rounds_25", "group": "rounds", "counter": "rounds",      "kind": COUNT, "target": 25,  "reward": 8,
 		"name": "Round Up",         "desc": "Clear 25 rounds in total",         "art": "chart",      "accent": C_ROUND},
-	{"id": "rounds_60", "counter": "rounds",      "kind": COUNT, "target": 60,  "reward": 12,
+	{"id": "rounds_60", "group": "rounds", "counter": "rounds",      "kind": COUNT, "target": 60,  "reward": 12,
 		"name": "Long Haul",        "desc": "Clear 60 rounds in total",         "art": "chart",      "accent": C_ROUND},
-	{"id": "all_diffs", "counter": "diffs",       "kind": COUNT, "target": 3,   "reward": 12,
+	{"id": "all_diffs", "group": "diffs",  "counter": "diffs",       "kind": COUNT, "target": 3,   "reward": 12,
 		"name": "Triple Threat",    "desc": "Play Easy, Moderate and Hard",     "art": "triangle",   "accent": C_ROUND},
 
 	# ── Best round of the day, any difficulty ───────────────────────────────
-	{"id": "reach_5",   "counter": "best_any",    "kind": BEST,  "target": 5,   "reward": 5,
+	{"id": "reach_5",   "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 5,   "reward": 5,
 		"name": "Getting Going",    "desc": "Reach round 5",                    "art": "num", "num": 5,  "accent": C_SKILL},
-	{"id": "reach_10",  "counter": "best_any",    "kind": BEST,  "target": 10,  "reward": 8,
+	{"id": "reach_10",  "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 10,  "reward": 8,
 		"name": "Double Digits",    "desc": "Reach round 10",                   "art": "num", "num": 10, "accent": C_SKILL},
-	{"id": "reach_15",  "counter": "best_any",    "kind": BEST,  "target": 15,  "reward": 12,
+	{"id": "reach_15",  "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 15,  "reward": 12,
 		"name": "Sharp Today",      "desc": "Reach round 15",                   "art": "num", "num": 15, "accent": C_SKILL},
-	{"id": "reach_20",  "counter": "best_any",    "kind": BEST,  "target": 20,  "reward": 15,
+	{"id": "reach_20",  "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 20,  "reward": 15,
 		"name": "Peak Form",        "desc": "Reach round 20",                   "art": "brain",      "accent": C_SKILL},
 
 	# ── Per difficulty ──────────────────────────────────────────────────────
-	{"id": "easy_12",   "counter": "best_easy",   "kind": BEST,  "target": 12,  "reward": 6,
+	{"id": "easy_12",   "group": "easy",   "counter": "best_easy",   "kind": BEST,  "target": 12,  "reward": 6,
 		"name": "Easy Does It",     "desc": "Reach round 12 on Easy",           "art": "leaf",       "accent": C_EASY},
-	{"id": "mod_8",     "counter": "best_moderate","kind": BEST, "target": 8,   "reward": 8,
+	{"id": "mod_8",     "group": "mod",    "counter": "best_moderate","kind": BEST, "target": 8,   "reward": 8,
 		"name": "Middle Ground",    "desc": "Reach round 8 on Moderate",        "art": "spark",      "accent": C_MOD},
-	{"id": "mod_14",    "counter": "best_moderate","kind": BEST, "target": 14,  "reward": 12,
+	{"id": "mod_14",    "group": "mod",    "counter": "best_moderate","kind": BEST, "target": 14,  "reward": 12,
 		"name": "Moderate Master",  "desc": "Reach round 14 on Moderate",       "art": "spark",      "accent": C_MOD},
-	{"id": "hard_7",    "counter": "best_hard",   "kind": BEST,  "target": 7,   "reward": 10,
+	{"id": "hard_7",    "group": "hard",   "counter": "best_hard",   "kind": BEST,  "target": 7,   "reward": 10,
 		"name": "Hard Mode",        "desc": "Reach round 7 on Hard",            "art": "bolt",       "accent": C_HARD},
-	{"id": "hard_12",   "counter": "best_hard",   "kind": BEST,  "target": 12,  "reward": 12,
+	{"id": "hard_12",   "group": "hard",   "counter": "best_hard",   "kind": BEST,  "target": 12,  "reward": 12,
 		"name": "Iron Memory",      "desc": "Reach round 12 on Hard",           "art": "bolt",       "accent": C_HARD},
 
 	# ── Arena ───────────────────────────────────────────────────────────────
-	{"id": "arena_1",     "counter": "arena",        "kind": COUNT, "target": 1, "reward": 8,
+	{"id": "arena_1",     "group": "arena",  "counter": "arena",        "kind": COUNT, "target": 1, "reward": 8,
 		"name": "Into The Arena",   "desc": "Race once in the Arena",           "art": "swords",     "accent": C_ARENA},
-	{"id": "arena_3",     "counter": "arena",        "kind": COUNT, "target": 3, "reward": 12,
+	{"id": "arena_3",     "group": "arena",  "counter": "arena",        "kind": COUNT, "target": 3, "reward": 12,
 		"name": "Arena Regular",    "desc": "Race three times in the Arena",    "art": "sword",      "accent": C_ARENA},
-	{"id": "arena_podium","counter": "arena_podium", "kind": COUNT, "target": 1, "reward": 10,
+	{"id": "arena_podium","group": "arena_place", "counter": "arena_podium", "kind": COUNT, "target": 1, "reward": 10,
 		"name": "On The Podium",    "desc": "Finish top 3 in an Arena race",    "art": "medal",      "accent": C_ARENA},
-	{"id": "arena_win",   "counter": "arena_wins",   "kind": COUNT, "target": 1, "reward": 15,
+	{"id": "arena_win",   "group": "arena_place", "counter": "arena_wins",   "kind": COUNT, "target": 1, "reward": 15,
 		"name": "Take The Crown",   "desc": "Finish 1st in an Arena race",      "art": "crown",      "accent": C_ARENA},
-	{"id": "arena_crowd", "counter": "arena_crowd",  "kind": COUNT, "target": 1, "reward": 12,
+	{"id": "arena_crowd", "group": "arena_place", "counter": "arena_crowd",  "kind": COUNT, "target": 1, "reward": 12,
 		"name": "Full House",       "desc": "Race against 10 or more players",  "art": "flag",       "accent": C_ARENA},
 
 	# ── Today's leaderboard standing (any difficulty) ────────────────────────
-	{"id": "lb_top50",  "counter": "lb_rank",     "kind": RANK,  "target": 50,  "reward": 8,
+	{"id": "lb_top50",  "group": "board",  "counter": "lb_rank",     "kind": RANK,  "target": 50,  "reward": 8,
 		"name": "On The Board",     "desc": "Reach the daily Top 50",           "art": "chart",      "accent": C_BOARD},
-	{"id": "lb_top25",  "counter": "lb_rank",     "kind": RANK,  "target": 25,  "reward": 10,
+	{"id": "lb_top25",  "group": "board",  "counter": "lb_rank",     "kind": RANK,  "target": 25,  "reward": 10,
 		"name": "Climbing",         "desc": "Reach the daily Top 25",           "art": "star",       "accent": C_BOARD},
-	{"id": "lb_top10",  "counter": "lb_rank",     "kind": RANK,  "target": 10,  "reward": 12,
+	{"id": "lb_top10",  "group": "board",  "counter": "lb_rank",     "kind": RANK,  "target": 10,  "reward": 12,
 		"name": "Daily Ten",        "desc": "Reach the daily Top 10",           "art": "medal",      "accent": C_BOARD},
-	{"id": "lb_top3",   "counter": "lb_rank",     "kind": RANK,  "target": 3,   "reward": 15,
+	{"id": "lb_top3",   "group": "board",  "counter": "lb_rank",     "kind": RANK,  "target": 3,   "reward": 15,
 		"name": "Daily Podium",     "desc": "Reach the daily Top 3",            "art": "trophy",     "accent": C_BOARD},
 
 	# ── The daily ritual + what the day earned ──────────────────────────────
-	{"id": "claim",     "counter": "daily_claim", "kind": COUNT, "target": 1,   "reward": 5,
+	{"id": "claim",     "group": "ritual", "counter": "daily_claim", "kind": COUNT, "target": 1,   "reward": 5,
 		"name": "Daily Reward",     "desc": "Claim your daily reward",          "art": "gift",       "accent": C_GIFT},
-	{"id": "coins_50",  "counter": "coins",       "kind": COUNT, "target": 50,  "reward": 8,
+	{"id": "coins_50",  "group": "coins",  "counter": "coins",       "kind": COUNT, "target": 50,  "reward": 8,
 		"name": "Payday",           "desc": "Earn 50 coins from games",         "art": "coin",       "accent": C_GIFT},
-	{"id": "coins_150", "counter": "coins",       "kind": COUNT, "target": 150, "reward": 12,
+	{"id": "coins_150", "group": "coins",  "counter": "coins",       "kind": COUNT, "target": 150, "reward": 12,
 		"name": "Big Earner",       "desc": "Earn 150 coins from games",        "art": "chest",      "accent": C_GIFT},
 ]
+
+# How many of the catalog are live on any one day.
+const DAILY_COUNT := 5
 
 # The difficulties the "Triple Threat" task counts.
 const DIFFS := ["easy", "moderate", "hard"]
@@ -145,6 +155,9 @@ signal changed
 
 var _by_id: Dictionary = {}          # id -> task dict
 var _date := ""                      # UTC day the state below belongs to
+# Today's draw, memoised by the day it was drawn for (see active_tasks).
+var _active_date := ""
+var _active: Array[Dictionary] = []
 var _counters: Dictionary = {}       # counter name -> int
 var _claimed: Dictionary = {}        # task id -> true
 var _loaded := false
@@ -176,9 +189,84 @@ func task(id: String) -> Dictionary:
 	return _by_id.get(id, {})
 
 func total_count() -> int:
-	return TASKS.size()
+	return active_tasks().size()
 
-# The catalog in DISPLAY order: everything finished floats to the top (rewards
+# ─── today's draw ───────────────────────────────────────────────────────────
+
+# The DAILY_COUNT tasks that are live right now, in catalog order.
+#
+# The draw is a pure function of the UTC date, so it needs no storage, survives a
+# reinstall, and lands on the same five for every player on earth — "today's
+# tasks" are the same conversation everywhere. It is also recomputed lazily off
+# _today(), which means a client left running across midnight picks up tomorrow's
+# board the moment anything asks for it, with no rollover plumbing.
+func active_tasks() -> Array[Dictionary]:
+	var today := _today()
+	if _active_date != today or _active.is_empty():
+		_active_date = today
+		_active = _draw_for_day(today)
+	return _active
+
+func is_active(id: String) -> bool:
+	for t in active_tasks():
+		if String(t["id"]) == id:
+			return true
+	return false
+
+# Pick one task from each of DAILY_COUNT distinct groups. Drawing over GROUPS
+# rather than over tasks is what stops a day handing out "play three games" next
+# to "play five games" — same counter, so the second is free once the first is
+# done, and the board would feel like three tasks wearing five hats.
+func _draw_for_day(date: String) -> Array[Dictionary]:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _day_seed(date)
+
+	# Group name -> its tasks, in catalog order (deterministic: Dictionary keeps
+	# insertion order, and TASKS is a constant).
+	var by_group: Dictionary = {}
+	var names: Array[String] = []
+	for t in TASKS:
+		var g := String(t["group"])
+		if not by_group.has(g):
+			by_group[g] = ([] as Array[Dictionary])
+			names.append(g)
+		(by_group[g] as Array[Dictionary]).append(t)
+
+	# Fisher-Yates on our own rng — Array.shuffle() would use the global one and
+	# hand out a different board on every launch.
+	for i in range(names.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp := names[i]
+		names[i] = names[j]
+		names[j] = tmp
+
+	var picked: Dictionary = {}
+	for i in mini(DAILY_COUNT, names.size()):
+		var pool: Array[Dictionary] = by_group[names[i]]
+		picked[String((pool[rng.randi_range(0, pool.size() - 1)])["id"])] = true
+
+	# Back to catalog order, so the board reads play → skill → arena → rewards
+	# rather than in draw order.
+	var out: Array[Dictionary] = []
+	for t in TASKS:
+		if picked.has(String(t["id"])):
+			out.append(t)
+	return out
+
+# A stable seed for a "YYYY-MM-DD". String.hash() is a fixed algorithm, so this is
+# reproducible across devices, sessions and builds — but consecutive dates hash to
+# neighbouring values, so it gets an avalanche pass first: without it, day N and
+# day N+1 would draw uncomfortably similar boards. Everything is masked back to 31
+# bits between steps so no intermediate can overflow a 64-bit int.
+const _SEED_MASK := 0x7FFFFFFF
+
+func _day_seed(date: String) -> int:
+	var h := int(date.hash()) & _SEED_MASK
+	h = ((h ^ (h >> 13)) * 65537) & _SEED_MASK
+	h = ((h ^ (h >> 7)) * 65537) & _SEED_MASK
+	return h ^ (h >> 17)
+
+# Today's board in DISPLAY order: everything finished floats to the top (rewards
 # waiting to be collected first, then the ones already banked), and the rest keeps
 # catalog order below. Callers snapshot this ONCE when they build — re-sorting a
 # live list would shuffle rows out from under the finger that just tapped one.
@@ -186,7 +274,7 @@ func ordered_tasks() -> Array[Dictionary]:
 	var ready: Array[Dictionary] = []
 	var banked: Array[Dictionary] = []
 	var pending: Array[Dictionary] = []
-	for t in TASKS:
+	for t in active_tasks():
 		var id := String(t["id"])
 		if not is_complete(id):
 			pending.append(t)
@@ -264,12 +352,15 @@ func action_text(id: String) -> String:
 func is_claimed(id: String) -> bool:
 	return bool(_claimed.get(id, false))
 
+# Only today's five can be claimed: progress on a task that isn't drawn today is
+# still counted (the counters are task-agnostic) but pays nothing until the day
+# that asks for it comes round.
 func can_claim(id: String) -> bool:
-	return _loaded and is_complete(id) and not is_claimed(id)
+	return _loaded and is_active(id) and is_complete(id) and not is_claimed(id)
 
 func claimable_count() -> int:
 	var n := 0
-	for t in TASKS:
+	for t in active_tasks():
 		if can_claim(String(t["id"])):
 			n += 1
 	return n
@@ -277,20 +368,20 @@ func claimable_count() -> int:
 # Coins sitting unclaimed right now — the "+N" on the Claim All button.
 func claimable_total() -> int:
 	var sum := 0
-	for t in TASKS:
+	for t in active_tasks():
 		if can_claim(String(t["id"])):
 			sum += int(t["reward"])
 	return sum
 
 func completed_count() -> int:
 	var n := 0
-	for t in TASKS:
+	for t in active_tasks():
 		if is_complete(String(t["id"])):
 			n += 1
 	return n
 
 func all_claimed() -> bool:
-	for t in TASKS:
+	for t in active_tasks():
 		if not is_claimed(String(t["id"])):
 			return false
 	return true
@@ -322,7 +413,7 @@ func claim(id: String) -> int:
 func claim_all() -> int:
 	_roll_if_new_day()
 	var ids: Array[String] = []
-	for t in TASKS:
+	for t in active_tasks():
 		var id := String(t["id"])
 		if can_claim(id):
 			ids.append(id)

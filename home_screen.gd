@@ -6,8 +6,8 @@ extends Control
 #   - one large, thin glowing orbital ring of soft colored orbs behind everything
 #   - the SIMON logo (white, soft-shadowed; the "O" is the 4-colour Simon wheel)
 #     over a "MEMORY CHALLENGE" subtitle
-#   - TOP-LEFT: a gold coin pill + a Daily Claim button (red notification dot),
-#     with a Daily Tasks pill under them (red count dot when a reward is ready)
+#   - TOP-LEFT: a gold coin pill + a Daily Hub button (red notification dot)
+#     that drops a panel holding the daily claim and the daily-task progress
 #   - TOP-RIGHT: three separate glass controls — a profile capsule (avatar +
 #     name), an auth button (sign out / sign in) and a settings disc
 #   - CENTER: a floating grassy island carrying the big circular START orb
@@ -126,6 +126,9 @@ var _clash_at := Vector2(107.0, 54.0)
 var _pose_l := {"feet": Vector2(91.0, 86.0), "blade": Vector2(107.0, 54.0), "lean": 0.0, "guard": 0.15}
 var _pose_r := {"feet": Vector2(123.0, 86.0), "blade": Vector2(107.0, 54.0), "lean": 0.0, "guard": 0.15}
 var _account_hud: Control
+# Red "you earned something new" dot on the account bubble, twin of the daily
+# pills' badges. Cleared by opening the profile (where the gallery lives).
+var _ach_badge: Panel
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
 # at a fixed corner here. Daily-claim button sits just under it.
@@ -134,13 +137,24 @@ var _coin_lbl: Label
 var _coin_plus_btn: Button       # opens the coin-pack purchase popup
 var _coin_loading_tween: Tween   # animates "." -> ".." -> "..." while CoinsManager loads
 var _coin_loading_idx: int = 0
-var _daily_btn: Button
-var _daily_badge: Panel
-# Daily-tasks pill (second HUD row, under the coin pill) + its red "N ready to
-# claim" count badge.
-var _tasks_btn: Button
-var _tasks_badge: Panel
-var _tasks_badge_lbl: Label
+# Daily Hub — the nav pill right of the coin pill, plus the dropdown it expands.
+# The pill carries a red dot whenever anything daily is outstanding; the panel
+# holds the two rituals (login claim + task board) as one row each.
+var _hub_btn: Button
+var _hub_badge: Panel            # red "something is waiting" dot on the pill
+var _hub_caret: Control          # the little "v" that flips when the panel opens
+var _hub_clip: Control           # animated reveal window (clips the panel)
+var _hub_panel: Panel
+var _hub_catcher: Control        # full-screen outside-tap dismisser
+var _hub_tween: Tween
+var _hub_tick: Timer             # 1s countdown refresh, runs only while open
+var _hub_open := false
+var _claim_status: Label         # "Ready to claim" / "Next reward in 7h 12m"
+var _claim_btn: Button           # bright purple Claim (available)
+var _claim_done: Panel           # green ✓ Claimed chip (already collected)
+var _tasks_count_lbl: Label      # "2/5 Completed"
+var _tasks_bar_fill: Panel
+var _tasks_ready_dot: Panel      # red dot on View Tasks when rewards are ready
 var _settings_music_btn: Button
 # Tiny, low-key credit line pinned to the very bottom edge.
 var _credits: Label
@@ -170,8 +184,7 @@ func _ready() -> void:
 	_build_credits()
 	if FirebaseManager.is_signed_in():
 		_build_coin_pill()
-		_build_daily_claim_button()
-		_build_daily_tasks_button()
+		_build_daily_hub()
 		# Show a summary popup when yesterday's leaderboard reward lands. Connect
 		# BEFORE kicking off the grant so we never miss the (possibly synchronous
 		# in editor) emission.
@@ -1716,28 +1729,43 @@ func _start_animations() -> void:
 
 # The top-right corner, signed in:
 #
-#     [ name / View profile │ ⎋ ]   ( ⚙ )
-#       opens Profile      sign out  settings
+#        [ name ]•   ( ⚙ )
+#     opens Profile ↑   settings (+ sign out)
+#          new-achievement dot
 #
-# The account capsule is segmented exactly like the top-left coin pill (content,
-# hairline, action) — sign-out lives in its right end, since it belongs to the
-# account the capsule names. Settings is its own disc: it has nothing to do with
-# the account, so it gets its own body, border and aura. Guests get a labelled
-# "Sign In" capsule in place of the segment (see below).
+# The account capsule is the one solid, saturated object up here: a moulded deep
+# blue bubble with the player's gold name centred on it and nothing else, so their
+# identity reads as a physical badge rather than another pane of the HUD glass.
+# The red dot on its shoulder is the only thing that ever joins the name there —
+# it appears the moment an achievement is earned and clears when the profile (which
+# is where the badge gallery lives) is opened. Settings keeps
+# the glass treatment — it's a tool, not an identity — and now owns sign-out,
+# which is a rare, deliberate action that has no business one mis-tap away from
+# the profile button. Guests get a labelled "Sign In" capsule beside the bubble.
 const ACC_H := 56.0                     # == COIN_PILL_H, the top-left twin
 const ACC_DISC := 48.0                  # round action buttons
 const ACC_GAP := 10.0                   # breathing room BETWEEN the controls
 const ACC_PILL_W := 196.0               # account capsule (signed in)
-const ACC_GUEST_W := 152.0              # ...and with no sign-out segment in it
+const ACC_GUEST_W := 152.0              # ...and with the shorter "Guest" on it
 const ACC_SIGNIN_W := 116.0             # labelled "Sign In" capsule (guests)
-const ACC_OUT_D := 44.0                 # sign-out hit zone inside the capsule
 const ACC_RIGHT := 18.0                 # margin from the screen's right edge
 
 # Rim/aura accents per control.
 const ACC_RIM := Color(0.55, 0.62, 1.0)         # the shared blue-violet HUD rim
 const ACC_AURA := Color(0.55, 0.36, 1.0)        # purple outer glow (as coin pill)
-const ACC_DANGER := Color(1.0, 0.42, 0.46)      # sign-out
 const ACC_INVITE := Color(0.32, 0.76, 1.0)      # sign-in
+
+# The account bubble's own palette — a deep navy dome, not HUD glass. TOP → FACE
+# → BELLY is the vertical ramp painted across the capsule; DEEP is the socket it
+# sits in, showing only as the strip of thickness under its bottom edge. Kept dark
+# on purpose: the gold name is the bright thing on this object, and a mid-blue face
+# fought it for attention.
+const ACC_BLUE_DEEP := Color(0.00, 0.02, 0.09)  # the socket / underside
+const ACC_BLUE_TOP := Color(0.09, 0.21, 0.50)   # lit crown
+const ACC_BLUE_FACE := Color(0.03, 0.11, 0.34)  # the body colour, mid-height
+const ACC_BLUE_BELLY := Color(0.01, 0.05, 0.20) # shaded lower curve
+const ACC_BLUE_RIM := Color(0.22, 0.42, 0.80)   # bright edge catching the light
+const ACC_BEVEL := 4.0                          # how much underside shows below
 
 func _build_account_hud() -> void:
 	_account_hud = Control.new()
@@ -1747,89 +1775,69 @@ func _build_account_hud() -> void:
 	var signed := FirebaseManager.is_signed_in() and FirebaseManager.has_display_name()
 	var x := 0.0
 
-	# --- (1) account capsule: name (+ sign-out segment when signed in) ---
+	# --- (1) account bubble: the player's name, and nothing else to mis-tap ---
 	var pill_w := ACC_PILL_W if signed else ACC_GUEST_W
-	var pill := _glass_button(Vector2(pill_w, ACC_H), ACC_RIM, ACC_AURA)
+	var pill := _bubble_button(Vector2(pill_w, ACC_H))
 	pill.position = Vector2(x, 0)
 	pill.pressed.connect(_open_profile_popup)
 	_account_hud.add_child(pill)
-	x += pill_w + ACC_GAP
 
-	# Everything left of the hairline opens the Profile; the segment right of it
-	# is the sign-out zone (nothing when signed out).
-	var text_r := pill_w - 18.0
-	if signed:
-		var out_x := pill_w - ACC_OUT_D - 6.0
-		var sep_x := out_x - 7.0
-		text_r = sep_x - 10.0
-		var sep := ColorRect.new()
-		sep.color = Color(0.65, 0.72, 1.0, 0.22)
-		sep.size = Vector2(1, ACC_H - 26.0)
-		sep.position = Vector2(sep_x, 13.0)
-		sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		pill.add_child(sep)
+	# Text is printed on the lit face (so it rides the press), which means it
+	# centres against ACC_H - ACC_BEVEL and is inset by the face's own offset.
+	var face: Control = pill.get_node("Face")
+	var face_h := face.size.y
 
-		# A borderless hit zone rather than a second glass body — inside the
-		# capsule it's a segment of it, not a button stuck on top of it. Being a
-		# child of the pill, it takes its own taps before they reach the profile.
-		var out_btn := Button.new()
-		out_btn.size = Vector2(ACC_OUT_D, ACC_OUT_D)
-		out_btn.position = Vector2(out_x, (ACC_H - ACC_OUT_D) * 0.5)
-		out_btn.focus_mode = Control.FOCUS_NONE
-		out_btn.tooltip_text = "Sign out"
-		var flat := StyleBoxFlat.new()
-		flat.bg_color = Color(0, 0, 0, 0)
-		flat.set_corner_radius_all(int(ACC_OUT_D * 0.5))
-		out_btn.add_theme_stylebox_override("normal", flat)
-		var fh := flat.duplicate() as StyleBoxFlat
-		fh.bg_color = Color(ACC_DANGER.r, ACC_DANGER.g, ACC_DANGER.b, 0.14)
-		out_btn.add_theme_stylebox_override("hover", fh)
-		var fp := flat.duplicate() as StyleBoxFlat
-		fp.bg_color = Color(ACC_DANGER.r, ACC_DANGER.g, ACC_DANGER.b, 0.26)
-		out_btn.add_theme_stylebox_override("pressed", fp)
-		out_btn.add_theme_stylebox_override("focus", flat)
-		out_btn.pressed.connect(_confirm_sign_out)
-		pill.add_child(out_btn)
-
-		var oi := _icon_holder(out_btn, 24.0)
-		oi.draw.connect(_draw_exit_icon.bind(oi, Color(0.92, 0.72, 0.78), true))
-		# The glyph rests in a muted rose and only goes properly red under the
-		# finger, so the corner stays calm but the tap confirms what it is.
-		out_btn.button_down.connect(func() -> void:
-			oi.modulate = Color(1.25, 0.62, 0.62)
-			create_tween().tween_property(oi, "scale", Vector2(0.88, 0.88), 0.09) \
-				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT))
-		out_btn.button_up.connect(func() -> void:
-			oi.modulate = Color.WHITE
-			create_tween().tween_property(oi, "scale", Vector2.ONE, 0.24) \
-				.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
-
-	# Name on top, a quiet caption under it — the caption is what tells a
-	# first-time player the capsule is tappable, so the name needs no chevron.
+	# The name, alone and centred on the capsule. It carried a "View profile"
+	# caption before; the name IS the affordance here — every other object in this
+	# corner is a labelled control, so a capsule wearing the player's own name reads
+	# as theirs to tap without being told.
 	var nl := Label.new()
 	nl.text = FirebaseManager.display_name if signed else "Guest"
-	nl.add_theme_font_size_override("font_size", 19)
+	nl.add_theme_font_size_override("font_size", 21)
 	nl.add_theme_color_override("font_color", GOLD)
-	nl.add_theme_color_override("font_shadow_color", Color(1.0, 0.72, 0.20, 0.30))
+	# On blue, gold needs a dark contact shadow to stay legible rather than the
+	# warm bloom it wore on the near-black glass.
+	nl.add_theme_color_override("font_shadow_color", Color(0.01, 0.04, 0.16, 0.80))
 	nl.add_theme_constant_override("shadow_offset_x", 0)
-	nl.add_theme_constant_override("shadow_offset_y", 0)
-	nl.add_theme_constant_override("shadow_outline_size", 5)
-	nl.position = Vector2(18, 9)
-	nl.size = Vector2(text_r - 18.0, 24)
+	nl.add_theme_constant_override("shadow_offset_y", 1)
+	nl.add_theme_constant_override("shadow_outline_size", 4)
+	nl.position = Vector2(14, 0)
+	nl.size = Vector2(face.size.x - 28.0, face_h)
+	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	nl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	nl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	nl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pill.add_child(nl)
+	face.add_child(nl)
 
-	var cap := Label.new()
-	cap.text = "View profile" if signed else "Playing as guest"
-	cap.add_theme_font_size_override("font_size", 12)
-	cap.add_theme_color_override("font_color", Color(0.63, 0.68, 0.94, 0.72))
-	cap.position = Vector2(18, 31)
-	cap.size = Vector2(text_r - 18.0, 16)
-	cap.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pill.add_child(cap)
+	# Red "new achievement" dot on the bubble's top-right, the same gesture the
+	# daily-claim gift disc uses. It's a sibling of the bubble, not a child, so
+	# the press animation doesn't drag it around. Opening the profile (which is
+	# what the bubble does) shows the gallery and clears it.
+	_ach_badge = Panel.new()
+	_ach_badge.size = Vector2(14, 14)
+	_ach_badge.position = Vector2(x + pill_w - 15.0, -3.0)
+	_ach_badge.pivot_offset = Vector2(7, 7)
+	_ach_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var abs_ := StyleBoxFlat.new()
+	abs_.bg_color = Color(0.95, 0.18, 0.18)
+	abs_.set_corner_radius_all(7)
+	abs_.border_color = Color(1.0, 0.80, 0.80, 0.85)
+	abs_.set_border_width_all(1)
+	abs_.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
+	abs_.shadow_size = 8
+	_ach_badge.add_theme_stylebox_override("panel", abs_)
+	_account_hud.add_child(_ach_badge)
+
+	var apulse := create_tween().set_loops()
+	apulse.tween_property(_ach_badge, "scale", Vector2.ONE * 1.25, 0.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	apulse.tween_property(_ach_badge, "scale", Vector2.ONE, 0.6) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	_refresh_ach_badge()
+	BadgeManager.unseen_changed.connect(_refresh_ach_badge)
+
+	x += pill_w + ACC_GAP
 
 	# --- (2) guests get an inviting labelled capsule of their own: a lone
 	# "enter" glyph tucked into the account pill would be a guess, and there's
@@ -1900,6 +1908,92 @@ func _build_account_hud() -> void:
 		tw.tween_property(ch, "position", rest, 0.42).set_delay(0.08 * i) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tw.tween_property(ch, "modulate:a", 1.0, 0.28).set_delay(0.08 * i)
+
+func _refresh_ach_badge() -> void:
+	if _ach_badge and is_instance_valid(_ach_badge):
+		_ach_badge.visible = BadgeManager.has_unseen()
+
+# The account bubble: a moulded blue capsule rather than another pane of glass.
+# A deep socket panel carries the outer aura, and the bubble itself is DRAWN one
+# scanline at a time (see _draw_bubble) so its surface is a continuous gradient —
+# a stacked "gloss panel" always betrays itself with a hard inner edge at this
+# size, which reads as a second object rather than as curvature. The bubble sits
+# ACC_BEVEL px above the socket's bottom; that exposed strip is the thickness.
+# Pressing drops it into the socket, so the capsule squashes rather than tints.
+func _bubble_button(size: Vector2) -> Button:
+	var btn := Button.new()
+	btn.size = size
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.pivot_offset = size * 0.5
+	# The button is a bare hit zone; every pixel of it is painted by the children.
+	for st in ["normal", "hover", "pressed", "focus"]:
+		btn.add_theme_stylebox_override(st, StyleBoxEmpty.new())
+
+	var body := Panel.new()
+	body.size = size
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bs := StyleBoxFlat.new()
+	bs.bg_color = ACC_BLUE_DEEP
+	bs.set_corner_radius_all(int(size.y * 0.5))
+	bs.shadow_color = Color(0.05, 0.18, 0.62, 0.36)
+	bs.shadow_size = 13
+	bs.shadow_offset = Vector2(0, 3)
+	body.add_theme_stylebox_override("panel", bs)
+	btn.add_child(body)
+
+	# Named so the caller can hang the name/caption off the FACE — text has to
+	# travel with the surface it's printed on when the bubble is pressed.
+	var face := Control.new()
+	face.name = "Face"
+	face.size = Vector2(size.x - 3.0, size.y - ACC_BEVEL)
+	face.position = Vector2(1.5, 0)
+	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	face.draw.connect(_draw_bubble.bind(face))
+	btn.add_child(face)
+
+	btn.button_down.connect(func() -> void:
+		create_tween().tween_property(face, "position:y", ACC_BEVEL - 1.0, 0.08) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT))
+	btn.button_up.connect(func() -> void:
+		create_tween().tween_property(face, "position:y", 0.0, 0.22) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
+	return btn
+
+# Paints the capsule as horizontal scanlines: each row gets the stadium's own
+# half-width (so the silhouette is exactly round) and a colour sampled from a
+# top-lit vertical ramp, with a specular falloff over the upper third. Drawn
+# once per invalidation, not per frame — it's a static surface.
+func _draw_bubble(c: Control) -> void:
+	var w := c.size.x
+	var h := c.size.y
+	var r := h * 0.5
+	# One extra row of bright rim underneath, then the ramp inset by a pixel, so
+	# the edge catches light without a separate stroke pass.
+	c.draw_rect(Rect2(0, 0, w, h), Color(0, 0, 0, 0))
+	for pass_i in 2:
+		var inset := 0.0 if pass_i == 0 else 1.0
+		var ph := h - inset * 2.0
+		var pr := ph * 0.5
+		for row in int(ceil(ph)):
+			var y := float(row) + 0.5
+			# Half-width lost to the rounded cap at this height.
+			var dx := 0.0
+			if y < pr:
+				dx = pr - sqrt(maxf(0.0, pr * pr - (pr - y) * (pr - y)))
+			elif y > ph - pr:
+				var dy := y - (ph - pr)
+				dx = pr - sqrt(maxf(0.0, pr * pr - dy * dy))
+			var col := ACC_BLUE_RIM
+			if pass_i == 1:
+				var t := y / ph
+				# Two-segment ramp: lit crown, then a long fall into the shaded
+				# belly, which is what makes the surface read as curved.
+				col = ACC_BLUE_TOP.lerp(ACC_BLUE_FACE, minf(1.0, t / 0.45)) if t < 0.45 \
+					else ACC_BLUE_FACE.lerp(ACC_BLUE_BELLY, (t - 0.45) / 0.55)
+				# Specular: strongest just under the crown, gone by a third down.
+				var s := maxf(0.0, 1.0 - t / 0.34)
+				col = col.lerp(Color(1, 1, 1), 0.20 * s * s)
+			c.draw_rect(Rect2(dx + inset, float(row) + inset, w - inset * 2.0 - dx * 2.0, 1.0), col)
 
 # A tappable capsule of navy glass with a neon rim and a coloured aura — the
 # shared body of every control in the account row. Hover brightens and lifts the
@@ -1978,9 +2072,12 @@ func _draw_exit_icon(c: Control, col: Color, out: bool) -> void:
 		tip - Vector2(s * 0.20, s * 0.18), tip, tip - Vector2(s * 0.20, -s * 0.18)]),
 		col, w, true)
 
-# Signing out is one tap on a small icon, so it asks first — and says plainly
-# that nothing is lost, which is the actual worry.
-func _confirm_sign_out() -> void:
+# Sign-out asks first — and says plainly that nothing is lost, which is the
+# actual worry. The settings popup that opened this stays up behind the
+# confirmation (matching Delete Account) so cancelling lands the player back
+# where they were; an actual sign-out rebuilds the home screen and takes it with
+# it, so there's nothing to tear down here.
+func _confirm_sign_out(_settings_overlay: Control = null) -> void:
 	var sz := get_viewport_rect().size
 	var overlay := Control.new()
 	overlay.name = "SignOutPopup"
@@ -2266,284 +2363,627 @@ func _stop_coin_loading_anim() -> void:
 		_coin_loading_tween.kill()
 	_coin_loading_tween = null
 
-# Daily-claim chip — sits to the right of the coin pill as a matching glass
-# pill: purple gift disc on the left, bold "Daily Claim" label, and a small
-# purple arrow disc on the far right that hints at "tap to open". Outer purple
-# aura ties it visually to the coin pill's sci-fi treatment. A small red dot
-# badges the gift disc when a claim is available.
-const DAILY_PILL_W := 230.0
+# ---------------- Daily Hub (top nav) ----------------
+#
+# The second pill of the top-left navigation bar: [coin pill][Daily Hub v].
+# Tapping it expands a panel directly underneath holding the two daily rituals
+# as one row each — the login claim, and the task board's progress. Both used to
+# be their own HUD pill; folding them into one dropdown gives the corner a single
+# entry point (and a single red dot) instead of three competing chips.
+#
+# Geometry note: the panel is left-aligned with the coin pill and RIGHT-aligned
+# with the hub pill, so it reads as the whole nav cluster unfolding rather than a
+# slab floating under one button. Its right edge stops short of the SIMON logo's
+# "S" and its height stops short of the Shop card — the dropdown never covers
+# either, nor the central START orb.
+const HUB_PILL_W := 160.0
+const HUB_PILL_H := COIN_PILL_H
+const HUB_PANEL_W := 406.0
+const HUB_PANEL_H := 160.0
+const HUB_PANEL_GAP := 10.0             # pill bottom -> panel top
+# Slack around the panel so the reveal window doesn't crop its purple aura.
+const HUB_GLOW_M := 26.0
+const HUB_OPEN_T := 0.28
+const HUB_CLOSE_T := 0.22
+const HUB_PURPLE := Color(0.66, 0.36, 1.0)      # the shared "daily" purple
+const HUB_PURPLE_HI := Color(0.90, 0.70, 1.0)   # its lit rim
+const HUB_TEAL := Color(0.30, 0.85, 0.84)       # tasks accent (kept from the old pill)
+const HUB_GREEN := Color(0.22, 0.82, 0.48)      # claimed / done
+const HUB_PAD := 18.0                   # panel inner margin
+const HUB_ACT_W := 116.0                # width of both right-hand action buttons
 
-func _build_daily_claim_button() -> void:
+func _build_daily_hub() -> void:
 	var x := HUD_LEFT + COIN_PILL_W + HUD_GAP
 	var y := HUD_TOP
-	var ph := COIN_PILL_H
 
-	_daily_btn = Button.new()
-	_daily_btn.position = Vector2(x, y)
-	_daily_btn.size = Vector2(DAILY_PILL_W, ph)
-	_daily_btn.focus_mode = Control.FOCUS_NONE
+	_hub_btn = Button.new()
+	_hub_btn.position = Vector2(x, y)
+	_hub_btn.size = Vector2(HUB_PILL_W, HUB_PILL_H)
+	_hub_btn.focus_mode = Control.FOCUS_NONE
+	# Same navy glass body / purple rim / purple aura as the coin pill beside it,
+	# so the two read as one bar rather than two unrelated widgets.
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.03, 0.04, 0.12, 0.90)
-	s.set_corner_radius_all(int(ph * 0.5))
+	s.set_corner_radius_all(int(HUB_PILL_H * 0.5))
 	s.border_color = Color(0.78, 0.62, 1.0, 0.55)
 	s.set_border_width_all(1)
 	s.shadow_color = Color(0.55, 0.36, 1.0, 0.40)
 	s.shadow_size = 14
 	s.shadow_offset = Vector2(0, 2)
-	_daily_btn.add_theme_stylebox_override("normal", s)
+	_hub_btn.add_theme_stylebox_override("normal", s)
 	var sh := s.duplicate() as StyleBoxFlat
 	sh.bg_color = Color(0.08, 0.08, 0.20, 0.95)
-	_daily_btn.add_theme_stylebox_override("hover", sh)
+	sh.border_color = Color(0.86, 0.72, 1.0, 0.80)
+	sh.shadow_size = 18
+	_hub_btn.add_theme_stylebox_override("hover", sh)
 	var sp := s.duplicate() as StyleBoxFlat
 	sp.bg_color = Color(0.02, 0.02, 0.10, 1.0)
-	_daily_btn.add_theme_stylebox_override("pressed", sp)
-	_daily_btn.text = ""                                # label is overlaid below
-	_daily_btn.pressed.connect(_open_daily_popup)
-	add_child(_daily_btn)
+	sp.shadow_size = 6
+	_hub_btn.add_theme_stylebox_override("pressed", sp)
+	_hub_btn.text = ""                                  # art is overlaid below
+	_hub_btn.pressed.connect(_toggle_hub)
+	add_child(_hub_btn)
 
-	# Geometry: purple disc on left, arrow disc on right, centered label between.
-	var d := 40.0
-	var disc_x := x + 8.0
-	var disc_y := y + (ph - d) * 0.5
-	var arrow_d := 32.0
-	var arrow_x := x + DAILY_PILL_W - arrow_d - 10.0
-	var arrow_y := y + (ph - arrow_d) * 0.5
-
-	# Purple gift disc — glossy, with a small highlight + the gift glyph inside.
-	var disc := Panel.new()
-	disc.size = Vector2(d, d)
-	disc.position = Vector2(disc_x, disc_y)
-	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ds := StyleBoxFlat.new()
-	ds.bg_color = Color(0.66, 0.36, 1.0)        # vivid purple
-	ds.set_corner_radius_all(int(d * 0.5))
-	ds.border_color = Color(0.90, 0.70, 1.0)
-	ds.set_border_width_all(2)
-	disc.add_theme_stylebox_override("panel", ds)
-	add_child(disc)
-	var hl := Panel.new()
-	var hd := d * 0.36
-	hl.size = Vector2(hd, hd)
-	hl.position = Vector2(d * 0.18, d * 0.14)
-	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var hs := StyleBoxFlat.new()
-	hs.bg_color = Color(1.0, 0.95, 1.0, 0.45)
-	hs.set_corner_radius_all(int(hd * 0.5))
-	hl.add_theme_stylebox_override("panel", hs)
-	disc.add_child(hl)
-
-	# Tiny procedural gift box inside the disc (lid + body + ribbon).
+	# Purple gift disc on the left — the same mark the old Daily Claim pill wore,
+	# so the button still says "rewards live here" at a glance.
+	var d := 36.0
+	var disc := _hub_disc(d, HUB_PURPLE, HUB_PURPLE_HI)
+	disc.position = Vector2(9.0, (HUB_PILL_H - d) * 0.5)
+	_hub_btn.add_child(disc)
 	var gift := Control.new()
 	gift.size = Vector2(d, d)
-	gift.position = Vector2.ZERO
 	gift.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	gift.draw.connect(_draw_gift_icon.bind(gift))
 	disc.add_child(gift)
 
-	# Centered "Daily Claim" label between disc and arrow.
 	var lbl := Label.new()
-	lbl.text = "Daily Claim"
-	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.text = "Daily Hub"
+	lbl.add_theme_font_size_override("font_size", 16)
 	lbl.add_theme_color_override("font_color", Color.WHITE)
 	lbl.add_theme_color_override("font_outline_color", Color.WHITE)
 	lbl.add_theme_constant_override("outline_size", 1)
 	lbl.add_theme_color_override("font_shadow_color", Color(0.62, 0.36, 1.0, 0.40))
 	lbl.add_theme_constant_override("shadow_outline_size", 4)
-	var lbl_x := disc_x + d + 6.0
-	lbl.position = Vector2(lbl_x, y)
-	lbl.size = Vector2(arrow_x - lbl_x - 6.0, ph)
+	lbl.position = Vector2(9.0 + d + 6.0, 0)
+	lbl.size = Vector2(HUB_PILL_W - (9.0 + d + 6.0) - 26.0, HUB_PILL_H)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(lbl)
+	_hub_btn.add_child(lbl)
 
-	# Small purple arrow disc on the far right. Drawn as a glossy circle with
-	# a chevron glyph; sits over the pill so the whole widget reads as one.
-	var arrow := Panel.new()
-	arrow.size = Vector2(arrow_d, arrow_d)
-	arrow.position = Vector2(arrow_x, arrow_y)
-	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var asx := StyleBoxFlat.new()
-	asx.bg_color = Color(0.55, 0.30, 0.96)
-	asx.set_corner_radius_all(int(arrow_d * 0.5))
-	asx.border_color = Color(0.86, 0.66, 1.0)
-	asx.set_border_width_all(2)
-	arrow.add_theme_stylebox_override("panel", asx)
-	add_child(arrow)
-	# Procedurally drawn ">" chevron, centered in the disc — avoids relying on a
-	# glyph whose baseline/metrics shift the mark off-center per font.
-	var chevron := Control.new()
-	chevron.size = Vector2(arrow_d, arrow_d)
-	chevron.position = Vector2.ZERO
-	chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chevron.draw.connect(_draw_daily_chevron.bind(chevron))
-	arrow.add_child(chevron)
+	# Down-caret on the far right; it flips to point up while the panel is open,
+	# which is the one cue that tells the player this pill is a dropdown.
+	_hub_caret = Control.new()
+	_hub_caret.size = Vector2(22, 22)
+	_hub_caret.position = Vector2(HUB_PILL_W - 28.0, (HUB_PILL_H - 22.0) * 0.5)
+	_hub_caret.pivot_offset = Vector2(11, 11)
+	_hub_caret.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hub_caret.draw.connect(_draw_hub_caret.bind(_hub_caret))
+	_hub_btn.add_child(_hub_caret)
 
-	# Small pulsing red "claim available" notification dot on the top-right of
-	# the gift disc so it pops against the purple.
-	_daily_badge = Panel.new()
-	_daily_badge.size = Vector2(14, 14)
-	_daily_badge.position = Vector2(disc_x + d - 8, disc_y - 4)
-	_daily_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Red "something daily is outstanding" dot, top-right of the pill.
+	_hub_badge = Panel.new()
+	_hub_badge.size = Vector2(14, 14)
+	_hub_badge.position = Vector2(HUB_PILL_W - 18.0, 2.0)
+	_hub_badge.pivot_offset = Vector2(7, 7)
+	_hub_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bs := StyleBoxFlat.new()
 	bs.bg_color = Color(0.95, 0.18, 0.18)
 	bs.set_corner_radius_all(7)
-	bs.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
-	bs.shadow_size = 8
-	_daily_badge.add_theme_stylebox_override("panel", bs)
-	add_child(_daily_badge)
-
-	# Gentle infinite pulse so the badge catches the eye.
-	var pulse := create_tween().set_loops()
-	pulse.tween_property(_daily_badge, "scale", Vector2.ONE * 1.25, 0.6) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	pulse.tween_property(_daily_badge, "scale", Vector2.ONE, 0.6) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-
-	_refresh_daily_badge()
-	CoinsManager.daily_claim_changed.connect(_refresh_daily_badge)
-	CoinsManager.loaded.connect(_refresh_daily_badge)
-
-func _refresh_daily_badge() -> void:
-	if _daily_badge:
-		_daily_badge.visible = CoinsManager.can_claim_today()
-
-func _open_daily_popup() -> void:
-	var popup := DailyClaimPopup.new()
-	add_child(popup)
-
-# Daily-tasks chip — the third pill of the top-left HUD, on a second row under the
-# coin pill so the coins / claim / tasks cluster reads as one block. (It sits under
-# the COIN pill, not the claim one: the second row can't extend as far right as the
-# first without the SIMON logo's "S" disappearing behind it.) A teal checklist disc
-# and the label, nothing else — a red count badge rides the disc's corner, the same
-# gesture the claim pill uses, whenever finished tasks are waiting to be collected.
-# Tapping the pill opens the popup.
-const TASKS_PILL_H := 48.0
-
-func _build_daily_tasks_button() -> void:
-	var x := HUD_LEFT
-	var y := HUD_TOP + COIN_PILL_H + 10.0
-	var teal := Color(0.30, 0.85, 0.84)
-
-	_tasks_btn = Button.new()
-	_tasks_btn.position = Vector2(x, y)
-	_tasks_btn.size = Vector2(COIN_PILL_W, TASKS_PILL_H)
-	_tasks_btn.focus_mode = Control.FOCUS_NONE
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.03, 0.04, 0.12, 0.90)
-	s.set_corner_radius_all(int(TASKS_PILL_H * 0.5))
-	s.border_color = Color(teal.r, teal.g, teal.b, 0.55)
-	s.set_border_width_all(1)
-	s.shadow_color = Color(0.20, 0.72, 0.80, 0.35)
-	s.shadow_size = 12
-	s.shadow_offset = Vector2(0, 2)
-	_tasks_btn.add_theme_stylebox_override("normal", s)
-	var sh := s.duplicate() as StyleBoxFlat
-	sh.bg_color = Color(0.06, 0.10, 0.20, 0.95)
-	_tasks_btn.add_theme_stylebox_override("hover", sh)
-	var sp := s.duplicate() as StyleBoxFlat
-	sp.bg_color = Color(0.02, 0.02, 0.10, 1.0)
-	_tasks_btn.add_theme_stylebox_override("pressed", sp)
-	_tasks_btn.text = ""                                # label is overlaid below
-	_tasks_btn.pressed.connect(_open_tasks_popup)
-	add_child(_tasks_btn)
-
-	# Teal clipboard disc on the left, mirroring the claim pill's gift disc.
-	var d := 34.0
-	var disc_x := x + 7.0
-	var disc_y := y + (TASKS_PILL_H - d) * 0.5
-	var disc := Panel.new()
-	disc.size = Vector2(d, d)
-	disc.position = Vector2(disc_x, disc_y)
-	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var ds := StyleBoxFlat.new()
-	ds.bg_color = teal
-	ds.set_corner_radius_all(int(d * 0.5))
-	ds.border_color = Color(0.72, 0.98, 0.98)
-	ds.set_border_width_all(2)
-	disc.add_theme_stylebox_override("panel", ds)
-	add_child(disc)
-	var hl := Panel.new()
-	var hd := d * 0.34
-	hl.size = Vector2(hd, hd)
-	hl.position = Vector2(d * 0.16, d * 0.12)
-	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var hs := StyleBoxFlat.new()
-	hs.bg_color = Color(0.95, 1.0, 1.0, 0.45)
-	hs.set_corner_radius_all(int(hd * 0.5))
-	hl.add_theme_stylebox_override("panel", hs)
-	disc.add_child(hl)
-
-	var glyph := Control.new()
-	glyph.size = Vector2(d, d)
-	glyph.position = Vector2.ZERO
-	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	glyph.draw.connect(_draw_tasks_icon.bind(glyph))
-	disc.add_child(glyph)
-
-	var lbl := Label.new()
-	lbl.text = "Daily Tasks"
-	lbl.add_theme_font_size_override("font_size", 17)
-	lbl.add_theme_color_override("font_color", Color.WHITE)
-	lbl.add_theme_color_override("font_outline_color", Color.WHITE)
-	lbl.add_theme_constant_override("outline_size", 1)
-	lbl.add_theme_color_override("font_shadow_color", Color(0.20, 0.85, 0.85, 0.40))
-	lbl.add_theme_constant_override("shadow_outline_size", 4)
-	var lbl_x := disc_x + d + 6.0
-	lbl.position = Vector2(lbl_x, y)
-	lbl.size = Vector2(x + COIN_PILL_W - 12.0 - lbl_x, TASKS_PILL_H)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(lbl)
-
-	# Red "N rewards ready" badge on the disc's top-right corner.
-	var bd := 20.0
-	_tasks_badge = Panel.new()
-	_tasks_badge.size = Vector2(bd, bd)
-	_tasks_badge.position = Vector2(disc_x + d - bd * 0.55, disc_y - bd * 0.34)
-	_tasks_badge.pivot_offset = Vector2(bd, bd) * 0.5
-	_tasks_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var bs := StyleBoxFlat.new()
-	bs.bg_color = Color(0.95, 0.18, 0.18)
-	bs.set_corner_radius_all(int(bd * 0.5))
 	bs.border_color = Color(1.0, 0.80, 0.80, 0.85)
 	bs.set_border_width_all(1)
 	bs.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
 	bs.shadow_size = 8
-	_tasks_badge.add_theme_stylebox_override("panel", bs)
-	add_child(_tasks_badge)
+	_hub_badge.add_theme_stylebox_override("panel", bs)
+	_hub_btn.add_child(_hub_badge)
 
-	_tasks_badge_lbl = Label.new()
-	_tasks_badge_lbl.add_theme_font_size_override("font_size", 13)
-	_tasks_badge_lbl.add_theme_color_override("font_color", Color.WHITE)
-	_tasks_badge_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_tasks_badge_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_tasks_badge_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_tasks_badge_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_tasks_badge.add_child(_tasks_badge_lbl)
-
-	# Gentle infinite pulse so the badge catches the eye (matches the claim dot).
 	var pulse := create_tween().set_loops()
-	pulse.tween_property(_tasks_badge, "scale", Vector2.ONE * 1.22, 0.6) \
+	pulse.tween_property(_hub_badge, "scale", Vector2.ONE * 1.25, 0.6) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	pulse.tween_property(_tasks_badge, "scale", Vector2.ONE, 0.6) \
+	pulse.tween_property(_hub_badge, "scale", Vector2.ONE, 0.6) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-	_refresh_tasks_badge()
-	DailyTasks.changed.connect(_refresh_tasks_badge)
-	# The board only becomes real once the wallet doc (which carries it) has landed.
-	CoinsManager.loaded.connect(_refresh_tasks_badge)
+	_build_hub_panel()
 
-func _refresh_tasks_badge() -> void:
-	if not _tasks_badge:
+	_hub_tick = Timer.new()
+	_hub_tick.wait_time = 1.0
+	_hub_tick.timeout.connect(_refresh_claim_status)
+	add_child(_hub_tick)
+
+	_refresh_hub()
+	CoinsManager.daily_claim_changed.connect(_refresh_hub)
+	CoinsManager.loaded.connect(_refresh_hub)
+	DailyTasks.changed.connect(_refresh_hub)
+
+# The dropdown itself. Built once, hidden, and revealed by growing `_hub_clip`
+# (a clipping window) rather than by scaling the panel — scaling would squash the
+# text and the corner radii, while a clip reads as the panel unrolling out of the
+# nav bar. The window is inflated by HUB_GLOW_M on every side so the panel's
+# purple aura isn't sliced off at the edges.
+func _build_hub_panel() -> void:
+	var px := HUD_LEFT
+	var py := HUD_TOP + HUB_PILL_H + HUB_PANEL_GAP
+
+	# Sits UNDER the panel in the tree, so taps inside the panel reach its own
+	# controls first and only strays out here dismiss the dropdown.
+	_hub_catcher = Control.new()
+	_hub_catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hub_catcher.mouse_filter = Control.MOUSE_FILTER_STOP
+	_hub_catcher.visible = false
+	_hub_catcher.gui_input.connect(_on_hub_catcher_input)
+	add_child(_hub_catcher)
+
+	_hub_clip = Control.new()
+	_hub_clip.position = Vector2(px - HUB_GLOW_M, py - HUB_GLOW_M)
+	_hub_clip.size = Vector2(HUB_PANEL_W + HUB_GLOW_M * 2.0, 0.0)
+	_hub_clip.clip_contents = true
+	_hub_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hub_clip.visible = false
+	_hub_clip.modulate.a = 0.0
+	add_child(_hub_clip)
+
+	_hub_panel = Panel.new()
+	_hub_panel.position = Vector2(HUB_GLOW_M, HUB_GLOW_M)
+	_hub_panel.size = Vector2(HUB_PANEL_W, HUB_PANEL_H)
+	var ps := StyleBoxFlat.new()
+	ps.bg_color = Color(0.045, 0.05, 0.15, 0.97)
+	ps.set_corner_radius_all(22)
+	ps.border_color = Color(0.62, 0.48, 1.0, 0.55)
+	ps.set_border_width_all(1)
+	ps.shadow_color = Color(0.45, 0.24, 0.95, 0.45)
+	ps.shadow_size = 18
+	ps.shadow_offset = Vector2(0, 6)
+	_hub_panel.add_theme_stylebox_override("panel", ps)
+	_hub_clip.add_child(_hub_panel)
+
+	# A soft violet wash across the top edge so the panel feels lit from the pill
+	# above it instead of being a flat slab.
+	var sheen := Panel.new()
+	sheen.size = Vector2(HUB_PANEL_W - 2.0, 46.0)
+	sheen.position = Vector2(1.0, 1.0)
+	sheen.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ss := StyleBoxFlat.new()
+	ss.bg_color = Color(0.55, 0.36, 1.0, 0.10)
+	ss.corner_radius_top_left = 21
+	ss.corner_radius_top_right = 21
+	sheen.add_theme_stylebox_override("panel", ss)
+	_hub_panel.add_child(sheen)
+
+	_build_hub_claim_row()
+	_build_hub_divider()
+	_build_hub_tasks_row()
+
+const HUB_ROW_A := 16.0                 # claim row top, in panel space
+const HUB_ROW_B := 89.0                 # tasks row top
+const HUB_DISC := 38.0
+const HUB_TEXT_X := HUB_PAD + HUB_DISC + 12.0
+
+# 🎁 Daily Claim — gift disc, status line, and a bright purple Claim button that
+# collects the reward in place. The row's left half is its own flat hit zone and
+# opens the full streak popup, so the seven-day grid stays one tap away.
+func _build_hub_claim_row() -> void:
+	var open_zone := _hub_row_hit(HUB_ROW_A, _open_daily_popup)
+	_hub_panel.add_child(open_zone)
+
+	var disc := _hub_disc(HUB_DISC, HUB_PURPLE, HUB_PURPLE_HI)
+	disc.position = Vector2(HUB_PAD, HUB_ROW_A + 2.0)
+	_hub_panel.add_child(disc)
+	var gift := Control.new()
+	gift.size = Vector2(HUB_DISC, HUB_DISC)
+	gift.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gift.draw.connect(_draw_gift_icon.bind(gift))
+	disc.add_child(gift)
+
+	_hub_panel.add_child(_hub_title("Daily Claim", HUB_ROW_A))
+	_claim_status = _hub_sub("", HUB_ROW_A + 23.0)
+	_hub_panel.add_child(_claim_status)
+
+	var bx := HUB_PANEL_W - HUB_PAD - HUB_ACT_W
+	_claim_btn = Button.new()
+	_claim_btn.text = "Claim"
+	_claim_btn.size = Vector2(HUB_ACT_W, 38.0)
+	_claim_btn.position = Vector2(bx, HUB_ROW_A + 2.0)
+	_claim_btn.pivot_offset = Vector2(HUB_ACT_W, 38.0) * 0.5
+	_claim_btn.focus_mode = Control.FOCUS_NONE
+	_claim_btn.add_theme_font_size_override("font_size", 17)
+	_claim_btn.add_theme_color_override("font_color", Color.WHITE)
+	_claim_btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = HUB_PURPLE
+	cs.set_corner_radius_all(19)
+	cs.border_color = HUB_PURPLE_HI
+	cs.set_border_width_all(2)
+	cs.shadow_color = Color(0.62, 0.32, 1.0, 0.75)
+	cs.shadow_size = 12
+	_claim_btn.add_theme_stylebox_override("normal", cs)
+	var ch := cs.duplicate() as StyleBoxFlat
+	ch.bg_color = Color(0.74, 0.46, 1.0)
+	ch.shadow_size = 16
+	_claim_btn.add_theme_stylebox_override("hover", ch)
+	var cp := cs.duplicate() as StyleBoxFlat
+	cp.bg_color = Color(0.50, 0.24, 0.86)
+	cp.shadow_size = 4
+	_claim_btn.add_theme_stylebox_override("pressed", cp)
+	_claim_btn.pressed.connect(_on_hub_claim)
+	_hub_panel.add_child(_claim_btn)
+
+	# Breathing glow so the one actionable thing in the panel is unmistakable.
+	var br := create_tween().set_loops()
+	br.tween_property(_claim_btn, "scale", Vector2.ONE * 1.045, 0.8) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	br.tween_property(_claim_btn, "scale", Vector2.ONE, 0.8) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	# ...and its already-collected twin, occupying the exact same rect.
+	_claim_done = Panel.new()
+	_claim_done.size = Vector2(HUB_ACT_W, 38.0)
+	_claim_done.position = Vector2(bx, HUB_ROW_A + 2.0)
+	_claim_done.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = Color(HUB_GREEN.r, HUB_GREEN.g, HUB_GREEN.b, 0.16)
+	ds.set_corner_radius_all(19)
+	ds.border_color = Color(HUB_GREEN.r, HUB_GREEN.g, HUB_GREEN.b, 0.60)
+	ds.set_border_width_all(1)
+	_claim_done.add_theme_stylebox_override("panel", ds)
+	_hub_panel.add_child(_claim_done)
+	var tick := Control.new()
+	tick.size = Vector2(20, 20)
+	tick.position = Vector2(16, 9)
+	tick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tick.draw.connect(_draw_hub_check.bind(tick))
+	_claim_done.add_child(tick)
+	var dl := Label.new()
+	dl.text = "Claimed"
+	dl.add_theme_font_size_override("font_size", 15)
+	dl.add_theme_color_override("font_color", Color(0.62, 0.95, 0.74))
+	dl.position = Vector2(40, 0)
+	dl.size = Vector2(HUB_ACT_W - 46.0, 38.0)
+	dl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	dl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_claim_done.add_child(dl)
+
+func _build_hub_divider() -> void:
+	var line := ColorRect.new()
+	line.color = Color(0.62, 0.56, 1.0, 0.16)
+	line.size = Vector2(HUB_PANEL_W - HUB_PAD * 2.0, 1.0)
+	line.position = Vector2(HUB_PAD, 74.0)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hub_panel.add_child(line)
+
+# 🎯 Daily Tasks — clipboard disc, "N/M Completed", a progress bar under the
+# text, and a View Tasks button (red-dotted when rewards are sitting unclaimed).
+func _build_hub_tasks_row() -> void:
+	var open_zone := _hub_row_hit(HUB_ROW_B, _open_tasks_popup)
+	_hub_panel.add_child(open_zone)
+
+	var disc := _hub_disc(HUB_DISC, HUB_TEAL, Color(0.72, 0.98, 0.98))
+	disc.position = Vector2(HUB_PAD, HUB_ROW_B + 2.0)
+	_hub_panel.add_child(disc)
+	var glyph := Control.new()
+	glyph.size = Vector2(HUB_DISC, HUB_DISC)            # _draw_tasks_icon scales itself
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glyph.draw.connect(_draw_tasks_icon.bind(glyph))
+	disc.add_child(glyph)
+
+	_hub_panel.add_child(_hub_title("Daily Tasks", HUB_ROW_B))
+	_tasks_count_lbl = _hub_sub("", HUB_ROW_B + 23.0)
+	_hub_panel.add_child(_tasks_count_lbl)
+
+	# Progress bar, tucked under the label and stopping short of the button.
+	var bar_x := HUB_TEXT_X
+	var bar_w := HUB_PANEL_W - HUB_PAD - HUB_ACT_W - 16.0 - bar_x
+	var track := Panel.new()
+	track.size = Vector2(bar_w, 8.0)
+	track.position = Vector2(bar_x, HUB_ROW_B + 45.0)
+	track.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ts := StyleBoxFlat.new()
+	ts.bg_color = Color(1, 1, 1, 0.09)
+	ts.set_corner_radius_all(4)
+	ts.border_color = Color(0.62, 0.56, 1.0, 0.20)
+	ts.set_border_width_all(1)
+	track.add_theme_stylebox_override("panel", ts)
+	_hub_panel.add_child(track)
+
+	_tasks_bar_fill = Panel.new()
+	_tasks_bar_fill.size = Vector2(0, 8.0)
+	_tasks_bar_fill.position = Vector2.ZERO
+	_tasks_bar_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var fs := StyleBoxFlat.new()
+	fs.bg_color = HUB_PURPLE
+	fs.set_corner_radius_all(4)
+	fs.shadow_color = Color(0.62, 0.32, 1.0, 0.55)
+	fs.shadow_size = 6
+	_tasks_bar_fill.add_theme_stylebox_override("panel", fs)
+	track.add_child(_tasks_bar_fill)
+
+	var bx := HUB_PANEL_W - HUB_PAD - HUB_ACT_W
+	var view := Button.new()
+	view.text = "View Tasks"
+	view.size = Vector2(HUB_ACT_W, 38.0)
+	view.position = Vector2(bx, HUB_ROW_B + 6.0)
+	view.focus_mode = Control.FOCUS_NONE
+	view.add_theme_font_size_override("font_size", 15)
+	view.add_theme_color_override("font_color", Color(0.92, 0.90, 1.0))
+	view.add_theme_color_override("font_hover_color", Color.WHITE)
+	var vs := StyleBoxFlat.new()
+	vs.bg_color = Color(0.16, 0.13, 0.34, 0.95)
+	vs.set_corner_radius_all(19)
+	vs.border_color = Color(0.72, 0.58, 1.0, 0.65)
+	vs.set_border_width_all(1)
+	view.add_theme_stylebox_override("normal", vs)
+	var vh := vs.duplicate() as StyleBoxFlat
+	vh.bg_color = Color(0.24, 0.19, 0.46, 0.98)
+	vh.border_color = Color(0.86, 0.72, 1.0, 0.90)
+	view.add_theme_stylebox_override("hover", vh)
+	var vp := vs.duplicate() as StyleBoxFlat
+	vp.bg_color = Color(0.11, 0.08, 0.26, 1.0)
+	view.add_theme_stylebox_override("pressed", vp)
+	view.pressed.connect(_open_tasks_popup)
+	_hub_panel.add_child(view)
+
+	_tasks_ready_dot = Panel.new()
+	_tasks_ready_dot.size = Vector2(12, 12)
+	_tasks_ready_dot.position = Vector2(HUB_ACT_W - 12.0, -2.0)
+	_tasks_ready_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var rs := StyleBoxFlat.new()
+	rs.bg_color = Color(0.95, 0.18, 0.18)
+	rs.set_corner_radius_all(6)
+	rs.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
+	rs.shadow_size = 7
+	_tasks_ready_dot.add_theme_stylebox_override("panel", rs)
+	view.add_child(_tasks_ready_dot)
+
+# ---- panel building blocks ----
+
+# The transparent hit zone under a row's disc + text: opens that row's full
+# screen. Only the left column, so it never steals the action button's taps.
+func _hub_row_hit(top: float, on_press: Callable) -> Button:
+	var b := Button.new()
+	b.position = Vector2(HUB_PAD - 6.0, top - 4.0)
+	b.size = Vector2(HUB_PANEL_W - HUB_PAD - HUB_ACT_W - 16.0 - (HUB_PAD - 6.0), 50.0)
+	b.focus_mode = Control.FOCUS_NONE
+	var flat := StyleBoxFlat.new()
+	flat.bg_color = Color(0, 0, 0, 0)
+	flat.set_corner_radius_all(14)
+	b.add_theme_stylebox_override("normal", flat)
+	b.add_theme_stylebox_override("focus", flat)
+	var fh := flat.duplicate() as StyleBoxFlat
+	fh.bg_color = Color(1, 1, 1, 0.05)
+	b.add_theme_stylebox_override("hover", fh)
+	var fp := flat.duplicate() as StyleBoxFlat
+	fp.bg_color = Color(1, 1, 1, 0.09)
+	b.add_theme_stylebox_override("pressed", fp)
+	b.pressed.connect(on_press)
+	return b
+
+# Glossy coloured disc with a highlight blob — the shared icon plate of the HUD.
+func _hub_disc(d: float, base: Color, rim: Color) -> Panel:
+	var disc := Panel.new()
+	disc.size = Vector2(d, d)
+	disc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ds := StyleBoxFlat.new()
+	ds.bg_color = base
+	ds.set_corner_radius_all(int(d * 0.5))
+	ds.border_color = rim
+	ds.set_border_width_all(2)
+	disc.add_theme_stylebox_override("panel", ds)
+	var hl := Panel.new()
+	var hd := d * 0.34
+	hl.size = Vector2(hd, hd)
+	hl.position = Vector2(d * 0.17, d * 0.13)
+	hl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hs := StyleBoxFlat.new()
+	hs.bg_color = Color(1.0, 0.98, 1.0, 0.42)
+	hs.set_corner_radius_all(int(hd * 0.5))
+	hl.add_theme_stylebox_override("panel", hs)
+	disc.add_child(hl)
+	return disc
+
+func _hub_title(text: String, top: float) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 17)
+	l.add_theme_color_override("font_color", Color.WHITE)
+	l.add_theme_color_override("font_outline_color", Color.WHITE)
+	l.add_theme_constant_override("outline_size", 1)
+	l.position = Vector2(HUB_TEXT_X, top)
+	l.size = Vector2(HUB_PANEL_W - HUB_PAD - HUB_ACT_W - 16.0 - HUB_TEXT_X, 22.0)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+func _hub_sub(text: String, top: float) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 13)
+	l.add_theme_color_override("font_color", Color(0.72, 0.75, 0.95, 0.90))
+	l.position = Vector2(HUB_TEXT_X, top)
+	l.size = Vector2(HUB_PANEL_W - HUB_PAD - HUB_ACT_W - 16.0 - HUB_TEXT_X, 18.0)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+# A soft "v" for the pill; flipped by rotating the whole control when open.
+func _draw_hub_caret(c: Control) -> void:
+	var ctr := c.size * 0.5
+	var w := c.size.x * 0.30
+	var h := c.size.y * 0.17
+	c.draw_polyline(PackedVector2Array([
+			ctr + Vector2(-w, -h), ctr + Vector2(0, h), ctr + Vector2(w, -h)]),
+		Color(0.88, 0.82, 1.0), 3.0, true)
+
+func _draw_hub_check(c: Control) -> void:
+	var s := c.size.x
+	c.draw_polyline(PackedVector2Array([
+			Vector2(s * 0.14, s * 0.52), Vector2(s * 0.40, s * 0.78), Vector2(s * 0.88, s * 0.20)]),
+		Color(0.42, 0.95, 0.62), 3.0, true)
+
+# ---- open / close ----
+
+func _toggle_hub() -> void:
+	if _hub_open:
+		_close_hub()
+	else:
+		_open_hub()
+
+func _open_hub() -> void:
+	if _hub_open or not _hub_clip:
 		return
-	var ready_now := DailyTasks.claimable_count()
-	_tasks_badge.visible = ready_now > 0
-	_tasks_badge_lbl.text = str(ready_now)
+	_hub_open = true
+	# A client left running across UTC midnight would otherwise show yesterday's
+	# board; re-check the calendar before painting the rows.
+	DailyTasks.refresh()
+	_refresh_hub()
+	_hub_catcher.visible = true
+	_hub_clip.visible = true
+	_hub_panel.position.y = HUB_GLOW_M - 8.0
+	if _hub_tween and _hub_tween.is_valid():
+		_hub_tween.kill()
+	_hub_tween = create_tween().set_parallel(true)
+	_hub_tween.tween_property(_hub_clip, "size:y", HUB_PANEL_H + HUB_GLOW_M * 2.0, HUB_OPEN_T) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_hub_tween.tween_property(_hub_clip, "modulate:a", 1.0, 0.16)
+	_hub_tween.tween_property(_hub_panel, "position:y", HUB_GLOW_M, HUB_OPEN_T) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_hub_tween.tween_property(_hub_caret, "rotation", PI, HUB_OPEN_T) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_animate_task_bar()
+	_hub_tick.start()
+
+func _close_hub() -> void:
+	if not _hub_open or not _hub_clip:
+		return
+	_hub_open = false
+	_hub_catcher.visible = false
+	_hub_tick.stop()
+	if _hub_tween and _hub_tween.is_valid():
+		_hub_tween.kill()
+	_hub_tween = create_tween().set_parallel(true)
+	_hub_tween.tween_property(_hub_clip, "size:y", 0.0, HUB_CLOSE_T) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	_hub_tween.tween_property(_hub_clip, "modulate:a", 0.0, HUB_CLOSE_T * 0.8)
+	_hub_tween.tween_property(_hub_caret, "rotation", 0.0, HUB_CLOSE_T) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_hub_tween.chain().tween_callback(func() -> void:
+		if not _hub_open and is_instance_valid(_hub_clip):
+			_hub_clip.visible = false)
+
+func _on_hub_catcher_input(ev: InputEvent) -> void:
+	var tapped := (ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed) \
+		or (ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed)
+	if tapped:
+		_close_hub()
+
+# ---- state ----
+
+func _refresh_hub() -> void:
+	if not _hub_btn or not is_instance_valid(_hub_btn):
+		return
+	_refresh_claim_status()
+
+	var done := DailyTasks.completed_count()
+	var total := DailyTasks.total_count()
+	_tasks_count_lbl.text = "%d/%d Completed" % [done, total]
+	if _hub_open:
+		_animate_task_bar()
+	else:
+		var track := _tasks_bar_fill.get_parent() as Control
+		_tasks_bar_fill.size.x = track.size.x * _task_fraction()
+	_tasks_ready_dot.visible = DailyTasks.claimable_count() > 0
+
+	# The pill's dot is the union of everything daily that's still outstanding —
+	# an uncollected login reward, task rewards waiting, or tasks left to finish.
+	_hub_badge.visible = CoinsManager.can_claim_today() \
+		or DailyTasks.claimable_count() > 0 or done < total
+
+func _refresh_claim_status() -> void:
+	if not _claim_status or not is_instance_valid(_claim_status):
+		return
+	var can := CoinsManager.can_claim_today()
+	_claim_btn.visible = can
+	_claim_done.visible = not can
+	if can:
+		var reward := CoinsManager.daily_reward_for_day(CoinsManager.next_claim_day())
+		_claim_status.text = "Ready to collect · +%s" % _comma_int(reward)
+		_claim_status.add_theme_color_override("font_color", Color(0.98, 0.84, 0.38))
+	else:
+		_claim_status.text = "Next reward in %s" % _hub_reset_text()
+		_claim_status.add_theme_color_override("font_color", Color(0.72, 0.75, 0.95, 0.90))
+
+# Both dailies roll at the same UTC midnight, so the task board's own countdown
+# is exactly the wait for the next claim.
+func _hub_reset_text() -> String:
+	var s := DailyTasks.seconds_until_reset()
+	var h := s / 3600
+	var m := (s % 3600) / 60
+	if h > 0:
+		return "%dh %02dm" % [h, m]
+	if m > 0:
+		return "%dm %02ds" % [m, s % 60]
+	return "%ds" % s
+
+func _task_fraction() -> float:
+	var total := DailyTasks.total_count()
+	if total <= 0:
+		return 0.0
+	return clampf(float(DailyTasks.completed_count()) / float(total), 0.0, 1.0)
+
+func _animate_task_bar() -> void:
+	if not _tasks_bar_fill or not is_instance_valid(_tasks_bar_fill):
+		return
+	var track := _tasks_bar_fill.get_parent() as Control
+	create_tween().tween_property(_tasks_bar_fill, "size:x", track.size.x * _task_fraction(), 0.45) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+# ---- actions ----
+
+# Collect in place. The three beats below are the same ones daily_claim_popup
+# runs on its own Claim button — the wallet grant, the streak badges and the
+# "Daily Reward" task have to move together wherever the claim is made.
+func _on_hub_claim() -> void:
+	var reward := CoinsManager.claim_daily()
+	if reward <= 0:
+		_refresh_hub()
+		return
+	BadgeManager.note_daily_claimed(CoinsManager.streak_days)
+	DailyTasks.note_daily_claimed()
+	_hub_claim_flourish(reward)
+	_refresh_hub()
+	# Tidy the panel away once the receipt has read — the same beat the full claim
+	# popup uses, and it clears the corner for the badge toast a streak milestone
+	# fires into exactly this spot.
+	var tidy := create_tween()
+	tidy.tween_interval(1.1)
+	tidy.tween_callback(_close_hub)
+
+# A gold "+N" lifts out of the button and fades — enough of a receipt that the
+# coin pill's jump upward doesn't come out of nowhere.
+func _hub_claim_flourish(reward: int) -> void:
+	var fly := Label.new()
+	fly.text = "+%s" % _comma_int(reward)
+	fly.add_theme_font_size_override("font_size", 22)
+	fly.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+	fly.add_theme_color_override("font_shadow_color", Color(1.0, 0.70, 0.20, 0.55))
+	fly.add_theme_constant_override("shadow_outline_size", 6)
+	fly.size = Vector2(HUB_ACT_W, 30.0)
+	fly.position = Vector2(HUB_PANEL_W - HUB_PAD - HUB_ACT_W, HUB_ROW_A + 4.0)
+	fly.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	fly.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hub_panel.add_child(fly)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(fly, "position:y", HUB_ROW_A - 26.0, 0.85) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(fly, "modulate:a", 0.0, 0.85).set_delay(0.25)
+	tw.chain().tween_callback(fly.queue_free)
+
+func _open_daily_popup() -> void:
+	_close_hub()
+	var popup := DailyClaimPopup.new()
+	add_child(popup)
 
 func _open_tasks_popup() -> void:
+	_close_hub()
 	var popup := DailyTasksPopup.new()
 	add_child(popup)
 
@@ -2613,11 +3053,13 @@ func _show_settings_popup() -> void:
 	close_bg.pressed.connect(overlay.queue_free)
 	overlay.add_child(close_bg)
 
-	var show_delete := FirebaseManager.is_signed_in()
+	# Sign-out and delete both live here now — the two account-level actions, kept
+	# together behind the gear rather than loose in the HUD. Guests have neither.
+	var show_account := FirebaseManager.is_signed_in()
 	const PW := 440.0
 	const BASE_PH := 466.0
-	const DELETE_SECTION_H := 94.0
-	var ph := BASE_PH + (DELETE_SECTION_H if show_delete else 0.0)
+	const ACCOUNT_SECTION_H := 152.0
+	var ph := BASE_PH + (ACCOUNT_SECTION_H if show_account else 0.0)
 	var panel := _card_panel(Vector2(PW, ph), Color(0.05, 0.06, 0.16, 0.98),
 		Color(0.40, 0.50, 1.0, 0.55), Color(0.0, 0.0, 0.0, 0.55))
 	panel.position = (sz - Vector2(PW, ph)) * 0.5
@@ -2652,14 +3094,18 @@ func _show_settings_popup() -> void:
 	_make_popup_button(panel, "Privacy Policy", Vector2(40, 312), Vector2(PW - 80, 50),
 		Color(0.16, 0.18, 0.34), _open_privacy_policy)
 
-	# Signed-in-only danger zone. Guests have no server-side account to delete.
+	# Signed-in-only account zone. Guests have no account to leave or delete.
+	# Sign Out reads as a neutral action and Delete Account as the destructive
+	# one, so they don't share a colour despite sharing a section.
 	var after_y := 374.0
-	if show_delete:
+	if show_account:
 		_popup_divider(panel, after_y, PW)
 		_popup_section_label(panel, "ACCOUNT", after_y + 12, PW)
-		_make_popup_button(panel, "Delete Account", Vector2(40, after_y + 32), Vector2(PW - 80, 50),
+		_make_popup_button(panel, "Sign Out", Vector2(40, after_y + 32), Vector2(PW - 80, 50),
+			Color(0.16, 0.18, 0.34), _confirm_sign_out.bind(overlay))
+		_make_popup_button(panel, "Delete Account", Vector2(40, after_y + 90), Vector2(PW - 80, 50),
 			Color(0.62, 0.16, 0.20), _confirm_delete_account.bind(overlay))
-		after_y += DELETE_SECTION_H
+		after_y += ACCOUNT_SECTION_H
 
 	_make_popup_button(panel, "Close", Vector2(40, after_y), Vector2(PW - 80, 50),
 		Color(0.15, 0.6, 0.95), overlay.queue_free)
@@ -3108,9 +3554,9 @@ func _start_tutorial() -> void:
 		"rect": Rect2(),
 		"title": "Welcome to Simon!",
 		"body": "Quick tour, then you're off. Tap Next — skip anytime."})
-	if _coin_pill or _daily_btn or not _shop_card.is_empty():
+	if _coin_pill or _hub_btn or not _shop_card.is_empty():
 		var body_text := "Spend coins in the Shop to customize Simon."
-		if _coin_pill or _daily_btn:
+		if _coin_pill or _hub_btn:
 			body_text = "Earn coins by playing and from your daily reward, then spend them in the Shop."
 		var rect := Rect2()
 		if not _shop_card.is_empty():
@@ -3118,11 +3564,11 @@ func _start_tutorial() -> void:
 		elif _coin_pill:
 			rect = _coin_pill.get_global_rect()
 		steps.append({"rect": rect, "title": "Coins & Shop", "body": body_text})
-	if _tasks_btn:
+	if _hub_btn:
 		steps.append({
-			"rect": _tasks_btn.get_global_rect(),
-			"title": "Daily Tasks",
-			"body": "A fresh set of small goals every day — finish them and collect bonus coins here."})
+			"rect": _hub_btn.get_global_rect(),
+			"title": "Daily Hub",
+			"body": "Your daily reward and a fresh set of small goals live here — tap it to collect both."})
 	if not _start_lm.is_empty():
 		# Spotlight the visible orb, not the full 300×300 tap target.
 		var c: Vector2 = (_start_lm["wrap"] as Control).get_global_rect().get_center()

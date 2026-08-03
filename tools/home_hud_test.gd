@@ -1,6 +1,7 @@
 extends Node
 
-# Screenshot harness for the top-left HUD (coin pill + Daily Claim + Daily Tasks).
+# Screenshot harness for the top-left HUD (coin pill + Daily Hub). Saves two
+# frames: the bar at rest, then the Daily Hub dropdown expanded.
 # Builds the real home screen against the editor sim and saves a frame. Run
 # WITHOUT --headless (the dummy renderer has no framebuffer to read back):
 #
@@ -45,4 +46,30 @@ func _ready() -> void:
 	var img := get_viewport().get_texture().get_image()
 	img.save_png("user://home_hud.png")
 	print("shot  %s" % ProjectSettings.globalize_path("user://home_hud.png"))
+
+	# ...and again with the Daily Hub dropdown open and settled.
+	home._toggle_hub()
+	await get_tree().create_timer(1.2).timeout
+	await RenderingServer.frame_post_draw
+	var img2 := get_viewport().get_texture().get_image()
+	img2.save_png("user://home_hud_open.png")
+	print("shot  %s" % ProjectSettings.globalize_path("user://home_hud_open.png"))
+
+	# ...and once more after collecting, to check the claimed state + countdown.
+	home._on_hub_claim()
+	await get_tree().create_timer(0.45).timeout
+	await RenderingServer.frame_post_draw
+	var img3 := get_viewport().get_texture().get_image()
+	img3.save_png("user://home_hud_claimed.png")
+	print("shot  %s" % ProjectSettings.globalize_path("user://home_hud_claimed.png"))
+
+	# Let the post-claim auto-close run, then reopen: exercises the close path and
+	# proves the panel repaints its collected state on a second visit.
+	await get_tree().create_timer(2.0).timeout
+	home._toggle_hub()
+	await get_tree().create_timer(1.0).timeout
+	await RenderingServer.frame_post_draw
+	var img4 := get_viewport().get_texture().get_image()
+	img4.save_png("user://home_hud_reopen.png")
+	print("shot  %s" % ProjectSettings.globalize_path("user://home_hud_reopen.png"))
 	get_tree().quit()

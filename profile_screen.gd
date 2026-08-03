@@ -73,6 +73,10 @@ func _ready() -> void:
 	_build_right_panel()
 	_fetch_ranks()
 
+	# The gallery is now on screen, so nothing in it is "new" any more — this is
+	# what clears the red dot the home screen rides on the account pill.
+	BadgeManager.mark_all_seen()
+
 	get_viewport().size_changed.connect(_recenter)
 	_recenter()
 

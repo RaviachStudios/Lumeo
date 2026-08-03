@@ -36,6 +36,64 @@ func _settle() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+func _unfinished_count() -> int:
+	return DailyTasks.total_count() - DailyTasks.completed_count()
+
+# Finish whatever is still locked on today's board, so a live CLAIM sits next to
+# the already-claimed rows. Returns false when the draw is fully collected — which
+# can happen, since finishing one task can cascade into another that reads the same
+# counter — and the claim-state checks that follow then have nothing to stand on.
+func _arm() -> bool:
+	for t in DailyTasks.active_tasks():
+		if not DailyTasks.is_claimed(String(t["id"])):
+			_complete(t)
+			return DailyTasks.claimable_count() > 0
+	return false
+
+func _ids(tasks: Array[Dictionary]) -> Array[String]:
+	var out: Array[String] = []
+	for t in tasks:
+		out.append(String(t["id"]))
+	return out
+
+# Drive one task to its target through the same public hooks the game calls. Which
+# five tasks are live today is a draw, so no check downstream may name an id — it
+# asks for whatever is on the board and finishes it with this.
+func _complete(t: Dictionary) -> void:
+	var target := int(t["target"])
+	match String(t["counter"]):
+		"games":
+			for i in target:
+				DailyTasks.note_game_played("easy")
+		"rounds":
+			DailyTasks.note_score("easy", target)
+		"diffs":
+			for d in ["easy", "moderate", "hard"]:
+				DailyTasks.note_game_played(d)
+		"best_any", "best_easy":
+			DailyTasks.note_score("easy", target)
+		"best_moderate":
+			DailyTasks.note_score("moderate", target)
+		"best_hard":
+			DailyTasks.note_score("hard", target)
+		"arena":
+			for i in target:
+				DailyTasks.note_arena_played()
+		"arena_podium":
+			DailyTasks.note_contest_result(3, 8)
+		"arena_wins":
+			DailyTasks.note_contest_result(1, 8)
+		"arena_crowd":
+			DailyTasks.note_contest_result(5, 12)
+		"lb_rank":
+			DailyTasks.note_daily_rank(target)
+		"daily_claim":
+			DailyTasks.note_daily_claimed()
+		"coins":
+			DailyTasks.note_coins_earned(target)
+		_:
+			_check("no hook to finish '%s'" % String(t["id"]), false, String(t["counter"]))
+
 func _run() -> void:
 	print("\n-- progress --")
 	_check("board ready after wallet load", DailyTasks.is_ready())
@@ -104,9 +162,45 @@ func _run() -> void:
 	_check("loading a daily board feeds the task board",
 		DailyTasks.progress_text("lb_top3") == "#1" and DailyTasks.is_complete("lb_top3"))
 
+	print("\n-- the daily draw --")
+	var live := DailyTasks.active_tasks()
+	_check("five tasks a day", live.size() == DailyTasks.DAILY_COUNT, str(live.size()))
+	_check("the draw is stable within a day", _ids(live) == _ids(DailyTasks.active_tasks()))
+	var today := Time.get_date_string_from_system(true)
+	_check("a day always draws the same five",
+		_ids(DailyTasks._draw_for_day(today)) == _ids(live))
+	_check("tomorrow draws a different board",
+		_ids(DailyTasks._draw_for_day("2026-08-03")) != _ids(DailyTasks._draw_for_day("2026-08-04")))
+	# A year of boards: every one has to be legal (five tasks, no two from the same
+	# group), and across the year the draw has to actually reach round the catalog
+	# rather than favouring a handful of ids.
+	var base := int(Time.get_unix_time_from_datetime_string("2026-01-01T00:00:00"))
+	var seen_ids := {}
+	var bad_day := ""
+	for i in 365:
+		var d := Time.get_date_string_from_unix_time(base + i * 86400)
+		var draw := DailyTasks._draw_for_day(d)
+		var gs := {}
+		for t in draw:
+			gs[String(t["group"])] = true
+			seen_ids[String(t["id"])] = true
+		if draw.size() != DailyTasks.DAILY_COUNT or gs.size() != draw.size():
+			bad_day = d
+	_check("every day of a year is a legal board", bad_day.is_empty(), bad_day)
+	_check("a year reaches most of the catalog",
+		seen_ids.size() >= DailyTasks.TASKS.size() - 2, "%d of %d" % [seen_ids.size(), DailyTasks.TASKS.size()])
+	# Progress off the board still counts (the counters are task-agnostic) — it just
+	# can't be cashed in until the day that asks for it comes round.
+	var off_board_ok := true
+	for t in DailyTasks.TASKS:
+		var oid := String(t["id"])
+		if not DailyTasks.is_active(oid) and DailyTasks.is_complete(oid) and DailyTasks.can_claim(oid):
+			off_board_ok = false
+	_check("a task outside today's draw can't be claimed", off_board_ok)
+
 	print("\n-- ordering --")
 	var order := DailyTasks.ordered_tasks()
-	_check("every task is listed once", order.size() == DailyTasks.total_count())
+	_check("every drawn task is listed once", order.size() == DailyTasks.total_count())
 	var last_state := -1
 	var monotonic := true
 	for t in order:
@@ -119,14 +213,27 @@ func _run() -> void:
 	_check("finished tasks sort above unfinished ones", monotonic)
 
 	print("\n-- claiming --")
+	# Which five are live is a draw, so the claim checks can't name ids: finish tasks
+	# off today's board until two are left locked — the popup sections below want a
+	# board carrying claimed, claimable AND locked rows at once.
+	for t in live:
+		if _unfinished_count() <= 2:
+			break
+		_complete(t)
+	var first := ""
+	for t in live:
+		if DailyTasks.can_claim(String(t["id"])):
+			first = String(t["id"])
+			break
+	_check("the board has a finished task to claim", not first.is_empty())
 	var before := CoinsManager.balance
-	var reward := int(DailyTasks.task("play_1")["reward"])
-	_check("play_1 is claimable", DailyTasks.can_claim("play_1"))
-	_check("claim pays the reward", DailyTasks.claim("play_1") == reward)
+	var reward := int(DailyTasks.task(first)["reward"])
+	_check("a finished task is claimable", DailyTasks.can_claim(first), first)
+	_check("claim pays the reward", DailyTasks.claim(first) == reward)
 	_check("coins landed in the wallet", CoinsManager.balance == before + reward)
 	_check("claim counts as earned", CoinsManager.earned_coins >= reward)
-	_check("a second claim pays nothing", DailyTasks.claim("play_1") == 0)
-	_check("claimed tasks leave the ready count", not DailyTasks.can_claim("play_1"))
+	_check("a second claim pays nothing", DailyTasks.claim(first) == 0)
+	_check("claimed tasks leave the ready count", not DailyTasks.can_claim(first))
 
 	var pending := DailyTasks.claimable_total()
 	var ready_now := DailyTasks.claimable_count()
@@ -140,8 +247,8 @@ func _run() -> void:
 	_check("board is mirrored on the wallet doc", saved is Dictionary and not (saved as Dictionary).is_empty())
 	var counters: Dictionary = (saved as Dictionary).get("counters", {})
 	var claimed: Dictionary = (saved as Dictionary).get("claimed", {})
-	_check("counters persisted", int(counters.get("games", 0)) == 3, str(counters))
-	_check("claims persisted", bool(claimed.get("play_1", false)), str(claimed))
+	_check("counters persisted", int(counters.get("games", 0)) >= 3, str(counters))
+	_check("claims persisted", bool(claimed.get(first, false)), str(claimed))
 	_check("state is a map of maps (no arrays)", counters is Dictionary and claimed is Dictionary)
 
 	print("\n-- sign out --")
@@ -157,8 +264,10 @@ func _run() -> void:
 	FirebaseManager.set_display_name("Tester")
 	await _settle()
 	_check("board reloads on sign-in", DailyTasks.is_ready())
-	_check("claims survive a re-login", DailyTasks.is_claimed("play_1"))
-	_check("counters come back exactly as saved", DailyTasks.progress("play_5") == 3)
+	_check("claims survive a re-login", DailyTasks.is_claimed(first))
+	var back: Dictionary = (CoinsManager.raw_user_doc.get("daily_tasks", {}) as Dictionary).get("counters", {})
+	_check("counters come back exactly as saved", back == counters, str(back))
+	_check("finished tasks are still finished", DailyTasks.is_complete(first))
 
 # Build the popup for real and let it live a few frames — catches null refs,
 # bad casts and draw-callback errors that a pure-logic test can't see.
@@ -166,10 +275,7 @@ func _run_ui() -> void:
 	print("\n-- popup --")
 	# Leave the board carrying claimed, claimable AND locked tasks at once, so the
 	# popup opens on the mix a real player would see.
-	DailyTasks.note_game_played("hard")
-	DailyTasks.note_game_played("hard")
-	DailyTasks.note_score("hard", 8)
-	DailyTasks.note_daily_claimed()
+	var armed := _arm()
 	var host := Control.new()
 	host.size = Vector2(1280, 720)
 	add_child(host)
@@ -178,7 +284,10 @@ func _run_ui() -> void:
 	await _settle()
 	await _settle()
 	_check("popup built and stayed alive", is_instance_valid(popup) and popup.is_inside_tree())
-	_check("claimable rewards are waiting", DailyTasks.claimable_count() > 0)
+	if armed:
+		_check("claimable rewards are waiting", DailyTasks.claimable_count() > 0)
+	else:
+		print("  skip  today's draw was already fully collected")
 	await _shoot("daily_tasks_popup")
 	# Progress arriving while the popup is open must not reshuffle it.
 	DailyTasks.note_game_played("moderate")
@@ -246,7 +355,7 @@ func _run_touch_scroll() -> void:
 
 	# _run_ui swept the board with claim-all; finish one more task so a live CLAIM
 	# is on screen alongside the claimed/locked ones.
-	DailyTasks.note_score("moderate", 9)
+	var armed := _arm()
 	await _settle()
 
 	# A claimable row (live CLAIM) and a locked one (greyed pill) — the player hit
@@ -260,7 +369,8 @@ func _run_touch_scroll() -> void:
 				dead = btn
 		elif live == null:
 			live = btn
-	_check("board shows a live and a dead claim button", live != null and dead != null)
+	_check("board shows a live and a dead claim button",
+		dead != null and (live != null or not armed))
 
 	await _rest(scroll)
 	var body := scroll.global_position + Vector2(60, scroll.size.y * 0.5)
@@ -311,9 +421,12 @@ func _drag_on(scroll: ScrollContainer, ctl: Control) -> int:
 	if not Rect2(scroll.global_position, scroll.size).has_point(at):
 		print("     (skipped: %s is outside the list at %s)" % [ctl.text, at])
 		return -1
-	# Flick back toward the top when the list is already scrolled — that direction
-	# always has room, whereas a row near the bottom has nowhere further to go.
-	return await _drag(scroll, at, 1 if scroll.scroll_vertical > 240 else -1)
+	# Flick whichever way the list still has room to travel: a five-task board is
+	# only a little taller than its viewport, so a row centred near the bottom has
+	# nowhere further to go and a downward flick would read as "stuck".
+	var bar := scroll.get_v_scroll_bar()
+	var room_down := int(bar.max_value - bar.page) - scroll.scroll_vertical
+	return await _drag(scroll, at, -1 if room_down > 24 else 1)
 
 # Park the list back at the top and let the release inertia die out, so the next
 # drag starts from a known offset.
