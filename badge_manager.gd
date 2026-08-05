@@ -224,6 +224,41 @@ func has_unseen() -> bool:
 			return true
 	return false
 
+# Earned but not looked at yet — drives the red dot the profile gallery puts on
+# the individual badge cell, so the player can tell WHICH badge is the new one.
+func is_unseen(id: String) -> bool:
+	var b: Variant = _by_id.get(id, null)
+	if b == null:
+		return false
+	var bit := int((b as Dictionary)["bit"])
+	return _is_bit(bit) and not _is_seen(bit)
+
+# Clear one badge's dot (the player opened its detail card).
+func mark_seen(id: String) -> void:
+	if _mark_seen_one(id):
+		_save_stats()
+		unseen_changed.emit()
+
+# Batch form — one file write for a whole gallery's worth of dots.
+func mark_seen_many(ids: Array) -> void:
+	var changed := false
+	for id in ids:
+		if _mark_seen_one(String(id)):
+			changed = true
+	if changed:
+		_save_stats()
+		unseen_changed.emit()
+
+func _mark_seen_one(id: String) -> bool:
+	var b: Variant = _by_id.get(id, null)
+	if b == null:
+		return false
+	var bit := int((b as Dictionary)["bit"])
+	if not _is_bit(bit) or _is_seen(bit):
+		return false
+	_set_seen(bit)
+	return true
+
 # Called when the badge gallery is opened: everything earned counts as looked at.
 func mark_all_seen() -> void:
 	if not has_unseen():

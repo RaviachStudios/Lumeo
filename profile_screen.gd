@@ -60,6 +60,16 @@ var _rank_labels: Dictionary = {}   # diff -> Label
 var _rank_token := 0
 var _detail: Control
 
+# Badges earned since the player last looked — snapshotted ONCE, before the
+# gallery is built, so the cells can wear a red dot. A dot clears itself as soon
+# as its badge has been scrolled into view (blink twice, then gone); tapping the
+# badge open still clears it instantly. Badges never scrolled to keep their dot
+# for the next visit.
+var _new_ids: Dictionary = {}       # badge id -> true
+var _dots: Dictionary = {}          # badge id -> Panel, only while still unseen
+var _scroll: ScrollContainer
+var _sweep_dt := 0.0
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP            # eats clicks behind
@@ -67,15 +77,24 @@ func _ready() -> void:
 	_dw = clampf(vp.x - 140.0, 720.0, 1160.0)
 	_dh = clampf(vp.y - 56.0, 520.0, 664.0)
 
+	# Which badges are new must be read BEFORE the gallery exists: building the
+	# cells is what decides who wears a dot, and the dots then clear themselves
+	# as their cells scroll into view.
+	for b in BadgeManager.BADGES:
+		if BadgeManager.is_unseen(String(b["id"])):
+			_new_ids[String(b["id"])] = true
+
 	_build_backdrop()
 	_build_dialog()
 	_build_left_panel()
 	_build_right_panel()
 	_fetch_ranks()
 
-	# The gallery is now on screen, so nothing in it is "new" any more — this is
-	# what clears the red dot the home screen rides on the account pill.
-	BadgeManager.mark_all_seen()
+	# Seeing a badge is enough to clear its dot — no tap needed. Sweeping starts
+	# after the pop-in below, so the blink isn't lost under the entry tween.
+	set_process(false)
+	if not _dots.is_empty():
+		get_tree().create_timer(0.34).timeout.connect(func() -> void: set_process(true))
 
 	get_viewport().size_changed.connect(_recenter)
 	_recenter()
@@ -414,6 +433,7 @@ func _build_right_panel() -> void:
 	scroll.position = Vector2(right_x, scroll_top)
 	scroll.size = Vector2(right_w, content_bottom - scroll_top)
 	_dialog.add_child(scroll)
+	_scroll = scroll
 
 	var vbox := VBoxContainer.new()
 	vbox.custom_minimum_size = Vector2(right_w - 16, 0)
@@ -511,6 +531,7 @@ func _badge_cell(b: Dictionary, scroll: ScrollContainer) -> Control:
 			var slid := maxf(press["travel"] as float,
 				(xform * release).distance_to(press["pos"] as Vector2))
 			if slid < 14.0 and scroll.scroll_vertical == int(press["scroll"]):
+				_mark_badge_seen(String(b["id"]))
 				_show_detail(b, earned))
 
 	var icon := BadgeIconControl.new()
@@ -519,6 +540,26 @@ func _badge_cell(b: Dictionary, scroll: ScrollContainer) -> Control:
 	icon.position = Vector2(9, 4)
 	icon.set_badge(b, earned)
 	cell.add_child(icon)
+
+	# Red dot on badges won since the player last opened the gallery — same
+	# gesture (and colour) the home screen's account pill wears, so the dot the
+	# player followed here points at exactly which badge is the new one.
+	if _new_ids.has(String(b["id"])):
+		var dot := Panel.new()
+		dot.size = Vector2(14, 14)
+		dot.position = Vector2(76, 0)
+		dot.pivot_offset = Vector2(7, 7)
+		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ds := StyleBoxFlat.new()
+		ds.bg_color = Color(0.95, 0.18, 0.18)
+		ds.set_corner_radius_all(7)
+		ds.border_color = Color(1.0, 0.80, 0.80, 0.85)
+		ds.set_border_width_all(1)
+		ds.shadow_color = Color(0.95, 0.18, 0.18, 0.7)
+		ds.shadow_size = 8
+		dot.add_theme_stylebox_override("panel", ds)
+		cell.add_child(dot)
+		_dots[String(b["id"])] = dot
 
 	var name_lbl := Label.new()
 	name_lbl.text = String(b["name"])
@@ -532,6 +573,78 @@ func _badge_cell(b: Dictionary, scroll: ScrollContainer) -> Control:
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cell.add_child(name_lbl)
 	return cell
+
+# Polled rather than driven off the scrollbar's value_changed: that signal fires
+# BEFORE the ScrollContainer repositions its children, so the cell rects read one
+# step stale, and the last event of a flick would leave a dot behind. Processing
+# stops the moment the last dot is gone, and only unseen dots are ever in the
+# dictionary, so the poll costs a handful of rect tests.
+func _process(delta: float) -> void:
+	_sweep_dt += delta
+	if _sweep_dt < 0.08:
+		return
+	_sweep_dt = 0.0
+	_sweep_dots()
+
+# A badge counts as looked at once its cell sits (mostly) inside the gallery's
+# viewport — scrolling past it is enough, tapping is not required.
+func _sweep_dots() -> void:
+	if _dots.is_empty() or _scroll == null or not is_inside_tree():
+		set_process(false)
+		return
+	var view := _scroll.get_global_rect()
+	for id: String in _dots.keys():
+		var dot: Control = _dots[id]
+		if dot == null or not is_instance_valid(dot):
+			_dots.erase(id)
+			continue
+		var cell := dot.get_parent() as Control
+		if cell == null:
+			continue
+		# Most of the cell has to be inside the viewport: a row peeking in by a
+		# few pixels at the bottom edge hasn't really been read yet.
+		var r := cell.get_global_rect()
+		var shown := minf(r.end.y, view.end.y) - maxf(r.position.y, view.position.y)
+		if shown >= r.size.y * 0.7:
+			_reveal_dot(id)
+
+# The dot's exit: two deliberate blinks so the eye catches which badge is the new
+# one, then it pops out for good. The badge is banked as seen immediately rather
+# than when the animation ends, so closing the profile mid-blink still counts.
+func _reveal_dot(id: String) -> void:
+	var dot: Control = _dots.get(id, null)
+	_dots.erase(id)
+	_new_ids.erase(id)
+	BadgeManager.mark_seen(id)
+	if dot == null or not is_instance_valid(dot) or not dot.is_inside_tree():
+		return
+	var tw := dot.create_tween()
+	for i in 2:
+		tw.tween_property(dot, "modulate:a", 0.1, 0.15) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(dot, "modulate:a", 1.0, 0.15) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(dot, "scale", Vector2.ZERO, 0.2) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(dot, "modulate:a", 0.0, 0.2)
+	tw.chain().tween_callback(dot.queue_free)
+
+# Opening a badge's detail card is the player "seeing" it: its dot pops out on
+# the spot, and the badge stops counting towards the home screen's pill dot.
+func _mark_badge_seen(id: String) -> void:
+	if not _new_ids.has(id):
+		return
+	_new_ids.erase(id)
+	BadgeManager.mark_seen(id)
+	var dot: Control = _dots.get(id, null)
+	_dots.erase(id)
+	if dot == null or not is_instance_valid(dot):
+		return
+	var tw := dot.create_tween().set_parallel(true)
+	tw.tween_property(dot, "scale", Vector2.ZERO, 0.18) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.tween_property(dot, "modulate:a", 0.0, 0.18)
+	tw.chain().tween_callback(dot.queue_free)
 
 # ─── badge detail overlay ────────────────────────────────────────────────────
 
@@ -664,6 +777,13 @@ func _on_backdrop_click(ev: InputEvent) -> void:
 
 func _close() -> void:
 	_rank_token += 1
+	# Nothing is marked seen on the way out: a dot is cleared the moment its badge
+	# scrolls into view (_sweep_dots), so whatever is still in _new_ids never made
+	# it onto the screen — the player scrolled part-way down, or the badge landed
+	# WHILE the gallery was open (the rank fetch and the inventory re-evaluation
+	# both award) and its cell was built as a locked silhouette. Either way it
+	# keeps its dot, and the home screen's account pill keeps pointing here.
+	_new_ids.clear()
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(_dialog, "scale", Vector2.ONE * 0.88, 0.15) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)

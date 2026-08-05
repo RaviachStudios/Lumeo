@@ -127,7 +127,8 @@ var _pose_l := {"feet": Vector2(91.0, 86.0), "blade": Vector2(107.0, 54.0), "lea
 var _pose_r := {"feet": Vector2(123.0, 86.0), "blade": Vector2(107.0, 54.0), "lean": 0.0, "guard": 0.15}
 var _account_hud: Control
 # Red "you earned something new" dot on the account bubble, twin of the daily
-# pills' badges. Cleared by opening the profile (where the gallery lives).
+# pills' badges. Cleared by visiting the profile (where the gallery lives, and
+# where each new badge wears a dot of its own until it's looked at).
 var _ach_badge: Panel
 var _signing_in := false
 # Top-left coin pill (signed-in only). Mirrors the in-game HUD style but lives
@@ -1661,6 +1662,14 @@ func _layout() -> void:
 		_credits.size = Vector2(sz.x - 56.0, 18.0)   # right edge sits 40px from the screen edge
 		_credits.position = Vector2(16.0, sz.y - 22.0)
 
+	# The Daily Hub's dismiss catcher. Anchors are useless here (this screen lives
+	# under a CanvasLayer and therefore has no size of its own), so the full-screen
+	# sheet has to be measured against the viewport like everything else above —
+	# without this it is a 0x0 control and taps outside the dropdown hit nothing.
+	if _hub_catcher:
+		_hub_catcher.position = Vector2.ZERO
+		_hub_catcher.size = sz
+
 # Position a card's wrapper at `pos` (top-left). No-op for an absent card.
 func _place_card(card: Dictionary, pos: Vector2) -> void:
 	if card.is_empty():
@@ -1737,8 +1746,8 @@ func _start_animations() -> void:
 # blue bubble with the player's gold name centred on it and nothing else, so their
 # identity reads as a physical badge rather than another pane of the HUD glass.
 # The red dot on its shoulder is the only thing that ever joins the name there —
-# it appears the moment an achievement is earned and clears when the profile (which
-# is where the badge gallery lives) is opened. Settings keeps
+# it appears the moment an achievement is earned and clears once the profile (which
+# is where the badge gallery lives, each new badge dotted in turn) is closed. Settings keeps
 # the glass treatment — it's a tool, not an identity — and now owns sign-out,
 # which is a rare, deliberate action that has no business one mis-tap away from
 # the profile button. Guests get a labelled "Sign In" capsule beside the bubble.
@@ -2505,9 +2514,13 @@ func _build_hub_panel() -> void:
 	var py := HUD_TOP + HUB_PILL_H + HUB_PANEL_GAP
 
 	# Sits UNDER the panel in the tree, so taps inside the panel reach its own
-	# controls first and only strays out here dismiss the dropdown.
+	# controls first and only strays out here dismiss the dropdown. Sized to the
+	# viewport by _layout (anchors give nothing under a CanvasLayer) and raised
+	# above the rest of the screen by _open_hub, so the first tap anywhere else
+	# just closes the dropdown instead of pressing whatever is under the finger.
 	_hub_catcher = Control.new()
-	_hub_catcher.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hub_catcher.position = Vector2.ZERO
+	_hub_catcher.size = get_viewport_rect().size
 	_hub_catcher.mouse_filter = Control.MOUSE_FILTER_STOP
 	_hub_catcher.visible = false
 	_hub_catcher.gui_input.connect(_on_hub_catcher_input)
@@ -2837,6 +2850,12 @@ func _open_hub() -> void:
 	_refresh_hub()
 	_hub_catcher.visible = true
 	_hub_clip.visible = true
+	# Cards, the START orb and the account row are built after the catcher, so on
+	# their own they would sit on top of it and swallow the dismiss tap. Lift the
+	# pair to the front for as long as the dropdown is open (catcher first, so the
+	# panel still wins its own taps).
+	move_child(_hub_catcher, get_child_count() - 1)
+	move_child(_hub_clip, get_child_count() - 1)
 	_hub_panel.position.y = HUB_GLOW_M - 8.0
 	if _hub_tween and _hub_tween.is_valid():
 		_hub_tween.kill()
@@ -2892,10 +2911,12 @@ func _refresh_hub() -> void:
 		_tasks_bar_fill.size.x = track.size.x * _task_fraction()
 	_tasks_ready_dot.visible = DailyTasks.claimable_count() > 0
 
-	# The pill's dot is the union of everything daily that's still outstanding —
-	# an uncollected login reward, task rewards waiting, or tasks left to finish.
-	_hub_badge.visible = CoinsManager.can_claim_today() \
-		or DailyTasks.claimable_count() > 0 or done < total
+	# The pill's dot is a CALL TO ACTION, not a progress read-out: it lights only
+	# while there is something the player can collect right now — the login reward
+	# or a finished task's coins. Tasks merely left to play are already told by the
+	# "2/5 Completed" line and the bar; counting them here left the dot burning all
+	# day, so collecting everything on offer never actually cleared it.
+	_hub_badge.visible = CoinsManager.can_claim_today() or DailyTasks.claimable_count() > 0
 
 func _refresh_claim_status() -> void:
 	if not _claim_status or not is_instance_valid(_claim_status):
