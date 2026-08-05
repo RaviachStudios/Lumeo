@@ -28,7 +28,9 @@ const LIVE_ARENA_INTERSTITIAL_ID := "ca-app-pub-4855985167611175/8487558745"
 # An ID is the hash the Mobile Ads SDK prints to logcat on that device's first ad
 # request ("Use RequestConfiguration.Builder.setTestDeviceIds(...) to get test
 # ads on this device"). Add a device here BEFORE it ever runs a release build.
-const TEST_DEVICE_IDS: Array[String] = []
+const TEST_DEVICE_IDS: Array[String] = [
+	"B599E7CC834524FBDB73BA2FE829DF1B",   # OPPO CPH2645 — primary dev phone
+]
 
 # Only a signed release export may resolve a live unit. `release` is absent from
 # editor runs and debug exports; the editor check is belt-and-braces for a
