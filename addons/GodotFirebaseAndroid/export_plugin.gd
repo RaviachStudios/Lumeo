@@ -12,7 +12,16 @@ const DEPENDENCIES := [
 	"com.google.android.gms:play-services-auth:21.3.0",
 	"com.google.firebase:firebase-firestore:25.1.4",
 	"com.google.firebase:firebase-database:21.0.0",
-	"com.google.firebase:firebase-storage:21.0.1"
+	"com.google.firebase:firebase-storage:21.0.1",
+	# Google Analytics for Firebase. There is no GDScript API for it here and it
+	# needs none: simply linking the SDK turns on automatic event collection
+	# (first_open, session_start, screen_view, user_engagement), which is the
+	# first-party engagement signal the app was shipping without. It also gives
+	# the Mobile Ads SDK a measurement source, so ad traffic can be reconciled
+	# against real sessions instead of standing on its own with nothing to
+	# compare it to. Requires the project to be linked to a GA4 property in the
+	# Firebase console.
+	"com.google.firebase:firebase-analytics:22.2.0"
 ]
 
 func _enter_tree():

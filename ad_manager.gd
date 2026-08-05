@@ -1,11 +1,58 @@
 extends Node
 
-const REWARDED_ID := "ca-app-pub-4855985167611175/5696511973"
-const INTERSTITIAL_ID := "ca-app-pub-4855985167611175/5072180074"
+# ── Ad units: live inventory is unreachable outside a release build ────────────
+#
+# Google's own test units. They always fill, they bill nobody, and they are what
+# EVERY build that is not a signed release export serves — the editor, a debug
+# export, anything a tester is ever handed.
+#
+# This switch exists because the opposite arrangement (live unit IDs compiled
+# into every build) is what put developer-device impressions onto live inventory
+# for nine weeks and got this publisher account disabled. Never "temporarily"
+# point a development build at a live unit to check that a placement works:
+# check it against these, which is the only supported way to test an ad.
+const TEST_REWARDED_ID := "ca-app-pub-3940256099942544/5224354917"
+const TEST_INTERSTITIAL_ID := "ca-app-pub-3940256099942544/1033173712"
+
+const LIVE_REWARDED_ID := "ca-app-pub-4855985167611175/5696511973"
+const LIVE_INTERSTITIAL_ID := "ca-app-pub-4855985167611175/5072180074"
 # Dedicated arena/contest interstitial, shown when a race ends and the results
 # screen appears. Kept as its own unit so its performance is tracked separately
-# from the solo game-over interstitial (INTERSTITIAL_ID).
-const ARENA_INTERSTITIAL_ID := "ca-app-pub-4855985167611175/8487558745"
+# from the solo game-over interstitial (LIVE_INTERSTITIAL_ID).
+const LIVE_ARENA_INTERSTITIAL_ID := "ca-app-pub-4855985167611175/8487558745"
+
+# Second, independent layer, in case a release build ever lands on a machine we
+# develop on: every device belonging to the studio or to a tester is registered
+# as a test device, so the SDK serves it test ads whatever the build type says.
+#
+# An ID is the hash the Mobile Ads SDK prints to logcat on that device's first ad
+# request ("Use RequestConfiguration.Builder.setTestDeviceIds(...) to get test
+# ads on this device"). Add a device here BEFORE it ever runs a release build.
+const TEST_DEVICE_IDS: Array[String] = []
+
+# Only a signed release export may resolve a live unit. `release` is absent from
+# editor runs and debug exports; the editor check is belt-and-braces for a
+# custom template that reports both.
+static func _live_ads() -> bool:
+	return OS.has_feature("release") and not OS.has_feature("editor")
+
+static func rewarded_id() -> String:
+	return LIVE_REWARDED_ID if _live_ads() else TEST_REWARDED_ID
+
+static func interstitial_id() -> String:
+	return LIVE_INTERSTITIAL_ID if _live_ads() else TEST_INTERSTITIAL_ID
+
+static func arena_interstitial_id() -> String:
+	return LIVE_ARENA_INTERSTITIAL_ID if _live_ads() else TEST_INTERSTITIAL_ID
+
+# ── Full-screen ad frequency cap ───────────────────────────────────────────────
+# One cooldown shared by BOTH interstitial placements (game over, arena results /
+# exit), so a player bouncing in and out of a results screen can't be served
+# back-to-back full-screen ads. Rewarded ads are deliberately exempt: the player
+# asks for those by name and gets something for them.
+const MIN_SECONDS_BETWEEN_INTERSTITIALS := 120.0
+
+var _last_interstitial_at := -1.0e9
 
 var rewarded_ready: bool = false
 var interstitial_ready: bool = false
@@ -54,7 +101,65 @@ func _mark_closed() -> void:
 	_showing = false
 	ad_closed.emit(Time.get_ticks_msec() / 1000.0 - _shown_at)
 
+# ── Start-up: test devices, then consent, then ads ────────────────────────────
+
+var _ads_started := false
+# The UMP form is RefCounted and the plugin only hands it to us once, so it has
+# to be held for as long as it is on screen or it can be freed mid-display.
+var _consent_form: ConsentForm = null
+
 func _ready() -> void:
+	# Applied before anything can request an ad, so the test-device list is already
+	# in force for the very first request.
+	var cfg := RequestConfiguration.new()
+	cfg.test_device_ids = TEST_DEVICE_IDS
+	MobileAds.set_request_configuration(cfg)
+	_gather_consent()
+
+# User Messaging Platform: gather (or confirm we already hold) the user's consent
+# BEFORE the SDK is initialized and the first ad is requested. Outside the EEA/UK,
+# or with consent already on file, the SDK answers NOT_REQUIRED / OBTAINED and we
+# go straight through without showing anything.
+#
+# Every branch — including every failure — ends at _start_ads(), which runs once.
+# Consent that cannot be gathered must never leave the game with no ads AND no
+# way to ever load them.
+func _gather_consent() -> void:
+	var os_name := OS.get_name()
+	if os_name != "Android" and os_name != "iOS":
+		_start_ads()          # no UMP plugin off-device; nothing to ask
+		return
+	var params := ConsentRequestParameters.new()
+	params.tag_for_under_age_of_consent = false
+	UserMessagingPlatform.consent_information.update(
+		params, _on_consent_updated, _on_consent_update_failed)
+
+func _on_consent_updated() -> void:
+	if UserMessagingPlatform.consent_information.get_is_consent_form_available():
+		UserMessagingPlatform.load_consent_form(_on_consent_form_loaded, _on_consent_form_failed)
+	else:
+		_start_ads()
+
+func _on_consent_update_failed(_e: FormError) -> void:
+	_start_ads()
+
+func _on_consent_form_loaded(form: ConsentForm) -> void:
+	_consent_form = form
+	if UserMessagingPlatform.consent_information.get_consent_status() \
+			== ConsentInformation.ConsentStatus.REQUIRED:
+		form.show(func(_e: FormError) -> void:
+			_consent_form = null
+			_start_ads())
+	else:
+		_start_ads()
+
+func _on_consent_form_failed(_e: FormError) -> void:
+	_start_ads()
+
+func _start_ads() -> void:
+	if _ads_started:
+		return
+	_ads_started = true
 	MobileAds.initialize()
 	_load_rewarded()
 	_load_interstitial()
@@ -67,7 +172,7 @@ func _load_rewarded() -> void:
 	var cb := RewardedAdLoadCallback.new()
 	cb.on_ad_loaded = _on_rewarded_loaded
 	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void: pass
-	RewardedAdLoader.new().load(REWARDED_ID, AdRequest.new(), cb)
+	RewardedAdLoader.new().load(rewarded_id(), AdRequest.new(), cb)
 
 func _on_rewarded_loaded(ad: RewardedAd) -> void:
 	var content_cb := FullScreenContentCallback.new()
@@ -117,7 +222,7 @@ func _load_interstitial() -> void:
 	var cb := InterstitialAdLoadCallback.new()
 	cb.on_ad_loaded = _on_interstitial_loaded
 	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void: pass
-	InterstitialAdLoader.new().load(INTERSTITIAL_ID, AdRequest.new(), cb)
+	InterstitialAdLoader.new().load(interstitial_id(), AdRequest.new(), cb)
 
 func _on_interstitial_loaded(ad: InterstitialAd) -> void:
 	var content_cb := FullScreenContentCallback.new()
@@ -137,13 +242,22 @@ func _on_interstitial_loaded(ad: InterstitialAd) -> void:
 	_interstitial_ad = ad
 	interstitial_ready = true
 
+# Has enough time passed since the last full-screen ad? Shared by both
+# interstitial placements — the cooldown is per player, not per placement.
+func _interstitial_allowed() -> bool:
+	return (Time.get_ticks_msec() / 1000.0) - _last_interstitial_at \
+		>= MIN_SECONDS_BETWEEN_INTERSTITIALS
+
 # Returns whether an ad actually went up, so a caller that needs to know when the
 # player is back can decide whether to wait on `ad_closed` at all (nothing will be
 # emitted if there was no ad to show).
 func try_show_interstitial() -> bool:
+	if not _interstitial_allowed():
+		return false
 	if not interstitial_ready or _interstitial_ad == null:
 		return false
 	interstitial_ready = false
+	_last_interstitial_at = Time.get_ticks_msec() / 1000.0
 	_mark_shown()
 	_interstitial_ad.show()
 	return true
@@ -155,7 +269,7 @@ func _load_arena_interstitial() -> void:
 	var cb := InterstitialAdLoadCallback.new()
 	cb.on_ad_loaded = _on_arena_interstitial_loaded
 	cb.on_ad_failed_to_load = func(_e: LoadAdError) -> void: pass
-	InterstitialAdLoader.new().load(ARENA_INTERSTITIAL_ID, AdRequest.new(), cb)
+	InterstitialAdLoader.new().load(arena_interstitial_id(), AdRequest.new(), cb)
 
 func _on_arena_interstitial_loaded(ad: InterstitialAd) -> void:
 	var content_cb := FullScreenContentCallback.new()
@@ -177,9 +291,12 @@ func _on_arena_interstitial_loaded(ad: InterstitialAd) -> void:
 
 # See try_show_interstitial for why this reports whether an ad went up.
 func try_show_arena_interstitial() -> bool:
+	if not _interstitial_allowed():
+		return false
 	if not arena_interstitial_ready or _arena_interstitial_ad == null:
 		return false
 	arena_interstitial_ready = false
+	_last_interstitial_at = Time.get_ticks_msec() / 1000.0
 	_mark_shown()
 	_arena_interstitial_ad.show()
 	return true

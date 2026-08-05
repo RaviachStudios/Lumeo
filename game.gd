@@ -48,14 +48,12 @@ var _coin_lbl: Label
 var _coin_icon: Control
 var _earn_indicator: Label
 
-# Idle nudge for the Watch-Ad button: after 2s without a move while awaiting input
-# we pulse it for ~2s to draw the eye. _last_activity is the last press / input-start
-# time; _prev_state lets _process spot the moment we enter the "input" phase.
-var _last_activity: float = 0.0
-var _prev_state: String = ""
-var _ad_glowing: bool = false
-var _ad_glowed: bool = false   # one-shot: glow once per idle period until a move re-arms it
-var _ad_glow_tw: Tween
+# The Watch-Ad button used to run an idle "attention nudge" — an aura, a sweeping
+# bolt of light and a heartbeat swell — whenever the player paused mid-round. It
+# was removed deliberately: it is an animation whose only purpose is to pull the
+# eye onto an ad entry point during play, which is what the publisher policies
+# call encouraging clicks. The button now sits completely passive and is offered
+# on its own merits.
 
 # Arena race extras (only active when _is_contest).
 const PRESS_LIMIT := 10.0          # seconds allowed to make each next press
@@ -99,9 +97,6 @@ func _on_ad_closed(seconds_shown: float) -> void:
 		return
 	if _press_active:
 		_press_deadline += seconds_shown
-	# Otherwise the idle nudge reads the whole ad as time spent hesitating and
-	# fires the moment the player is back.
-	_last_activity = _now_secs()
 
 func _process(_dt: float) -> void:
 	# Nothing on this screen should advance behind a full-screen ad. Most Android
@@ -114,19 +109,6 @@ func _process(_dt: float) -> void:
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
 		_watch_ad_btn.visible = AdManager.rewarded_ready
-
-	# Reset the idle-nudge baseline the moment we enter the input phase.
-	if _state != _prev_state:
-		if _state == "input":
-			_last_activity = _now_secs()
-			_reset_ad_glow()
-		_prev_state = _state
-
-	# Idle nudge: 2s without a move while awaiting input → glow the Watch-Ad button
-	# once for ~2s, then back to normal. A move (or a new input phase) re-arms it.
-	if _watch_ad_btn and _watch_ad_btn.visible and _state == "input" \
-			and not _ad_glowing and not _ad_glowed and _now_secs() - _last_activity >= 2.0:
-		_start_ad_glow()
 
 	# Arena race: per-press 10s window with a 3-2-1 side countdown; miss it -> over.
 	if _is_contest and _press_active and _state == "input":
@@ -238,12 +220,19 @@ func _input(event: InputEvent) -> void:
 func _build_hud() -> void:
 	var sz := get_viewport_rect().size
 
-	# "Watch ads for replay" — a physical glossy amber push-button pill, top-left.
-	# (The old "Level:" caption above it is gone; the level now reads from the
-	# wheel's centre.) The dome + label are drawn by watch_ad_button.gd; it also
-	# sizes itself to the text with generous padding in _ready.
+	# "Watch a video to replay" — a physical glossy amber push-button pill. The
+	# label states the required action in full BEFORE the ad, which the rewarded-ad
+	# policy requires and "Watch ads for replay" only half did. The dome + label are
+	# drawn by watch_ad_button.gd; it also sizes itself to the text with generous
+	# padding in _ready.
+	#
+	# It lives in the top-LEFT corner, the point furthest from the wheel: the wheel
+	# is centred and inscribed in a square of 0.92 × the short side, so its rim
+	# never reaches this corner at any viewport aspect. Taps during a round land on
+	# the wheel and nowhere near here, which is the whole point — an ad control must
+	# not sit inside the area a player is repeatedly hitting.
 	_watch_ad_btn = (load("res://watch_ad_button.gd") as GDScript).new()
-	_watch_ad_btn.text = "Watch ads for replay"
+	_watch_ad_btn.text = "Watch a video to replay"
 	_watch_ad_btn.position = Vector2(20, 20)
 	_watch_ad_btn.focus_mode = Control.FOCUS_NONE
 	_watch_ad_btn.pressed.connect(_on_watch_ad)
@@ -821,9 +810,6 @@ func _press_feedback(idx: int) -> void:
 		_wheel.set_press(idx, 0.0))
 
 func _player_pressed(idx: int) -> void:
-	# Any move resets the idle-nudge window and cancels a running Watch-Ad glow.
-	_last_activity = _now_secs()
-	_reset_ad_glow()
 	_press_feedback(idx)
 	AudioManager.play_button_tone(idx, 0.3)
 	player_seq.append(idx)
@@ -937,38 +923,7 @@ func _on_quit_confirmed() -> void:
 func _on_watch_ad() -> void:
 	if _state != "input":
 		return
-	_reset_ad_glow()
 	AdManager.show_rewarded(_replay_after_countdown)
-
-# Idle attention nudge: light the Watch-Ad button up for ~3.5s. This only drives
-# the ENVELOPE — watch_ad_button.gd owns the animation itself (aura, sweeping bolt
-# and heartbeat swell) and runs it for as long as `glow` is up, so all we do here
-# is fade it in, hold, and fade it out. Plays once; a move re-arms it via
-# _reset_ad_glow.
-func _start_ad_glow() -> void:
-	if _watch_ad_btn == null:
-		return
-	_ad_glowing = true
-	_ad_glowed = true
-	_watch_ad_btn.set("glow", 0.0)
-	var tw := create_tween()
-	tw.tween_property(_watch_ad_btn, "glow", 1.0, 0.28).set_trans(Tween.TRANS_SINE)
-	tw.tween_interval(2.8)                         # ~3 heartbeats + 2 passes of the bolt
-	tw.tween_property(_watch_ad_btn, "glow", 0.0, 0.42).set_trans(Tween.TRANS_SINE)
-	tw.finished.connect(func() -> void:
-		if _watch_ad_btn:
-			_watch_ad_btn.set("glow", 0.0)
-		_ad_glowing = false)                       # stays put; a move re-arms via _reset_ad_glow
-	_ad_glow_tw = tw
-
-# Stop any running glow, clear the one-shot guard and restore the button to rest.
-func _reset_ad_glow() -> void:
-	if _ad_glow_tw and _ad_glow_tw.is_valid():
-		_ad_glow_tw.kill()
-	_ad_glowing = false
-	_ad_glowed = false
-	if _watch_ad_btn:
-		_watch_ad_btn.set("glow", 0.0)
 
 func _replay_after_countdown() -> void:
 	_state = "showing"
