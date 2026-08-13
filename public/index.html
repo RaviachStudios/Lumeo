@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Simon</title>
+<meta name="description" content="Privacy Policy for the Simon mobile app by Raviach Studios.">
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --text: #1c2030;
+    --text-dim: #565c76;
+    --border: #e3e5ef;
+    --accent: #4a53d6;
+    --accent-soft: #eef0fd;
+    --code-bg: #f0f1f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f18;
+      --surface: #161927;
+      --text: #eef0fa;
+      --text-dim: #a4a9c4;
+      --border: #2a2e42;
+      --accent: #8b93ff;
+      --accent-soft: #1c2040;
+      --code-bg: #1b1e2f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--accent); }
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+  header.hero {
+    padding: 56px 24px 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  header.hero h1 {
+    font-size: clamp(28px, 5vw, 40px);
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  header.hero p.sub {
+    color: var(--text-dim);
+    margin: 0;
+    font-size: 15px;
+  }
+  .meta-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid var(--border);
+  }
+  nav.toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin: 32px 0 40px;
+  }
+  nav.toc h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 0 0 12px;
+  }
+  nav.toc ol {
+    columns: 2;
+    -webkit-columns: 2;
+    padding-left: 20px;
+    margin: 0;
+  }
+  nav.toc li { margin-bottom: 6px; break-inside: avoid; }
+  nav.toc a { text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  @media (max-width: 560px) {
+    nav.toc ol { columns: 1; }
+  }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 28px 8px;
+    margin-bottom: 20px;
+    scroll-margin-top: 20px;
+  }
+  section h2 {
+    font-size: 20px;
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  section h2 .num {
+    font-size: 13px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 2px 9px;
+    font-weight: 600;
+  }
+  section h3 {
+    font-size: 15px;
+    margin: 22px 0 8px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  section p, section li { color: var(--text); }
+  section ul { padding-left: 22px; }
+  section.callout {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+    font-size: 14.5px;
+  }
+  table.data-table th, table.data-table td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.data-table th {
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14.5px;
+  }
+  .btn:hover { opacity: 0.9; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 6px; border-radius: 6px; font-size: 0.92em; }
+  footer.page-footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 32px 24px 0;
+  }
+  .back-to-top {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-decoration: none;
+  }
+  .back-to-top:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>Privacy Policy</h1>
+  <p class="sub">Simon — a mobile game by Raviach Studios</p>
+  <div class="meta-row">
+    <span class="badge">Effective: June 1, 2026</span>
+    <span class="badge">Last updated: August 14, 2026</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <nav class="toc" aria-label="Table of contents">
+    <h2>On this page</h2>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#data-we-collect">Data we collect</a></li>
+      <li><a href="#public-visibility">Public visibility (leaderboards &amp; Arena)</a></li>
+      <li><a href="#cookies">Cookies &amp; tracking</a></li>
+      <li><a href="#advertising">Advertising &amp; Unity Ads</a></li>
+      <li><a href="#third-parties">Third-party services</a></li>
+      <li><a href="#your-rights">Your rights</a></li>
+      <li><a href="#delete-data">Delete your account &amp; data</a></li>
+      <li><a href="#delete-specific-data">Delete specific data (keep your account)</a></li>
+      <li><a href="#ccpa">California privacy rights (CCPA/CPRA)</a></li>
+      <li><a href="#international">International data transfers</a></li>
+      <li><a href="#retention">Data retention</a></li>
+      <li><a href="#children">Children's privacy</a></li>
+      <li><a href="#security">Security &amp; breach notification</a></li>
+      <li><a href="#changes">Changes to this policy</a></li>
+      <li><a href="#contact">Contact us</a></li>
+    </ol>
+  </nav>
+
+  <section id="overview">
+    <h2><span class="num">1</span>Overview</h2>
+    <p>This privacy policy applies to the Simon app for mobile devices, together with any related services operated by Maor Raviach, trading as Raviach Studios (referred to here as the "Service Provider"). It explains what information the Application collects, why, how it's used, and the choices you have.</p>
+  </section>
+
+  <section id="data-we-collect">
+    <h2><span class="num">2</span>Data we collect</h2>
+    <p>The Application collects different information depending on whether you play as a guest or sign in.</p>
+    <table class="data-table">
+      <tr><th>Category</th><th>Examples</th><th>When</th></tr>
+      <tr>
+        <td>Account data</td>
+        <td>Email address, unique user ID and display name, via Firebase Authentication</td>
+        <td>Only if you sign in — a guest account has none of this</td>
+      </tr>
+      <tr>
+        <td>Gameplay data</td>
+        <td>High scores, coin balance, daily-reward streak, owned shop items, contest/Arena history</td>
+        <td>Signed-in players (synced via Firestore); guests keep this locally on-device only</td>
+      </tr>
+      <tr>
+        <td>Purchase data</td>
+        <td>Purchase tokens and product IDs handled by Google Play Billing — the Application never sees or stores your payment card details</td>
+        <td>If you buy coins or a one-time upgrade</td>
+      </tr>
+      <tr>
+        <td>Device &amp; diagnostic data</td>
+        <td>Device model, OS version, IP address, in-app events</td>
+        <td>All players, via Firebase Analytics</td>
+      </tr>
+      <tr>
+        <td>Advertising data</td>
+        <td>Advertising ID and ad-interaction events, used to show and measure ads. Shared with Unity Technologies (Unity Ads)</td>
+        <td>Where ads are shown, via Unity Ads — see <a href="#advertising">Advertising &amp; Unity Ads</a></td>
+      </tr>
+    </table>
+  </section>
+
+  <section id="public-visibility" class="callout">
+    <h2><span class="num">3</span>Public visibility (leaderboards &amp; Arena)</h2>
+    <p>Simon has social features that are, by design, visible to other players. If you sign in, your <strong>display name</strong> and <strong>scores</strong> may be shown to other players on global leaderboards and inside multiplayer contests ("the Arena"), including on results screens and podiums. Don't use your real full name as your display name if you'd rather keep it private — a nickname works just as well.</p>
+  </section>
+
+  <section id="cookies">
+    <h2><span class="num">4</span>Cookies and tracking technologies</h2>
+    <p>The Application or its third-party SDKs may use cookies, SDKs, pixels, and similar technologies to support functionality, analytics, or service delivery. Where required by applicable law, the Service Provider will obtain consent before using non-essential tracking technologies.</p>
+  </section>
+
+  <section id="advertising">
+    <h2><span class="num">5</span>Advertising &amp; Unity Ads</h2>
+    <p>The Application shows ads to keep the game free to play. Ads are served by <strong>Unity Ads</strong>, operated by Unity Technologies, which is the Application's only advertising partner. To select and measure ads, Unity Ads may collect and process your device's <strong>advertising ID</strong> (Google Advertising ID), IP address, device and OS information, and ad-interaction events such as which ads were shown, watched, or clicked. This data is shared with Unity Technologies as an independent controller of it; see the <a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity Game Player and App User Privacy Policy</a>.</p>
+    <p>Two kinds of ad appear: full-screen ads shown between rounds, and optional "watch a video" ads that you choose to start in exchange for an in-game reward. A one-time in-app purchase is available to remove the full-screen ads; the optional reward videos remain available.</p>
+    <h3>Your choice about personalized ads</h3>
+    <p>Personalized ads are only shown where you have agreed to them. The Application asks for that consent before any ad is requested, and you can change your answer at any time in the app under <strong>Settings → Ad Preferences</strong>. If you decline, you will still see ads, but they will be contextual (non-personalized) and your advertising ID will not be used to profile you.</p>
+    <p>You can also opt out of personalized advertising at the device level:</p>
+    <ul>
+      <li>Android: Settings → Google → Ads → "Delete advertising ID" or "Opt out of Ads Personalization"</li>
+      <li>iOS: Settings → Privacy &amp; Security → Tracking</li>
+    </ul>
+  </section>
+
+  <section id="third-parties">
+    <h2><span class="num">6</span>Third-party services</h2>
+    <p>The Application utilizes third-party services that have their own privacy policies about handling data:</p>
+    <ul>
+      <li><a href="https://www.google.com/policies/privacy/" target="_blank" rel="noopener noreferrer">Google Play Services</a></li>
+      <li><a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity Ads (Unity Technologies)</a></li>
+      <li><a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Google Analytics for Firebase</a></li>
+      <li><a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Firebase Authentication &amp; Firestore</a></li>
+      <li><a href="https://godotengine.org/privacy-policy" target="_blank" rel="noopener noreferrer">Godot Engine</a></li>
+    </ul>
+    <p>Only aggregated, anonymized data is periodically transmitted to external services to aid the Service Provider in improving the Application. The Service Provider may disclose information:</p>
+    <ul>
+      <li>as required by law, such as to comply with a subpoena or similar legal process;</li>
+      <li>when necessary in good faith to protect rights, safety, investigate fraud, or respond to a government request;</li>
+      <li>with trusted service providers acting on the Service Provider's behalf, who have agreed to the rules in this policy.</li>
+    </ul>
+  </section>
+
+  <section id="your-rights">
+    <h2><span class="num">7</span>Your rights</h2>
+    <p>You may request access to, correction of, or deletion of your personal data held by the Service Provider. Where processing is based on consent, you may withdraw that consent at any time without affecting processing carried out before withdrawal. To exercise these rights, contact the Service Provider at <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
+  </section>
+
+  <section id="delete-data" class="callout">
+    <h2><span class="num">8</span>Delete your account &amp; data</h2>
+    <p>You can delete your <strong>Simon</strong> account (published by <strong>Raviach Studios</strong>) and the data associated with it at any time. There are two ways to do it.</p>
+
+    <h3>Option 1 — In the app (immediate)</h3>
+    <ol>
+      <li>Open <strong>Simon</strong>.</li>
+      <li>Tap the <strong>settings</strong> icon (the gear, top-right of the home screen).</li>
+      <li>Scroll to the account section and tap <strong>Delete Account</strong>.</li>
+      <li>Confirm on the "Delete Account?" screen.</li>
+    </ol>
+    <p>Your account and its data are deleted straight away, and you are returned to the game as a signed-out guest.</p>
+
+    <h3>Option 2 — By email (if you've uninstalled the app)</h3>
+    <p>Email the Service Provider using the button below, ideally from the email address associated with your account so the request can be verified:</p>
+    <p><a class="btn" href="mailto:raviachstudios@gmail.com?subject=Simon%20-%20Delete%20my%20account%20and%20data">Request account deletion</a></p>
+    <p>Email requests are processed within 30 days.</p>
+
+    <h3>What is deleted, and what is kept</h3>
+    <table class="data-table">
+      <tr><th>Deleted</th><th>Kept, and for how long</th></tr>
+      <tr>
+        <td>
+          <ul>
+            <li>Your account record and unique user ID</li>
+            <li>Email address and display name</li>
+            <li>High scores and personal bests</li>
+            <li>Coin balance, owned themes, colours and skins</li>
+            <li>Daily-reward streak and daily task progress</li>
+            <li>Leaderboard entries and contest / Arena history</li>
+          </ul>
+        </td>
+        <td>
+          <ul>
+            <li><strong>Purchase records</strong> — retained as long as required by tax, accounting and consumer-protection law. Payments are handled by Google Play; the Service Provider never holds your card details.</li>
+            <li><strong>Aggregated and anonymised data</strong> — retained indefinitely, as it no longer identifies you.</li>
+            <li><strong>Data needed for legal, security or fraud-prevention purposes</strong> — retained only as long as that purpose requires.</li>
+          </ul>
+        </td>
+      </tr>
+    </table>
+    <p>See <a href="#retention">Data retention</a> for the full retention schedule. If you only want to remove <em>some</em> of your data and keep playing, see <a href="#delete-specific-data">Delete specific data</a> below.</p>
+    <p>Uninstalling the Application stops further data collection from your device, but does not by itself delete data already transmitted to the Service Provider or third parties — use one of the two options above for that.</p>
+  </section>
+
+  <section id="delete-specific-data">
+    <h2><span class="num">9</span>Delete specific data (keep your account)</h2>
+    <p>You do not have to close your <strong>Simon</strong> account to have data removed. You can ask <strong>Raviach Studios</strong> to delete particular items while your account stays active.</p>
+
+    <h3>How to request it</h3>
+    <ol>
+      <li>Email the Service Provider using the button below, from the address associated with your account where possible.</li>
+      <li>Say which data you want removed — for example your display name, your leaderboard entries, or your contest history.</li>
+      <li>You'll receive confirmation once it's done. Requests are processed within 30 days.</li>
+    </ol>
+    <p><a class="btn" href="mailto:raviachstudios@gmail.com?subject=Simon%20-%20Delete%20specific%20data%20from%20my%20account">Request data deletion</a></p>
+
+    <h3>What can be removed this way</h3>
+    <ul>
+      <li>Your display name (your account reverts to an unnamed profile)</li>
+      <li>Leaderboard entries and podium placements</li>
+      <li>Contest / Arena history</li>
+      <li>High scores and personal bests</li>
+      <li>Analytics data associated with your account</li>
+    </ul>
+
+    <h3>What is kept</h3>
+    <ul>
+      <li>Your account record itself, including your user ID and email address — this is what keeps you signed in. Delete the account instead if you want these gone (see <a href="#delete-data">Delete your account &amp; data</a>).</li>
+      <li>Purchase records, for as long as tax and accounting law requires.</li>
+      <li>Aggregated and anonymised data, which no longer identifies you.</li>
+      <li>Anything required for legal, security or fraud-prevention purposes, for as long as that purpose requires.</li>
+    </ul>
+    <p>Advertising data is handled separately: to stop your advertising ID being used for personalised ads, open <strong>Settings → Ad Preferences</strong> in the app and choose generic ads. See <a href="#advertising">Advertising &amp; Unity Ads</a>.</p>
+  </section>
+
+  <section id="ccpa">
+    <h2><span class="num">10</span>Your California privacy rights (CCPA/CPRA)</h2>
+    <p>If you are a California resident, you have the right to know what personal information is collected, the right to delete personal information, the right to opt out of the sale or sharing of personal information, and the right to non-discrimination for exercising these rights. The Service Provider does not sell your personal information for money. However, showing <strong>personalized ads</strong> involves sharing your advertising ID with Unity Ads for cross-context behavioral advertising, which California and several other US state privacy laws treat as "sharing". You can opt out of that at any time in the app under <strong>Settings → Ad Preferences</strong> — choosing generic ads there is a complete opt-out of this sharing. To exercise your other CCPA/CPRA rights, contact the Service Provider at <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
+    <p>For a better experience while using the Application, the Service Provider may require certain personally identifiable information, including but not limited to a user ID. This information is retained and used as described in this policy, and may be used to send important notices and, where permitted by law, marketing communications.</p>
+  </section>
+
+  <section id="international">
+    <h2><span class="num">11</span>International data transfers</h2>
+    <p>The Service Provider or its third-party service providers may transfer personal data to countries outside your country of residence, including outside the European Economic Area (EEA). Where applicable law requires safeguards for international transfers, the Service Provider will use appropriate mechanisms, including:</p>
+    <ul>
+      <li>Standard Contractual Clauses (SCCs) approved by the European Commission</li>
+      <li>Adequacy decisions or other legally recognized transfer mechanisms</li>
+      <li>Your consent, where required and legally permitted</li>
+    </ul>
+    <p>Data protection laws in other countries may differ from those in your jurisdiction. Where required by law, the Service Provider will apply appropriate safeguards and obtain any consent required for the transfer.</p>
+  </section>
+
+  <section id="retention">
+    <h2><span class="num">12</span>Data retention</h2>
+    <p>The Service Provider retains personal data based on its necessity for the stated purposes:</p>
+    <ul>
+      <li>User-provided data: retained for the duration of your use of the Application plus 12 months thereafter, unless longer retention is required by law</li>
+      <li>Automatically collected data: retained for up to 24 months from collection, unless longer retention is required for legal compliance</li>
+      <li>Aggregated and anonymized data: retained indefinitely, as it no longer identifies you</li>
+      <li>Data required for legal compliance: retained as long as required by applicable law</li>
+    </ul>
+    <p>You may request deletion of your personal data at any time — see <a href="#delete-data">Delete your account &amp; data</a> — subject to any legal obligation to retain it. Some data may be required for the Application to function properly.</p>
+  </section>
+
+  <section id="children">
+    <h2><span class="num">13</span>Children's privacy</h2>
+    <p>The Application is not intended for children under 16 years of age, or such higher age as required by applicable law. The Service Provider does not knowingly solicit data from children or market the Application to them, and does not knowingly collect personally identifiable information from children under 16 in violation of applicable law.</p>
+    <p>Where parental or guardian consent is required under applicable law, the Application is not intended for use without that consent. If the Service Provider discovers that a child has provided personal information, it will be deleted from the Service Provider's servers immediately. If you are a parent or guardian and believe your child has provided personal information, please contact the Service Provider at <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a> so appropriate action can be taken.</p>
+  </section>
+
+  <section id="security">
+    <h2><span class="num">14</span>Security &amp; breach notification</h2>
+    <p>The Service Provider safeguards the confidentiality of your information using physical, electronic, and procedural measures appropriate to the data processed.</p>
+    <p>If a data breach occurs that affects your personal data, the Service Provider will notify you in accordance with applicable legal requirements, including, where required, information about the nature of the breach and the steps being taken to address it.</p>
+  </section>
+
+  <section id="changes">
+    <h2><span class="num">15</span>Changes to this policy</h2>
+    <p>The Service Provider may update this Privacy Policy from time to time. Material changes will be posted here with an updated effective date, and where required by law, consent will be sought before they take effect. Previous versions are available on request by contacting <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
+  </section>
+
+  <section id="contact">
+    <h2><span class="num">16</span>Contact us</h2>
+    <p>If you have any questions about this policy or your data, contact the Service Provider at <a class="btn" href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
+  </section>
+
+  <footer class="page-footer">
+    <p>© 2026 Raviach Studios. This policy applies to the Simon mobile app.</p>
+    <a class="back-to-top" href="#overview">Back to top ↑</a>
+  </footer>
+
+</div>
+</body>
+</html>

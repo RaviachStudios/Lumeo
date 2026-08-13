@@ -7,6 +7,9 @@ serviceAccount*.json
 *-firebase-adminsdk-*.json
 node_modules/
 
+# Firebase CLI deploy cache — regenerated on every `firebase deploy`.
+.firebase/
+
 # Build artifacts (too large for GitHub; keep local only)
 Simon.apk
 Simon.aab
