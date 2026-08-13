@@ -231,6 +231,10 @@ func _maybe_show_arrival_ad() -> void:
 	# about to see, it isn't the standings this ad is supposed to bracket.
 	if _launched:
 		return
+	# Honour the remove-ads entitlement, same as the exit ad below and the
+	# post-game one in game.gd. This site was missing the check.
+	if CoinsManager.has_remove_ads:
+		return
 	AdManager.try_show_arena_interstitial()
 
 # Retry the initial read by hand, from the "couldn't reach the room" face.

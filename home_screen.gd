@@ -3078,7 +3078,7 @@ func _show_settings_popup() -> void:
 	# together behind the gear rather than loose in the HUD. Guests have neither.
 	var show_account := FirebaseManager.is_signed_in()
 	const PW := 440.0
-	const BASE_PH := 466.0
+	const BASE_PH := 524.0
 	const ACCOUNT_SECTION_H := 152.0
 	var ph := BASE_PH + (ACCOUNT_SECTION_H if show_account else 0.0)
 	var panel := _card_panel(Vector2(PW, ph), Color(0.05, 0.06, 0.16, 0.98),
@@ -3114,11 +3114,15 @@ func _show_settings_popup() -> void:
 		Color(0.16, 0.18, 0.34), _contact_us)
 	_make_popup_button(panel, "Privacy Policy", Vector2(40, 312), Vector2(PW - 80, 50),
 		Color(0.16, 0.18, 0.34), _open_privacy_policy)
+	# Re-opens the ad consent prompt. Required, not optional: a consent the player
+	# can't withdraw isn't a valid consent.
+	_make_popup_button(panel, "Ad Preferences", Vector2(40, 370), Vector2(PW - 80, 50),
+		Color(0.16, 0.18, 0.34), ConsentManager.open_settings)
 
 	# Signed-in-only account zone. Guests have no account to leave or delete.
 	# Sign Out reads as a neutral action and Delete Account as the destructive
 	# one, so they don't share a colour despite sharing a section.
-	var after_y := 374.0
+	var after_y := 432.0
 	if show_account:
 		_popup_divider(panel, after_y, PW)
 		_popup_section_label(panel, "ACCOUNT", after_y + 12, PW)
