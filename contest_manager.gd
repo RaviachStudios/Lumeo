@@ -1088,11 +1088,10 @@ func _notification(what: int) -> void:
 		var seen: Dictionary = _watch_seen[cid]
 		seen["t"] = 0
 		_watch_seen[cid] = seen
-	# And re-confirm NOW rather than on the next tick. A full-screen interstitial (the
-	# arena one runs exactly as a race ends) backgrounds us for the very window in which
-	# the room finishes, so waiting out up to WATCHDOG_TICK on top of the ad is the
-	# difference between "the podium is up when I come back" and staring at the waiting
-	# board.
+	# And re-confirm NOW rather than on the next tick. Anything that backgrounds the
+	# app (a rewarded ad, an app switch) can cover the very window in which the room
+	# finishes, so waiting out up to WATCHDOG_TICK on top of that is the difference
+	# between "the podium is up when I come back" and staring at the waiting board.
 	call_deferred("_on_watchdog")
 
 # Android live-listener callback. `data` is the changed document (decoded by the

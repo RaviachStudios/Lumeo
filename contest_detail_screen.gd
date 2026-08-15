@@ -70,12 +70,6 @@ var _finalize_next := 0
 const KEEPALIVE_SECS := 5 * 60
 var _keepalive: Timer
 
-# Set by game_manager.show_contest_detail when we're the destination of an
-# end-of-race hand-off: raise the arena interstitial once the first face is painted.
-# The ad is deliberately OURS to fire rather than the game screen's — see the note in
-# game.gd's _game_over — so that it can never go up over a board that hasn't loaded.
-var show_ad_on_load := false
-
 var _room: Dictionary = {}       # shaped room (see ContestManager._shape_room)
 # The initial read couldn't reach Firestore (as opposed to a 404). Renders a retry
 # face rather than "this room no longer exists", which would be a flat lie: the room
@@ -192,9 +186,9 @@ func _initial_load() -> void:
 	_busy = true
 	_set_overlay(true, "Loading…")
 	# Retrying + status-aware: a read that merely FAILED must never be painted as a
-	# room that no longer exists. This load runs at the single worst moment for the
-	# network — straight out of a race, with the arena interstitial about to cover
-	# the app — so a lost read here is ordinary, not exceptional.
+	# room that no longer exists. This load runs at the worst moment for the
+	# network — straight out of a race — so a lost read here is ordinary, not
+	# exceptional.
 	var res: Dictionary = await ContestManager.load_room_retrying(contest_id)
 	if not is_inside_tree():
 		return
@@ -213,29 +207,6 @@ func _initial_load() -> void:
 	if not ContestManager.room_changed.is_connected(_on_room_changed):
 		ContestManager.room_changed.connect(_on_room_changed)
 	ContestManager.watch_room(contest_id)
-	_maybe_show_arrival_ad()
-
-# The post-race interstitial, raised only now that a real face is on screen and the
-# live listener is attached. One frame first so the board has actually been drawn:
-# the player should come out of the ad onto the standings they glimpsed going in,
-# not onto a screen that renders for the first time after the ad lifts.
-func _maybe_show_arrival_ad() -> void:
-	if not show_ad_on_load:
-		return
-	show_ad_on_load = false
-	await get_tree().process_frame
-	if not is_inside_tree():
-		return
-	# _render decided to send us back into a match rather than to a board (a stale
-	# "playing" read where our finish hasn't landed yet). Whatever the player is
-	# about to see, it isn't the standings this ad is supposed to bracket.
-	if _launched:
-		return
-	# Honour the remove-ads entitlement, same as the exit ad below and the
-	# post-game one in game.gd. This site was missing the check.
-	if CoinsManager.has_remove_ads:
-		return
-	AdManager.try_show_arena_interstitial()
 
 # Retry the initial read by hand, from the "couldn't reach the room" face.
 func _retry_load() -> void:
@@ -1872,10 +1843,6 @@ func _do_leave() -> void:
 	game_manager.show_arena()
 
 func _on_exit() -> void:
-	# Simple post-view interstitial, same treatment as game-over: skipped for
-	# players who bought the remove-ads entitlement.
-	if not CoinsManager.has_remove_ads:
-		AdManager.try_show_interstitial()
 	game_manager.show_arena()
 
 # ---------------- overlay / toast / confirm ----------------

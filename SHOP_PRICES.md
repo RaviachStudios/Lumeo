@@ -137,6 +137,15 @@ Ordered by price, as shown in the shop. Only Jackpot, Arcade, and Luna Park are 
 
 ## Other In-App Purchase
 
-| Item | Price (USD, editor fallback) |
-|---|---|
-| Remove Ads | $2.99 |
+| Item | Price (USD, editor fallback) | Status |
+|---|---|---|
+| Remove Ads | $2.99 | **Delisted** — deactivated in Play Console, removed from the shop |
+
+Remove Ads was retired when the interstitials it suppressed were taken out of the
+game. Players who already bought it keep the entitlement: Play replays the purchase
+on every fresh connect and `PurchaseManager` still acknowledges it. Nothing offers
+it for sale any more.
+
+Its badge slot (bit 43, formerly "Ad-Free") was repurposed as **Mogul** — earn
+250,000 coins in total — so badge completion stays reachable. Legacy owners already
+have that bit set, so they keep a badge in the slot rather than losing one.

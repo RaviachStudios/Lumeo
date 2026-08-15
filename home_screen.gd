@@ -3234,7 +3234,12 @@ func _confirm_delete_account(_settings_overlay: Control) -> void:
 	panel.add_child(title)
 
 	var body := Label.new()
-	body.text = "This permanently erases your coins, scores, cosmetics and Arena history — it can't be undone.\n\nYour one-time Remove Ads purchase isn't affected; it's restored automatically if you sign back in."
+	# The Remove Ads line is only for the players who actually bought it before the
+	# product was delisted — for everyone else it advertises something that no
+	# longer exists (see PurchaseManager.REMOVE_ADS_SKU).
+	body.text = "This permanently erases your coins, scores, cosmetics and Arena history — it can't be undone."
+	if CoinsManager.has_remove_ads:
+		body.text += "\n\nYour one-time Remove Ads purchase isn't affected; it's restored automatically if you sign back in."
 	body.add_theme_font_size_override("font_size", 15)
 	body.add_theme_color_override("font_color", Color(0.80, 0.83, 0.95, 0.92))
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
