@@ -45,10 +45,19 @@ const PACKS: Array = [
 	{"sku": "coins_8", "coins": 50000, "label": "Jackpot"},
 ]
 
-# Non-consumable in-app product: a one-time purchase that disables interstitial
-# ads forever for the signed-in player. Acknowledged (not consumed) and reflected
-# in the wallet doc via CoinsManager.set_remove_ads_owned so the entitlement
-# survives reinstall (Play replays it on first connect).
+# DELISTED — no longer for sale. This non-consumable bought an ad-free experience;
+# the interstitials it suppressed were removed from the game entirely (see
+# ad_manager_unity.gd), leaving it with nothing to do, so it was deactivated in
+# Play Console rather than sold as an empty promise. It is not queried, not priced,
+# not offered in the shop, and buy() refuses it.
+#
+# The SKU and every code path that RECEIVES it deliberately stay: deactivating a
+# managed product in Play Console does not revoke it from people who already paid.
+# Play keeps replaying those purchases on every fresh connect — including after a
+# reinstall — and _handle_purchase must keep recognising the id so it takes the
+# acknowledge-and-record branch. Drop it from _known_skus and that same replay
+# falls through to the unknown-SKU path, which CONSUMES the purchase — destroying
+# a paying player's entitlement.
 const REMOVE_ADS_SKU := "no_ads"
 
 const _TOKEN_STORE_PATH := "user://purchase_history.cfg"
@@ -64,7 +73,7 @@ var _billing_initialised := false         # lazy: BillingClient is built on firs
 var _pending_query := false               # query queued before connection landed
 var _prices: Dictionary = {}              # sku -> localized price string (e.g. "$0.99")
 var _coins_for_sku: Dictionary = {}       # sku -> coins (built from PACKS)
-var _known_skus: Dictionary = {}          # full set of SKUs we recognise (packs + remove_ads)
+var _known_skus: Dictionary = {}          # SKUs we accept deliveries for (packs + the delisted remove_ads)
 var _credited_tokens: Dictionary = {}     # token -> true, persisted across launches
 var _in_flight: Dictionary = {}           # sku -> true while a buy is processing
 # Set when a query_purchases was issued specifically to recover an in-flight
@@ -76,6 +85,7 @@ func _ready() -> void:
 		var sku := String(p["sku"])
 		_coins_for_sku[sku] = int(p["coins"])
 		_known_skus[sku] = true
+	# Delisted, but still accepted on delivery — see REMOVE_ADS_SKU.
 	_known_skus[REMOVE_ADS_SKU] = true
 	_load_credited_tokens()
 
@@ -92,7 +102,6 @@ func _ready() -> void:
 		_prices["coins_6"] = "$9.99"
 		_prices["coins_7"] = "$19.99"
 		_prices["coins_8"] = "$39.99"
-		_prices[REMOVE_ADS_SKU] = "$2.99"
 		call_deferred("emit_signal", "products_loaded")
 		return
 
@@ -164,24 +173,27 @@ func is_available() -> bool:
 func price_for(sku: String) -> String:
 	return String(_prices.get(sku, ""))
 
-# True once a localized price has been cached for every SKU we recognise
-# (coin packs + remove_ads). The loading screen waits on this so the popup
-# opens with prices already in place rather than flashing "LOADING…" buttons.
+# True once a localized price has been cached for every coin pack. The loading
+# screen waits on this so the popup opens with prices already in place rather than
+# flashing "LOADING…" buttons.
+#
+# REMOVE_ADS_SKU is deliberately not part of this. It's deactivated in Play Console,
+# so Play returns no details for it and its price would never arrive — leaving this
+# false forever and making every boot burn the loading screen's whole timeout.
 func prices_ready() -> bool:
 	for p in PACKS:
 		if not _prices.has(String(p["sku"])):
 			return false
-	if not _prices.has(REMOVE_ADS_SKU):
-		return false
 	return true
 
 func coins_for(sku: String) -> int:
 	return int(_coins_for_sku.get(sku, 0))
 
-# True if the player has previously purchased the remove-ads entitlement.
-# Reads through to the wallet, which is the durable source of truth (Play
-# replays the original purchase on first connect after a reinstall, and the
-# wallet doc carries the flag across sessions while offline).
+# True if the player bought the remove-ads entitlement back when it was on sale.
+# Reads through to the wallet, which is the durable source of truth (Play replays
+# the original purchase on first connect after a reinstall, and the wallet doc
+# carries the flag across sessions while offline). Delisting doesn't revoke it —
+# this keeps answering true for everyone who paid.
 func owns_remove_ads() -> bool:
 	return CoinsManager.has_remove_ads
 
@@ -198,10 +210,11 @@ func buy(sku: String) -> void:
 	if not _known_skus.has(sku):
 		purchase_failed.emit(sku, "unknown_sku")
 		return
-	# Block re-buy of the non-consumable up front so the popup never even
-	# launches the Play sheet for a player who already owns the entitlement.
-	if sku == REMOVE_ADS_SKU and owns_remove_ads():
-		purchase_failed.emit(sku, "already_owned")
+	# Delisted: nothing in the UI offers it any more, and Play would reject the
+	# sheet anyway. Refuse here so a stale entry point can't put a player in front
+	# of a purchase flow for a product that no longer exists.
+	if sku == REMOVE_ADS_SKU:
+		purchase_failed.emit(sku, "item_unavailable")
 		return
 	if _is_editor:
 		_in_flight[sku] = true
@@ -209,13 +222,9 @@ func buy(sku: String) -> void:
 		# Simulated success after a short delay so the spinner shows.
 		await get_tree().create_timer(_EDITOR_SIM_DELAY).timeout
 		_in_flight.erase(sku)
-		if sku == REMOVE_ADS_SKU:
-			CoinsManager.set_remove_ads_owned(sku)
-			purchase_succeeded.emit(sku, 0)
-		else:
-			var coins := coins_for(sku)
-			CoinsManager.credit_purchased_coins(coins, sku)
-			purchase_succeeded.emit(sku, coins)
+		var coins := coins_for(sku)
+		CoinsManager.credit_purchased_coins(coins, sku)
+		purchase_succeeded.emit(sku, coins)
 		return
 	# Late lazy-init guard — should already be true if the popup opened, but
 	# keep it here so buy() works even if called from another entry point.
@@ -259,10 +268,10 @@ func _on_connect_error(code: int, _msg: String) -> void:
 func _query_products() -> void:
 	if _billing == null:
 		return
+	# Coin packs only — REMOVE_ADS_SKU is deactivated and would return nothing.
 	var ids := PackedStringArray()
 	for p in PACKS:
 		ids.append(String(p["sku"]))
-	ids.append(REMOVE_ADS_SKU)
 	_billing.query_product_details(ids, BillingClient.ProductType.INAPP)
 
 func _on_product_details(response: Dictionary) -> void:
@@ -362,17 +371,20 @@ func _handle_purchase(p: Dictionary) -> void:
 		_billing.consume_purchase(token)
 		return
 	if sku == REMOVE_ADS_SKU:
-		# Non-consumable: acknowledge (don't consume) and record the entitlement.
-		# Play replays the original purchase on first connect after a reinstall,
-		# so re-handling this codepath on a fresh device must be safe — the
-		# wallet flag is already set, so we just re-acknowledge (idempotent on
-		# Play's side) and quietly exit.
-		var already := CoinsManager.has_remove_ads
+		# Legacy owners only — the product is delisted, so nothing new arrives here.
+		# What still does: Play replaying a purchase somebody made while it was on
+		# sale, on every fresh connect and after every reinstall. Acknowledge (never
+		# consume — consuming would revoke what they paid for) and re-record the
+		# wallet flag. Both are idempotent, so re-running this on each launch is
+		# exactly the intended recovery.
+		#
+		# No purchase_succeeded here: it would be a congratulatory overlay for a
+		# purchase made months ago, and the shop has no remove-ads card left to
+		# refresh. Setting the wallet flag is the whole outcome — it's what
+		# owns_remove_ads() and the account-deletion copy read.
 		CoinsManager.set_remove_ads_owned(sku)
 		_billing.acknowledge_purchase(token)
 		_in_flight.erase(sku)
-		if not already:
-			purchase_succeeded.emit(sku, 0)
 		return
 	# Idempotent: if we've credited this token before (crashed mid-consume on a
 	# previous run, plugin replaying on startup, …), just re-consume.

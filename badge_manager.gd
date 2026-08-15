@@ -101,7 +101,12 @@ const BADGES: Array[Dictionary] = [
 	{"id": "coins_50k",    "bit": 40, "cat": "economy", "art": "chest",   "name": "High Roller",   "desc": "Hold 50,000 coins."},
 	{"id": "earned_10k",   "bit": 41, "cat": "economy", "art": "coins",   "name": "Grinder",       "desc": "Earn 10,000 coins in total."},
 	{"id": "earned_100k",  "bit": 42, "cat": "economy", "art": "chest",   "name": "Tycoon",        "desc": "Earn 100,000 coins in total."},
-	{"id": "remove_ads",   "bit": 43, "cat": "economy", "art": "shield",  "name": "Ad-Free",       "desc": "Unlock Remove Ads."},
+	# Bit 43 used to be "Ad-Free", awarded for the Remove Ads purchase. That product
+	# was delisted (see PurchaseManager.REMOVE_ADS_SKU), which would have left the
+	# slot unearnable and 56/56 impossible for anyone new. Repurposed rather than
+	# deleted: the bit is already set for everyone who bought Remove Ads, so they
+	# keep a badge here instead of silently losing one.
+	{"id": "mogul",        "bit": 43, "cat": "economy", "art": "gem",     "name": "Mogul",         "desc": "Earn 250,000 coins in total."},
 
 	# ── Streak / daily ──────────────────────────────────────────────────────
 	{"id": "claim_first",  "bit": 44, "cat": "streak", "art": "gift",     "name": "Daily Bonus",   "desc": "Claim your first daily reward."},
@@ -176,7 +181,6 @@ func _ready() -> void:
 	CoinsManager.themes_changed.connect(_eval_inventory)
 	CoinsManager.simon_changed.connect(_eval_inventory)
 	CoinsManager.levels_changed.connect(_eval_inventory)
-	CoinsManager.remove_ads_changed.connect(func() -> void: _eval_inventory())
 	# Only sync if CoinsManager has GENUINELY loaded already (doc present). Never sync
 	# off mere is_signed_in — the read may still be in flight (see note above).
 	if CoinsManager.raw_user_doc.size() > 0:
@@ -402,9 +406,6 @@ func _eval_inventory() -> void:
 			owned_skins += 1
 	if owned_skins >= 1: award("first_skin")
 	if total_skins > 0 and owned_skins >= total_skins: award("skins_all")
-	# Remove ads.
-	if CoinsManager.has_remove_ads:
-		award("remove_ads")
 	_eval_economy()
 
 func _eval_economy() -> void:
@@ -416,6 +417,7 @@ func _eval_economy() -> void:
 	var earned: int = CoinsManager.earned_coins
 	if earned >= 10000:  award("earned_10k")
 	if earned >= 100000: award("earned_100k")
+	if earned >= 250000: award("mogul")
 
 func _owns_all_themes() -> bool:
 	for k in CoinsManager.THEMES.keys():

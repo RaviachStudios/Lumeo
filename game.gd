@@ -1006,31 +1006,8 @@ func _game_over() -> void:
 		await ContestManager.submit_result(cid, level - 1)
 		if not is_inside_tree():
 			return
-		# Dedicated arena interstitial as the race ends and the results screen appears.
-		# Skipped for players who bought remove-ads (same treatment as the solo
-		# game-over interstitial).
-		#
-		# ORDER MATTERS. This used to fire the ad and THEN swap the scene, on the
-		# theory that the results board would build itself quietly underneath. It
-		# doesn't: the new screen's first act is a 6s-timeout REST read of the room,
-		# issued into an app the ad has just backgrounded. When that read lost, the
-		# screen concluded the room was gone and the player came out of the ad
-		# staring at "This room no longer exists" instead of the standings — their
-		# race finished, scored, and thrown away.
-		#
-		# So the results screen goes up FIRST and raises the ad itself once it has
-		# painted (see contest_detail_screen.show_ad_on_load). It has to own this
-		# rather than us awaiting it here, because the swap below queue_frees this
-		# very node — a coroutine parked on the new screen's signal would die with it
-		# and the ad would simply never appear.
-		game_manager.show_contest_detail(cid, not CoinsManager.has_remove_ads)
+		game_manager.show_contest_detail(cid)
 		return
-	# Skip the post-game interstitial for players who bought the remove-ads
-	# entitlement. Rewarded ads (the in-game "watch ad to replay" button) are
-	# user-initiated and unaffected — the purchase only suppresses ads we'd
-	# otherwise force on the player.
-	if level > 4 and not CoinsManager.has_remove_ads:
-		AdManager.try_show_interstitial()
 	await get_tree().create_timer(1.8).timeout
 	game_manager.show_game_over(level - 1)
 

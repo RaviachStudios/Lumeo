@@ -7,18 +7,20 @@ Code is done. These are the parts only you can do. Follow in order.
 ## 1. Unity dashboard — done
 
 Game ID `800274606`, with `Rewarded_Android`, `Interstitial_Android` and
-`Banner_Android`. Already in the code. Two notes:
+`Banner_Android`. Two notes:
 
-- **Verify the formats** under Monetization → Ad Units: `Rewarded_Android` must be
-  format **Rewarded**, `Interstitial_Android` must be **Interstitial**. A wrong
-  format initializes fine and then never fills, with no error in the log.
-- **`Banner_Android` is unused.** Simon has no banner surface. Leave it or delete
-  it; an idle ad unit costs nothing.
+- **`Rewarded_Android` is the only ad unit the game uses.** Verify its format under
+  Monetization → Ad Units: it must be **Rewarded**. A wrong format initializes fine
+  and then never fills, with no error in the log.
+- **`Interstitial_Android` and `Banner_Android` are unused.** Leave them or delete
+  them; idle ad units cost nothing.
 
-The arena interstitial shares `Interstitial_Android` for now. To split arena
-revenue out in reporting later: create an Interstitial-format ad unit named
-`Arena_Interstitial_Android`, then set `ARENA_INTERSTITIAL_AD_UNIT` in
-`ad_manager_unity.gd` to that string. One line, nothing else changes.
+**Interstitials were removed from the game.** They ran at solo game over, on
+arrival at the arena results board, and on leaving a room, and Unity filled them
+with long un-skippable video — not something to serve a player who just lost a
+round and asked for nothing. The only ad left is the opt-in "watch an ad to
+replay" reward. `ad_manager_unity.gd` no longer loads or shows any interstitial,
+and there is no frequency cap in it any more because there is nothing to cap.
 
 ---
 
@@ -66,9 +68,9 @@ Unity serves its own test creatives and bills nobody.
 Check:
 
 - Rewarded ad plays; the reward lands only when watched to the end, not on skip.
-- Interstitial appears at game over, and not twice inside 120 s.
-- Arena interstitial appears after a contest. It shares the 120 s cooldown with the
-  game-over one, so leave a gap before testing it or it will correctly not show.
+- The "watch ad to replay" button only appears while an ad is actually loaded.
+- **No ad appears anywhere else** — not at game over, not on the arena results
+  board, not on leaving a room.
 
 Consent dialog: it only appears in the EEA/UK. To force it, temporarily make
 `consent_manager.gd` `_country_code()` return `"DE"`. Run `ConsentManager.reset()`
@@ -120,7 +122,7 @@ First revenue takes ~24 h to appear in the Unity dashboard.
 | Symptom | Cause |
 | --- | --- |
 | `No placement configured for id` | Ad unit ID mismatch or not created on the dashboard |
-| Initializes, never fills | Ad unit format wrong (Interstitial vs Rewarded) |
+| Initializes, never fills | `Rewarded_Android` format is not **Rewarded** |
 | Nothing at all, no log lines | Plugin AAR not built, or addon not enabled |
 | Works in debug, not release | Release AAR missing from `bin/release/` |
 | Reward granted on skip | Should be impossible — reward only fires on `COMPLETED` |

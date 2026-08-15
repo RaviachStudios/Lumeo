@@ -1,24 +1,24 @@
 extends Control
 
-# Modal popup for buying coin packs (and the one-time "remove ads"
-# entitlement) via Google Play Billing. Mounted as a child of whichever
-# screen opened it (home / shop).
+# Modal popup for buying coin packs via Google Play Billing. Mounted as a
+# child of whichever screen opened it (home / shop).
 #
 # Layout: 8 coin packs arranged in a 4×2 grid, each card carries a coin
 # illustration, the coin amount, a pack label, and a buy button stamped
-# with the localized Play price. A full-width "Remove Ads" card sits under
-# the grid — a one-time, non-consumable purchase that stamps a wallet flag
-# and suppresses post-game interstitials. A "Processing…" overlay covers
-# the dialog during a purchase; the result overlay (success / pending /
-# failed) is shown afterward.
+# with the localized Play price. A "Processing…" overlay covers the dialog
+# during a purchase; the result overlay (success / pending / failed) is
+# shown afterward.
+#
+# A full-width "Remove Ads" card used to sit under the grid. The product was
+# delisted (see PurchaseManager.REMOVE_ADS_SKU) once the interstitials it
+# suppressed left the game, so the card and DIALOG_H's room for it are gone.
 
 const DIALOG_W := 920.0
-const DIALOG_H := 660.0
+const DIALOG_H := 550.0
 const CARD_W := 198.0
 const CARD_H := 170.0
 const CARD_GAP_X := 12.0
 const CARD_GAP_Y := 14.0
-const REMOVE_ADS_H := 92.0
 const ART_H := 74.0
 
 # Card tints by tier — value climbs from a calm navy face for the small
@@ -34,7 +34,6 @@ const RIM_NAVY := Color(0.45, 0.55, 1.00, 0.45)
 var _backdrop: ColorRect
 var _dialog: Panel
 var _cards_by_sku: Dictionary = {}        # sku -> {root, btn, btn_col, sku}
-var _remove_card: Dictionary = {}         # remove-ads card pieces
 var _status_label: Label
 var _processing_overlay: Control
 # Result overlay covers the dialog with a success / pending / failure card
@@ -55,7 +54,6 @@ func _ready() -> void:
 	PurchaseManager.purchase_succeeded.connect(_on_purchase_succeeded)
 	PurchaseManager.purchase_failed.connect(_on_purchase_failed)
 	PurchaseManager.purchase_pending.connect(_on_purchase_pending)
-	CoinsManager.remove_ads_changed.connect(_refresh_remove_ads_card)
 
 	# Lazy-init the Play Billing connection on first popup open. WHY: doing it
 	# in PurchaseManager._ready races with Firebase auth's Activity-callback
@@ -63,7 +61,6 @@ func _ready() -> void:
 	PurchaseManager.ensure_initialised()
 
 	_refresh_cards()
-	_refresh_remove_ads_card()
 
 	# Pop-in entrance, same beat as the daily-claim popup.
 	_dialog.pivot_offset = _dialog.size * 0.5
@@ -135,13 +132,6 @@ func _build() -> void:
 			grid_y + row * (CARD_H + CARD_GAP_Y))
 		_dialog.add_child(card["root"])
 		_cards_by_sku[String(p["sku"])] = card
-
-	# Remove-ads card spans the grid width, sits under the second row.
-	var rax := grid_x
-	var ray := grid_y + 2.0 * CARD_H + CARD_GAP_Y + 18.0
-	_remove_card = _make_remove_ads_card(Vector2(grid_w, REMOVE_ADS_H))
-	_remove_card["root"].position = Vector2(rax, ray)
-	_dialog.add_child(_remove_card["root"])
 
 	# Inline status text (transient).
 	_status_label = Label.new()
@@ -269,10 +259,6 @@ func _make_pack_card(pack: Dictionary) -> Dictionary:
 func _draw_pack_art(art: Control, coins: int) -> void:
 	PackIcons.draw_pack_art(art, art.size, coins)
 
-# Draw callback for the no-ads emblem on the Remove Ads card.
-func _draw_no_ads_art(icon: Control) -> void:
-	PackIcons.draw_no_ads(icon, icon.size)
-
 func _style_buy_button(btn: Button, bg_col: Color, enabled: bool) -> void:
 	var bg: Color = bg_col if enabled else Color(0.30, 0.30, 0.40)
 	var fg: Color = Color(0.04, 0.04, 0.12) if enabled and bg.v > 0.55 else Color(1, 1, 1, 0.95)
@@ -294,118 +280,6 @@ func _style_buy_button(btn: Button, bg_col: Color, enabled: bool) -> void:
 	btn.add_theme_color_override("font_color", fg)
 	btn.add_theme_color_override("font_disabled_color", fg)
 	btn.disabled = not enabled
-
-# ---------------- remove-ads card ----------------
-
-# Full-width "Remove Ads" entry: no-ads icon on the left, copy in the
-# middle, buy button on the right. When already owned, the button is
-# replaced with a green "OWNED" badge.
-func _make_remove_ads_card(size: Vector2) -> Dictionary:
-	var root := Panel.new()
-	root.size = size
-	root.mouse_filter = Control.MOUSE_FILTER_STOP
-	var cs := StyleBoxFlat.new()
-	cs.bg_color = Color(0.09, 0.07, 0.20, 0.96)
-	cs.set_corner_radius_all(18)
-	cs.border_color = Color(1.0, 0.40, 0.30, 0.65)
-	cs.set_border_width_all(2)
-	cs.shadow_color = Color(1.0, 0.40, 0.30, 0.25)
-	cs.shadow_size = 14
-	root.add_theme_stylebox_override("panel", cs)
-
-	# No-ads emblem — drawn procedurally onto a transparent Control to match
-	# the rest of the popup artwork (no PNG dependency).
-	var icon_d := size.y - 16.0
-	var icon := Control.new()
-	icon.position = Vector2(14, 8)
-	icon.size = Vector2(icon_d, icon_d)
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	icon.draw.connect(_draw_no_ads_art.bind(icon))
-	root.add_child(icon)
-
-	var title := Label.new()
-	title.text = "REMOVE ADS"
-	title.add_theme_font_size_override("font_size", 20)
-	title.add_theme_color_override("font_color", Color(1.0, 0.94, 0.55))
-	title.add_theme_color_override("font_shadow_color", Color(0.70, 0.40, 0.0, 0.55))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 2)
-	title.add_theme_constant_override("shadow_outline_size", 6)
-	title.position = Vector2(icon_d + 22, 6)
-	title.size = Vector2(size.x - icon_d - 240, 26)
-	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(title)
-
-	var sub := Label.new()
-	sub.text = "One-time purchase — enjoy uninterrupted, ad-free play forever."
-	sub.add_theme_font_size_override("font_size", 12)
-	sub.add_theme_color_override("font_color", Color(0.82, 0.86, 1.0, 0.82))
-	sub.position = Vector2(icon_d + 22, 36)
-	sub.size = Vector2(size.x - icon_d - 240, 28)
-	sub.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(sub)
-
-	var btn := Button.new()
-	var bw := 200.0
-	var bh := 42.0
-	btn.size = Vector2(bw, bh)
-	btn.position = Vector2(size.x - bw - 16, (size.y - bh) * 0.5)
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.focus_mode = Control.FOCUS_NONE
-	_style_buy_button(btn, Color(1.0, 0.46, 0.30), true)
-	btn.pressed.connect(func() -> void: _on_buy(PurchaseManager.REMOVE_ADS_SKU))
-	root.add_child(btn)
-
-	# "OWNED" badge — shown in place of the buy button when the entitlement
-	# is already on the wallet. Stays hidden by default; toggled by _refresh.
-	var owned := Panel.new()
-	owned.size = Vector2(bw, bh)
-	owned.position = btn.position
-	owned.visible = false
-	owned.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var os := StyleBoxFlat.new()
-	os.bg_color = Color(0.10, 0.42, 0.20, 0.95)
-	os.border_color = Color(0.40, 0.92, 0.55, 0.85)
-	os.set_border_width_all(2)
-	os.set_corner_radius_all(13)
-	owned.add_theme_stylebox_override("panel", os)
-	var ol := Label.new()
-	ol.text = "✓  OWNED"
-	ol.add_theme_font_size_override("font_size", 18)
-	ol.add_theme_color_override("font_color", Color(0.85, 1.0, 0.90))
-	ol.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ol.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	ol.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	ol.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	owned.add_child(ol)
-	root.add_child(owned)
-
-	return {"root": root, "btn": btn, "owned": owned}
-
-func _refresh_remove_ads_card() -> void:
-	if _remove_card.is_empty():
-		return
-	var owned := CoinsManager.has_remove_ads
-	var btn: Button = _remove_card["btn"]
-	var owned_badge: Panel = _remove_card["owned"]
-	btn.visible = not owned
-	owned_badge.visible = owned
-	if owned:
-		return
-	var available := PurchaseManager.is_available()
-	var price := PurchaseManager.price_for(PurchaseManager.REMOVE_ADS_SKU)
-	if not available:
-		btn.text = "AVAILABLE ON DEVICE"
-		_style_buy_button(btn, Color(1.0, 0.46, 0.30), false)
-	elif price.is_empty():
-		btn.text = "LOADING…"
-		_style_buy_button(btn, Color(1.0, 0.46, 0.30), false)
-	else:
-		btn.text = "BUY  %s" % price
-		_style_buy_button(btn, Color(1.0, 0.46, 0.30), true)
 
 # ---------------- comma + processing overlay ----------------
 
@@ -476,7 +350,6 @@ func _refresh_cards() -> void:
 		else:
 			btn.text = "BUY  %s" % price
 			_style_buy_button(btn, btn_col, true)
-	_refresh_remove_ads_card()
 
 func _on_products_loaded() -> void:
 	_refresh_cards()
@@ -490,15 +363,6 @@ func _on_purchase_started(_sku: String) -> void:
 
 func _on_purchase_succeeded(sku: String, coins: int) -> void:
 	_processing_overlay.visible = false
-	# Remove-ads is a separate flow — no coin amount to celebrate, instead
-	# show the entitlement-granted message and let the OK button close.
-	if sku == PurchaseManager.REMOVE_ADS_SKU:
-		_refresh_remove_ads_card()
-		_show_result(
-			"success",
-			"Ads Removed!",
-			"Thanks for your support.\nYou won't see post-game ads again.")
-		return
 	# Brief card pop so the eye tracks where the credit landed before the
 	# success overlay covers the dialog.
 	var c: Variant = _cards_by_sku.get(sku, null)
