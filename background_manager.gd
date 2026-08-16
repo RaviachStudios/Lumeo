@@ -88,23 +88,32 @@ void fragment() {
 	// fire rises from the bottom — sample warped noise scrolling upward so the
 	// flames are smooth, licking tongues rather than a noisy blocky field.
 	vec2 q = vec2(uv.x * aspect * 1.8, (1.0 - uv.y) * 2.4);
-	vec2 warp = vec2(fbm(q * 1.3 + vec2(0.0, TIME * 0.50)),
-					 fbm(q * 1.3 + vec2(3.1, TIME * 0.40)));
-	float n = fbm(q + warp * 1.5 + vec2(0.0, TIME * 0.60));
 	float heat = pow(clamp(1.0 - uv.y, 0.0, 1.0), 1.3);
-	float flame = clamp(n * heat * 1.7 - 0.18, 0.0, 1.0);
-	// color ladder: deep purple base -> magenta -> red -> orange -> yellow core
-	vec3 c1 = vec3(0.12, 0.02, 0.20);
-	vec3 c2 = vec3(0.62, 0.09, 0.36);
-	vec3 c3 = vec3(0.96, 0.24, 0.10);
-	vec3 c4 = vec3(1.00, 0.62, 0.12);
-	vec3 c5 = vec3(1.00, 0.94, 0.62);
-	vec3 fc = c1;
-	fc = mix(fc, c2, smoothstep(0.04, 0.32, flame));
-	fc = mix(fc, c3, smoothstep(0.26, 0.56, flame));
-	fc = mix(fc, c4, smoothstep(0.52, 0.80, flame));
-	fc = mix(fc, c5, smoothstep(0.80, 0.97, flame));
-	col = mix(col, fc, smoothstep(0.0, 0.26, flame));
+	// The flame term is clamped at 0 below its 0.18 floor, and fbm() cannot exceed
+	// 0.9375 (four octaves at 0.5/0.25/0.125/0.0625), so once heat drops far enough
+	// (uv.y past ~0.813, i.e. the bottom ~19% of the screen, furthest from the fire)
+	// the flame is provably zero and its whole colour ladder is a no-op. Skipping
+	// that band takes THREE of this shader's four fbm calls — the two domain-warp
+	// samples and the flame sample, ~36 gradient-noise evaluations — off those
+	// pixels. Output is bit-identical; the embers there still need `q`.
+	if (heat * 1.7 * 0.9375 > 0.18) {
+		vec2 warp = vec2(fbm(q * 1.3 + vec2(0.0, TIME * 0.50)),
+						 fbm(q * 1.3 + vec2(3.1, TIME * 0.40)));
+		float n = fbm(q + warp * 1.5 + vec2(0.0, TIME * 0.60));
+		float flame = clamp(n * heat * 1.7 - 0.18, 0.0, 1.0);
+		// color ladder: deep purple base -> magenta -> red -> orange -> yellow core
+		vec3 c1 = vec3(0.12, 0.02, 0.20);
+		vec3 c2 = vec3(0.62, 0.09, 0.36);
+		vec3 c3 = vec3(0.96, 0.24, 0.10);
+		vec3 c4 = vec3(1.00, 0.62, 0.12);
+		vec3 c5 = vec3(1.00, 0.94, 0.62);
+		vec3 fc = c1;
+		fc = mix(fc, c2, smoothstep(0.04, 0.32, flame));
+		fc = mix(fc, c3, smoothstep(0.26, 0.56, flame));
+		fc = mix(fc, c4, smoothstep(0.52, 0.80, flame));
+		fc = mix(fc, c5, smoothstep(0.80, 0.97, flame));
+		col = mix(col, fc, smoothstep(0.0, 0.26, flame));
+	}
 	// glowing embers — small high-frequency hot spots, biased to the bottom half
 	float emb = fbm(q * 3.0 + vec2(0.0, TIME * 1.10));
 	col += vec3(1.0, 0.60, 0.20) * smoothstep(0.82, 0.98, emb) * heat * 0.70;
@@ -2686,6 +2695,25 @@ vec4 drawWing(vec4 acc, vec2 p, float ws, float far, float t) {
 	}
 	return acc;
 }
+// ---- Per-part early-out for the dragon. The body is ~10 separate props spread
+// across a box that covers ~30% of the screen, and every pixel in that box used to
+// evaluate ALL of them — while any given pixel is near at most one or two. These
+// two helpers give each prop the same guard+window treatment placeDragon already
+// gives the whole dragon:
+//   nearPart() is the cheap skip test — `lo..hi` grown by a collar, so the pixels
+//     whose 2x2 quad neighbours took the early-out (where fwidth(), and therefore
+//     aafill(), is undefined) sit where the window below is already exactly 0;
+//   partWin() is the derivative-free window every alpha in the block is multiplied
+//     by. It is 1 across everything the prop can actually draw and ramps to 0 in
+//     dead space, so the output is unchanged — this is purely work avoidance.
+// `lo`/`hi` are each prop's content bounds padded by 0.10 (about 13px on a 720p
+// screen); widen them, never narrow them, if a prop is ever reshaped.
+bool nearPart(vec2 p, vec2 lo, vec2 hi) {
+	return all(greaterThan(p, lo - vec2(0.10))) && all(lessThan(p, hi + vec2(0.10)));
+}
+float partWin(vec2 p, vec2 lo, vec2 hi) {
+	return win1(p.x, lo.x, hi.x, 0.06) * win1(p.y, lo.y, hi.y, 0.06);
+}
 // ---- The impressive FIRE-DRAGON, side profile, facing +x. flap in [-1,1] beats
 // the wings; fire>0 breathes a layered plume; t drives shimmer/flicker. p=(a-pos)/s. ----
 vec4 dragonBody(vec2 p, float flap, float fire, float t) {
@@ -2694,35 +2722,41 @@ vec4 dragonBody(vec2 p, float flap, float fire, float t) {
 	// far wing (behind the body)
 	acc = drawWing(acc, p - vec2(0.05, 0.06), ws * 0.72 - 0.22, 1.0, t);
 	// tail: tapering chain of scaled segments, undulating with a travelling wave
-	for (int i = 0; i < 7; i++) { float fi = float(i); float tt = fi / 6.0;
-		float wv = sin(t * 3.5 - tt * 5.0);
-		vec2 tp = vec2(-0.50 - tt * 1.25 + 0.03 * tt * wv, 0.02 + tt * 0.12 + 0.13 * tt * tt * wv);
-		float tw = 0.17 * (1.0 - tt) + 0.02;
-		acc = _ov(acc, mix(vec3(0.30, 0.10, 0.10), vec3(0.13, 0.05, 0.07), tt), aafill(sdCircle(p - tp, tw)));
+	if (nearPart(p, vec2(-1.90, -0.23), vec2(-0.21, 0.39))) {
+		float w = partWin(p, vec2(-1.90, -0.23), vec2(-0.21, 0.39));
+		for (int i = 0; i < 7; i++) { float fi = float(i); float tt = fi / 6.0;
+			float wv = sin(t * 3.5 - tt * 5.0);
+			vec2 tp = vec2(-0.50 - tt * 1.25 + 0.03 * tt * wv, 0.02 + tt * 0.12 + 0.13 * tt * tt * wv);
+			float tw = 0.17 * (1.0 - tt) + 0.02;
+			acc = _ov(acc, mix(vec3(0.30, 0.10, 0.10), vec3(0.13, 0.05, 0.07), tt), aafill(sdCircle(p - tp, tw)) * w);
+		}
 	}
 	// tail fin (twin-lobe arrowhead) swaying at the tip
-	{
+	if (nearPart(p, vec2(-2.17, -0.38), vec2(-1.33, 0.66))) {
+		float w = partWin(p, vec2(-2.17, -0.38), vec2(-1.33, 0.66));
 		float wv = sin(t * 3.5 - 5.0);
 		vec2 te = vec2(-1.75 + 0.03 * wv, 0.14 + 0.13 * wv);
 		mat2 R = rot(0.4 * wv);
 		float fin = sdTriangle(p, te + R * vec2(0.26, -0.02), te + R * vec2(-0.18, -0.22), te + R * vec2(-0.04, 0.0));
 		fin = min(fin, sdTriangle(p, te + R * vec2(0.26, -0.02), te + R * vec2(-0.18, 0.22), te + R * vec2(-0.04, 0.0)));
-		acc = _ov(acc, vec3(0.50, 0.16, 0.11), aafill(fin));
-		acc = _ov(acc, vec3(0.72, 0.24, 0.14), aaline(fin, 0.007) * 0.5);
-		acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(sdCircle(p - te, 0.05)));
+		acc = _ov(acc, vec3(0.50, 0.16, 0.11), aafill(fin) * w);
+		acc = _ov(acc, vec3(0.72, 0.24, 0.14), aaline(fin, 0.007) * 0.5 * w);
+		acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(sdCircle(p - te, 0.05)) * w);
 	}
 	// hind leg (behind the body) + talons
-	{
+	if (nearPart(p, vec2(-0.57, -0.15), vec2(0.25, 0.73))) {
+		float w = partWin(p, vec2(-0.57, -0.15), vec2(0.25, 0.73));
 		float lw = sin(t * 2.4 + 1.2);
 		vec2 knee = vec2(-0.20 + 0.03 * lw, 0.34); vec2 foot = vec2(-0.06 + 0.07 * lw, 0.52 + 0.03 * lw);
-		acc = _ov(acc, vec3(0.30, 0.11, 0.10), aafill(ellip(p, vec2(-0.26, 0.16), vec2(0.21, 0.17), 0.4)));   // thigh
-		acc = _ov(acc, vec3(0.17, 0.06, 0.08), smoothstep(0.075, 0.04, sdSeg(p, knee, foot)));                // shin
+		acc = _ov(acc, vec3(0.30, 0.11, 0.10), aafill(ellip(p, vec2(-0.26, 0.16), vec2(0.21, 0.17), 0.4)) * w);   // thigh
+		acc = _ov(acc, vec3(0.17, 0.06, 0.08), smoothstep(0.075, 0.04, sdSeg(p, knee, foot)) * w);                // shin
 		for (int i = 0; i < 3; i++) { float fi = float(i);
-			acc = _ov(acc, vec3(0.90, 0.85, 0.75), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.02 + fi * 0.05)), 0.08, 0.017)));
+			acc = _ov(acc, vec3(0.90, 0.85, 0.75), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.02 + fi * 0.05)), 0.08, 0.017)) * w);
 		}
 	}
 	// body: scaled hide with a cool moonlit back, warm underbelly + glowing lava cracks
-	{
+	if (nearPart(p, vec2(-0.80, -0.48), vec2(0.80, 0.52))) {
+		float w = partWin(p, vec2(-0.80, -0.48), vec2(0.80, 0.52));
 		float bd = ellip(p, vec2(0.0, 0.02), vec2(0.66, 0.36), -0.08);
 		float ba = aafill(bd);
 		float ly = clamp((p.y + 0.34) / 0.72, 0.0, 1.0);
@@ -2736,93 +2770,102 @@ vec4 dragonBody(vec2 p, float flap, float fire, float t) {
 		float crack = smoothstep(0.44, 0.5, scl) * smoothstep(0.55, 0.78, fbm(p * 3.0 + 3.0));
 		bc += vec3(1.0, 0.42, 0.10) * crack * (0.35 + 0.65 * ly);                             // molten cracks
 		bc *= 0.8 + 0.2 * smoothstep(-0.7, 0.7, p.x);                                         // AO to the rear
-		acc = _ov(acc, bc, ba);
-		acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(bd, 0.016) * smoothstep(0.3, -0.6, p.y) * ba * 0.6);   // moonlit rim
-		acc = _ov(acc, vec3(0.95, 0.42, 0.14), aaline(bd, 0.020) * smoothstep(-0.1, 0.6, p.y) * ba * 0.5);   // warm under-rim
+		acc = _ov(acc, bc, ba * w);
+		acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(bd, 0.016) * smoothstep(0.3, -0.6, p.y) * ba * 0.6 * w);   // moonlit rim
+		acc = _ov(acc, vec3(0.95, 0.42, 0.14), aaline(bd, 0.020) * smoothstep(-0.1, 0.6, p.y) * ba * 0.5 * w);   // warm under-rim
 	}
 	// spinal sail: graduated spikes with a warm translucent membrane between them
-	for (int i = 0; i < 8; i++) { float fi = float(i); float u = fi / 7.0;
-		vec2 b1 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), u); b1.y -= 0.12 * sin(u * 3.14159);
-		float h1 = 0.30 * sin(u * 3.14159) + 0.05;
-		acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(wedge(vec2(-(p.y - b1.y), p.x - b1.x), h1, 0.042)));
-		if (i < 7) {
-			float un = (fi + 1.0) / 7.0;
-			vec2 b2 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), un); b2.y -= 0.12 * sin(un * 3.14159);
-			float h2 = 0.30 * sin(un * 3.14159) + 0.05;
-			float sail = sdTriangle(p, b1, b1 + vec2(0.0, -h1), b2);
-			sail = min(sail, sdTriangle(p, b1 + vec2(0.0, -h1), b2 + vec2(0.0, -h2), b2));
-			acc = _ov(acc, vec3(0.48, 0.15, 0.10), aafill(sail) * 0.72);
+	if (nearPart(p, vec2(-1.29, -0.87), vec2(0.66, 0.20))) {
+		float w = partWin(p, vec2(-1.29, -0.87), vec2(0.66, 0.20));
+		for (int i = 0; i < 8; i++) { float fi = float(i); float u = fi / 7.0;
+			vec2 b1 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), u); b1.y -= 0.12 * sin(u * 3.14159);
+			float h1 = 0.30 * sin(u * 3.14159) + 0.05;
+			acc = _ov(acc, vec3(0.13, 0.05, 0.07), aafill(wedge(vec2(-(p.y - b1.y), p.x - b1.x), h1, 0.042)) * w);
+			if (i < 7) {
+				float un = (fi + 1.0) / 7.0;
+				vec2 b2 = mix(vec2(0.52, -0.30), vec2(-1.15, 0.10), un); b2.y -= 0.12 * sin(un * 3.14159);
+				float h2 = 0.30 * sin(un * 3.14159) + 0.05;
+				float sail = sdTriangle(p, b1, b1 + vec2(0.0, -h1), b2);
+				sail = min(sail, sdTriangle(p, b1 + vec2(0.0, -h1), b2 + vec2(0.0, -h2), b2));
+				acc = _ov(acc, vec3(0.48, 0.15, 0.10), aafill(sail) * 0.72 * w);
+			}
 		}
 	}
 	// foreleg (in front of the body) + talons
-	{
+	if (nearPart(p, vec2(0.05, -0.07), vec2(0.73, 0.75))) {
+		float w = partWin(p, vec2(0.05, -0.07), vec2(0.73, 0.75));
 		float lw = sin(t * 2.4 - 1.4);
 		vec2 knee = vec2(0.34 + 0.025 * lw, 0.34); vec2 foot = vec2(0.44 + 0.06 * lw, 0.50 + 0.03 * lw);
-		acc = _ov(acc, vec3(0.32, 0.11, 0.10), aafill(ellip(p, vec2(0.30, 0.18), vec2(0.15, 0.15), 0.2)));    // upper leg
-		acc = _ov(acc, vec3(0.19, 0.07, 0.09), smoothstep(0.07, 0.038, sdSeg(p, knee, foot)));                // shin
+		acc = _ov(acc, vec3(0.32, 0.11, 0.10), aafill(ellip(p, vec2(0.30, 0.18), vec2(0.15, 0.15), 0.2)) * w);    // upper leg
+		acc = _ov(acc, vec3(0.19, 0.07, 0.09), smoothstep(0.07, 0.038, sdSeg(p, knee, foot)) * w);                // shin
 		for (int i = 0; i < 3; i++) { float fi = float(i);
-			acc = _ov(acc, vec3(0.92, 0.87, 0.76), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.01 + fi * 0.05)), 0.075, 0.016)));
+			acc = _ov(acc, vec3(0.92, 0.87, 0.76), aafill(wedge(vec2(p.y - foot.y, p.x - (foot.x + 0.01 + fi * 0.05)), 0.075, 0.016)) * w);
 		}
 	}
 	// neck: overlapping scaled segments arching up to the head, with a moonlit rim
-	for (int i = 0; i < 5; i++) { float fi = float(i); float nt = fi / 4.0;
-		vec2 np = mix(vec2(0.44, -0.04), vec2(0.96, -0.44), nt) + vec2(0.0, -0.07 * sin(nt * 3.14159));
-		float nr = 0.22 - 0.08 * nt;
-		float nd = sdCircle(p - np, nr);
-		float na = aafill(nd);
-		float lyn = clamp((p.y - (np.y - nr)) / (2.0 * nr), 0.0, 1.0);
-		vec3 ncol = mix(vec3(0.18, 0.08, 0.10), vec3(0.50, 0.16, 0.10), smoothstep(0.0, 0.6, lyn));
-		ncol = mix(ncol, vec3(0.62, 0.22, 0.11), smoothstep(0.6, 1.0, lyn));
-		acc = _ov(acc, ncol, na);
-		acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(nd, 0.012) * smoothstep(0.2, -0.5, p.y - np.y) * na * 0.5);
+	if (nearPart(p, vec2(0.11, -0.78), vec2(1.21, 0.29))) {
+		float w = partWin(p, vec2(0.11, -0.78), vec2(1.21, 0.29));
+		for (int i = 0; i < 5; i++) { float fi = float(i); float nt = fi / 4.0;
+			vec2 np = mix(vec2(0.44, -0.04), vec2(0.96, -0.44), nt) + vec2(0.0, -0.07 * sin(nt * 3.14159));
+			float nr = 0.22 - 0.08 * nt;
+			float nd = sdCircle(p - np, nr);
+			float na = aafill(nd);
+			float lyn = clamp((p.y - (np.y - nr)) / (2.0 * nr), 0.0, 1.0);
+			vec3 ncol = mix(vec3(0.18, 0.08, 0.10), vec3(0.50, 0.16, 0.10), smoothstep(0.0, 0.6, lyn));
+			ncol = mix(ncol, vec3(0.62, 0.22, 0.11), smoothstep(0.6, 1.0, lyn));
+			acc = _ov(acc, ncol, na * w);
+			acc = _ov(acc, vec3(0.55, 0.62, 0.82), aaline(nd, 0.012) * smoothstep(0.2, -0.5, p.y - np.y) * na * 0.5 * w);
+		}
 	}
 	// head: skull, snout, jaw, teeth, glowing slit eye, horns, cheek spikes, ear frill
-	{
+	if (nearPart(p, vec2(0.48, -0.87), vec2(1.51, -0.14))) {
+		float w = partWin(p, vec2(0.48, -0.87), vec2(1.51, -0.14));
 		vec2 hp = vec2(1.02, -0.46);
-		acc = _ov(acc, vec3(0.42, 0.14, 0.12), aafill(sdTriangle(p, hp + vec2(-0.10, -0.06), hp + vec2(-0.36, -0.14), hp + vec2(-0.18, 0.16))) * 0.85);   // ear frill
+		acc = _ov(acc, vec3(0.42, 0.14, 0.12), aafill(sdTriangle(p, hp + vec2(-0.10, -0.06), hp + vec2(-0.36, -0.14), hp + vec2(-0.18, 0.16))) * 0.85 * w);   // ear frill
 		float jaw = wedge(vec2(p.x - hp.x + 0.02, p.y - (hp.y + 0.13)), 0.36, 0.075);
-		acc = _ov(acc, vec3(0.28, 0.10, 0.09), aafill(jaw));
-		acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(-(p.y - (hp.y + 0.15)), p.x - (hp.x + 0.12)), 0.05, 0.014)));   // lower fang
+		acc = _ov(acc, vec3(0.28, 0.10, 0.09), aafill(jaw) * w);
+		acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(-(p.y - (hp.y + 0.15)), p.x - (hp.x + 0.12)), 0.05, 0.014)) * w);   // lower fang
 		float skull = ellip(p, hp, vec2(0.22, 0.19), -0.15);
 		float ska = aafill(skull);
 		float lyh = clamp((p.y - (hp.y - 0.19)) / 0.38, 0.0, 1.0);
-		acc = _ov(acc, mix(vec3(0.22, 0.10, 0.11), vec3(0.46, 0.15, 0.10), smoothstep(0.0, 0.7, lyh)), ska);
+		acc = _ov(acc, mix(vec3(0.22, 0.10, 0.11), vec3(0.46, 0.15, 0.10), smoothstep(0.0, 0.7, lyh)), ska * w);
 		vec2 sq = p - hp; sq.y -= 0.10 * (sq.x / 0.4) * (sq.x / 0.4);
 		float snout = wedge(vec2(sq.x + 0.05, sq.y + 0.02), 0.44, 0.115);
-		acc = _ov(acc, mix(vec3(0.44, 0.15, 0.10), vec3(0.24, 0.09, 0.09), smoothstep(-0.05, 0.16, sq.y)), aafill(snout));
-		acc = _ov(acc, vec3(0.05, 0.02, 0.03), aafill(ellip(p, hp + vec2(0.37, -0.05), vec2(0.020, 0.030), 0.4)));   // nostril
+		acc = _ov(acc, mix(vec3(0.44, 0.15, 0.10), vec3(0.24, 0.09, 0.09), smoothstep(-0.05, 0.16, sq.y)), aafill(snout) * w);
+		acc = _ov(acc, vec3(0.05, 0.02, 0.03), aafill(ellip(p, hp + vec2(0.37, -0.05), vec2(0.020, 0.030), 0.4)) * w);   // nostril
 		for (int i = 0; i < 4; i++) { float fi = float(i);
-			acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(p.y - (hp.y + 0.06), p.x - (hp.x + 0.06 + fi * 0.09)), 0.05 - 0.006 * fi, 0.013)));   // upper teeth
+			acc = _ov(acc, vec3(0.95, 0.92, 0.85), aafill(wedge(vec2(p.y - (hp.y + 0.06), p.x - (hp.x + 0.06 + fi * 0.09)), 0.05 - 0.006 * fi, 0.013)) * w);   // upper teeth
 		}
-		acc = _ov(acc, vec3(0.16, 0.06, 0.08), aafill(ellip(p, hp + vec2(-0.02, -0.10), vec2(0.16, 0.06), -0.25)));   // brow ridge
+		acc = _ov(acc, vec3(0.16, 0.06, 0.08), aafill(ellip(p, hp + vec2(-0.02, -0.10), vec2(0.16, 0.06), -0.25)) * w);   // brow ridge
 		vec2 ep = hp + vec2(0.03, -0.02);
-		acc.rgb += vec3(1.0, 0.55, 0.10) * smoothstep(0.14, 0.0, length(p - ep)) * 0.55;                              // eye glow
-		acc = _ov(acc, vec3(1.0, 0.74, 0.16), aafill(ellip(p, ep, vec2(0.066, 0.040), -0.2)));                        // iris
-		acc = _ov(acc, vec3(0.06, 0.02, 0.0), aafill(ellip(p, ep, vec2(0.013, 0.036), -0.2)));                        // slit pupil
-		acc = _ov(acc, vec3(1.0, 1.0, 0.9), aafill(sdCircle(p - (ep + vec2(-0.02, -0.012)), 0.008)));                 // catchlight
+		acc.rgb += vec3(1.0, 0.55, 0.10) * smoothstep(0.14, 0.0, length(p - ep)) * 0.55 * w;                              // eye glow
+		acc = _ov(acc, vec3(1.0, 0.74, 0.16), aafill(ellip(p, ep, vec2(0.066, 0.040), -0.2)) * w);                        // iris
+		acc = _ov(acc, vec3(0.06, 0.02, 0.0), aafill(ellip(p, ep, vec2(0.013, 0.036), -0.2)) * w);                        // slit pupil
+		acc = _ov(acc, vec3(1.0, 1.0, 0.9), aafill(sdCircle(p - (ep + vec2(-0.02, -0.012)), 0.008)) * w);                 // catchlight
 		for (int i = 0; i < 5; i++) { float fi = float(i); float u = fi / 4.0;                                        // main horn
 			vec2 hc = hp + vec2(-0.04, -0.14) + vec2(-0.32, -0.14) * u + vec2(0.0, 0.20 * u * u);
 			float hr = 0.078 * (1.0 - 0.75 * u);
-			acc = _ov(acc, mix(vec3(0.86, 0.80, 0.70), vec3(0.48, 0.42, 0.42), u), aafill(sdCircle(p - hc, hr)));
+			acc = _ov(acc, mix(vec3(0.86, 0.80, 0.70), vec3(0.48, 0.42, 0.42), u), aafill(sdCircle(p - hc, hr)) * w);
 		}
 		for (int i = 0; i < 4; i++) { float fi = float(i); float u = fi / 3.0;                                        // secondary horn
 			vec2 hc = hp + vec2(0.04, -0.15) + vec2(-0.20, -0.11) * u;
-			acc = _ov(acc, mix(vec3(0.80, 0.75, 0.66), vec3(0.44, 0.40, 0.40), u), aafill(sdCircle(p - hc, 0.046 * (1.0 - 0.7 * u))));
+			acc = _ov(acc, mix(vec3(0.80, 0.75, 0.66), vec3(0.44, 0.40, 0.40), u), aafill(sdCircle(p - hc, 0.046 * (1.0 - 0.7 * u))) * w);
 		}
-		acc = _ov(acc, vec3(0.80, 0.74, 0.66), aafill(wedge(vec2(-(p.x - (hp.x - 0.12)), p.y - (hp.y + 0.11)), 0.13, 0.028)));   // cheek spike
+		acc = _ov(acc, vec3(0.80, 0.74, 0.66), aafill(wedge(vec2(-(p.x - (hp.x - 0.12)), p.y - (hp.y + 0.11)), 0.13, 0.028)) * w);   // cheek spike
 	}
 	// layered fire breath (drawn before the near wing, so the wing overlaps it)
-	if (fire > 0.01) {
+	if (fire > 0.01 && nearPart(p, vec2(1.19, -0.72), vec2(2.89, 0.04))) {
+		float w = partWin(p, vec2(1.19, -0.72), vec2(2.89, 0.04));
 		vec2 mo = vec2(1.42, -0.34);
-		acc.rgb += vec3(1.0, 0.8, 0.3) * smoothstep(0.13, 0.0, length(p - mo)) * fire;                                // hot root
+		acc.rgb += vec3(1.0, 0.8, 0.3) * smoothstep(0.13, 0.0, length(p - mo)) * fire * w;                            // hot root
 		for (int i = 0; i < 5; i++) { float fi = float(i); float u = fi / 4.0;
 			vec2 fp = mo + vec2(0.14 + u * 0.95, 0.05 * sin(u * 6.0 + t * 8.0));
 			float fr = (0.06 + 0.15 * u) * fire * (0.7 + 0.3 * sin(t * 20.0 + fi));
-			acc = _ov(acc, mix(vec3(1.0, 0.95, 0.6), vec3(1.0, 0.28, 0.05), u), smoothstep(fr, fr * 0.3, length(p - fp)) * fire);
+			acc = _ov(acc, mix(vec3(1.0, 0.95, 0.6), vec3(1.0, 0.28, 0.05), u), smoothstep(fr, fr * 0.3, length(p - fp)) * fire * w);
 		}
 		for (int i = 0; i < 6; i++) { float fi = float(i); float u = fract(t * 1.5 + fi * 0.37);
 			vec2 spk = mo + vec2(0.2 + u * 1.15, (hash11(fi + 1.0) - 0.5) * 0.5 * u);
-			acc.rgb += vec3(1.0, 0.7, 0.2) * smoothstep(0.018, 0.0, length(p - spk)) * fire * (1.0 - u);
+			acc.rgb += vec3(1.0, 0.7, 0.2) * smoothstep(0.018, 0.0, length(p - spk)) * fire * (1.0 - u) * w;
 		}
 	}
 	// near wing (in front)
@@ -3118,15 +3161,28 @@ vec3 nightAnim(vec3 col, vec2 a, vec2 uv, float t) {
 			col += vec3(0.9, 0.42, 0.12) * smoothstep(1.4, 0.0, wd) * 0.12 * fl;                     // candle flicker
 		}
 	}
-	// blinking stars — twinkle over the frozen sky (kept high so mountains don't cross them)
-	for (int i = 0; i < 40; i++) { float fi = float(i);
-		vec2 sp = vec2(hash11(fi * 1.3 + 0.5) * aspect, 0.02 + 0.38 * hash11(fi * 2.1 + 0.2));
-		if (distance(a, sp) > 0.02) continue;
-		if (distance(sp, vec2(0.86 * aspect, 0.20)) < 0.2) continue;                                  // clear of the moon
-		float tw = 0.5 + 0.5 * sin(t * (1.4 + 2.6 * hash11(fi * 3.3)) + fi * 1.7);
-		float br = (0.35 + 0.65 * hash11(fi * 4.7)) * tw;
-		col += vec3(0.95, 0.97, 1.0) * br * smoothstep(0.0035, 0.0, distance(a, sp));
-		col += vec3(0.70, 0.80, 1.0) * br * smoothstep(0.013, 0.0, distance(a, sp)) * 0.16;
+	// blinking stars — twinkle over the frozen sky (kept high so mountains don't cross them).
+	// This 40-iteration loop used to run on EVERY pixel and was the single most
+	// expensive thing in the overlay. Two exact-output early-outs (no antialiased
+	// edges here, so no fwidth to worry about):
+	//   - every star sits at y = 0.02..0.40 (the sky band at the TOP of the screen)
+	//     and its glow dies out 0.013 further, so any pixel past a.y = 0.42 can only
+	//     ever be added zero — skip the loop entirely there (~58% of the screen);
+	//   - inside the band, reject a star on its y alone, BEFORE paying for the x hash
+	//     and the two distances (the y hash is needed either way).
+	if (a.y < 0.42) {
+		for (int i = 0; i < 40; i++) { float fi = float(i);
+			float sy = 0.02 + 0.38 * hash11(fi * 2.1 + 0.2);
+			if (abs(a.y - sy) > 0.02) continue;
+			vec2 sp = vec2(hash11(fi * 1.3 + 0.5) * aspect, sy);
+			float sd = distance(a, sp);
+			if (sd > 0.02) continue;
+			if (distance(sp, vec2(0.86 * aspect, 0.20)) < 0.2) continue;                              // clear of the moon
+			float tw = 0.5 + 0.5 * sin(t * (1.4 + 2.6 * hash11(fi * 3.3)) + fi * 1.7);
+			float br = (0.35 + 0.65 * hash11(fi * 4.7)) * tw;
+			col += vec3(0.95, 0.97, 1.0) * br * smoothstep(0.0035, 0.0, sd);
+			col += vec3(0.70, 0.80, 1.0) * br * smoothstep(0.013, 0.0, sd) * 0.16;
+		}
 	}
 	// small campfires beside the near-hamlet cottages (the furthest homes are too
 	// distant for their own fire to read), then the tower's own great blaze — a
