@@ -189,6 +189,8 @@ const ELEC_SHAKE_DUR := 0.22     # seconds of camera shake
 const ELEC_SHAKE_AMP := 0.012    # world-space jitter (~1-2px on screen); tune if needed
 var _electric: ElectricPulse
 var _electric_active := false
+# Frames of forced redraw left after a lit/press change (see _hold_render).
+var _render_hold := 0
 var _flash_pulse := 0.0
 var _shake_time := 0.0
 
@@ -2146,17 +2148,46 @@ func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, n: V
 func set_lit(idx: int, on: bool) -> void:
 	if idx < 0 or idx >= _emit_tgt.size():
 		return
-	_emit_tgt[idx] = EMIT_ON if on else EMIT_OFF
+	var tgt := EMIT_ON if on else EMIT_OFF
+	if is_equal_approx(_emit_tgt[idx], tgt):
+		return
+	_emit_tgt[idx] = tgt
+	_hold_render()
 
 func set_press(idx: int, amount: float) -> void:
 	if idx < 0 or idx >= _press.size():
 		return
-	_press[idx] = clampf(amount, 0.0, 1.0)
+	var amt := clampf(amount, 0.0, 1.0)
+	if is_equal_approx(_press[idx], amt):
+		return
+	_press[idx] = amt
+	_hold_render()
+
+# Keep the (otherwise idle) viewport drawing for the next few frames after a
+# lit/press change. Without this the redraw was driven ONLY by "the glow lerp is
+# still moving", which stops being true the moment the frame rate drops: _process
+# uses k = dt * GLOW_LERP, so at dt >= 1/GLOW_LERP (~14 fps) the emission reaches
+# its target inside a SINGLE frame, `animating` never goes true, the viewport
+# stays UPDATE_DISABLED — and the flash was applied to the material but never
+# rendered. On the heaviest themes (Inferno's full-screen shader, Dragon's Keep
+# while the dragon is crossing) phones fall under that threshold and the wheel
+# stopped showing any light at all. Holding a couple of frames guarantees the new
+# state reaches the screen no matter how low the frame rate goes.
+const RENDER_HOLD_FRAMES := 2
+
+func _hold_render() -> void:
+	_render_hold = RENDER_HOLD_FRAMES
+	_kick_render()
 
 func _process(dt: float) -> void:
 	# Track whether anything is still moving this frame; when nothing is, the
 	# viewport can stop redrawing (see _update_render_activity below).
 	var animating := false
+	# A just-changed lit/press state must be drawn even if it settles within one
+	# frame (see _hold_render).
+	if _render_hold > 0:
+		_render_hold -= 1
+		animating = true
 	for i in _seg_mats.size():
 		var k := clampf(dt * GLOW_LERP, 0.0, 1.0)
 		_emit_cur[i] = lerp(_emit_cur[i], _emit_tgt[i], k)
