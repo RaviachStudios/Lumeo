@@ -42,10 +42,93 @@ float fbm(vec2 p) {
 }
 "
 
-const _SKYBOUND_SHADER := "
+# ---------------------------------------------------------------------------
+# Baked noise lookup, for the two themes whose whole cost IS their animation.
+#
+# Every other animated theme splits into a heavy STATIC scene (baked to a plate)
+# plus a light moving layer. Inferno and Skybound don't: measured on the gameplay
+# path, Inferno is 1.536 ms of which only 0.004 ms is bakeable, and Skybound is
+# 1.657 ms of which only 0.126 ms is. Their fire and their clouds are four fbm()
+# calls per pixel per frame — ~16 gradient-noise evaluations — and a plate split
+# leaves every one of them in place (it would save 7% and 2%).
+#
+# What makes them different is that TIME only ever TRANSLATES the point fbm is
+# sampled at (the fire scrolls up, the clouds drift sideways). So the noise field
+# itself never changes — only where we read it. That means it can be evaluated
+# once, into a texture, and the per-frame work becomes a texture fetch.
+#
+# The field must tile, or the fetch would seam wherever it wraps. _TILING_NOISE
+# below is the same noise with its lattice wrapped to a period; each fbm octave
+# doubles the frequency, so each octave wraps at twice the previous period and
+# the sum stays periodic over NOISE_PERIOD. Both themes sample well inside one
+# period across a screen, so nothing visibly repeats.
+# ---------------------------------------------------------------------------
+
+# One period of the noise, in noise-space units. Inferno's flame spans ~3.2x2.4
+# of these across the screen and Skybound's clouds ~3.9x2.2, so a period of 8
+# covers a full screen without wrapping.
+const _NOISE_PERIOD := 8.0
+# Lookup resolution. 1024 over a period of 8 is 128 px per noise unit; fbm's
+# finest octave has a lattice spacing of 1/8 of a unit, so the sharpest feature
+# in the field is still 16 px wide in the texture.
+const _NOISE_LUT_PX := 1024
+
+# Periodic twin of _NOISE_GLSL. Used ONLY to bake the lookup — never per frame.
+const _TILING_NOISE_GLSL := "
+vec2 hash2_tile(vec2 p, float period) {
+	p = mod(p, vec2(period));
+	vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
+}
+float gnoise_tile(vec2 p, float period) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+	float a = dot(hash2_tile(i + vec2(0.0, 0.0), period), f - vec2(0.0, 0.0));
+	float b = dot(hash2_tile(i + vec2(1.0, 0.0), period), f - vec2(1.0, 0.0));
+	float c = dot(hash2_tile(i + vec2(0.0, 1.0), period), f - vec2(0.0, 1.0));
+	float d = dot(hash2_tile(i + vec2(1.0, 1.0), period), f - vec2(1.0, 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 0.5 + 0.5;
+}
+float fbm_tile(vec2 p, float period) {
+	float v = 0.0;
+	float a = 0.5;
+	float per = period;
+	for (int i = 0; i < 4; i++) {
+		v += a * gnoise_tile(p, per);
+		p = p * 2.0 + vec2(1.7, 9.2);
+		per *= 2.0;                    // this octave is 2x the frequency, so 2x the period
+		a *= 0.5;
+	}
+	return v;
+}
+"
+
+# Bakes one period of the tiling field across the whole texture, so that at run
+# time texture(noise_tex, p / NOISE_PERIOD) returns fbm(p).
+const _NOISE_LUT_SHADER := "
+shader_type canvas_item;
+uniform float aspect = 1.0;
+const float PERIOD = %.1f;
+" % _NOISE_PERIOD + _TILING_NOISE_GLSL + "
+void fragment() {
+	COLOR = vec4(vec3(fbm_tile(UV * PERIOD, PERIOD)), 1.0);
+}
+"
+
+# Header for the two lookup-driven themes: nfbm() is a drop-in for fbm(), reading
+# the baked field instead of evaluating ~16 gradient noises. repeat_enable is what
+# makes the scrolling seamless.
+const _NOISE_LUT_HEAD := "
 shader_type canvas_item;
 uniform float aspect = 1.78;
-" + _NOISE_GLSL + "
+uniform sampler2D noise_tex : filter_linear, repeat_enable;
+const float NOISE_PERIOD = %.1f;
+float nfbm(vec2 p) { return texture(noise_tex, p / NOISE_PERIOD).r; }
+" % _NOISE_PERIOD
+
+const _SKYBOUND_SHADER := _NOISE_LUT_HEAD + "
 void fragment() {
 	vec2 uv = UV;
 	// rich, smoothly-banded sky gradient
@@ -61,12 +144,12 @@ void fragment() {
 	// domain-warped clouds: warp the sample coords by another fbm so the shapes
 	// are billowy and organic instead of a blocky lattice.
 	vec2 q = vec2(uv.x * aspect, uv.y) * 2.2;
-	vec2 warp = vec2(fbm(q + vec2(TIME * 0.020, 0.0)),
-					 fbm(q + vec2(4.3, 1.7) - vec2(TIME * 0.015, 0.0)));
-	float c1 = fbm(q + warp * 1.4 + vec2(TIME * 0.018, 0.0));
+	vec2 warp = vec2(nfbm(q + vec2(TIME * 0.020, 0.0)),
+					 nfbm(q + vec2(4.3, 1.7) - vec2(TIME * 0.015, 0.0)));
+	float c1 = nfbm(q + warp * 1.4 + vec2(TIME * 0.018, 0.0));
 	float clouds = smoothstep(0.50, 0.92, c1);
 	// soft self-shadowing gives the clouds volume
-	float shade = smoothstep(0.45, 0.85, fbm(q * 1.6 + warp));
+	float shade = smoothstep(0.45, 0.85, nfbm(q * 1.6 + warp));
 	vec3 cloud_col = mix(vec3(0.64, 0.71, 0.84), vec3(1.0, 1.0, 1.0), clouds);
 	cloud_col = mix(cloud_col, cloud_col * 0.82, shade * 0.5);
 	col = mix(col, cloud_col, clouds * 0.95);
@@ -77,10 +160,7 @@ void fragment() {
 }
 "
 
-const _INFERNO_SHADER := "
-shader_type canvas_item;
-uniform float aspect = 1.78;
-" + _NOISE_GLSL + "
+const _INFERNO_SHADER := _NOISE_LUT_HEAD + "
 void fragment() {
 	vec2 uv = UV;
 	// near-black void
@@ -89,17 +169,17 @@ void fragment() {
 	// flames are smooth, licking tongues rather than a noisy blocky field.
 	vec2 q = vec2(uv.x * aspect * 1.8, (1.0 - uv.y) * 2.4);
 	float heat = pow(clamp(1.0 - uv.y, 0.0, 1.0), 1.3);
-	// The flame term is clamped at 0 below its 0.18 floor, and fbm() cannot exceed
+	// The flame term is clamped at 0 below its 0.18 floor, and nfbm() cannot exceed
 	// 0.9375 (four octaves at 0.5/0.25/0.125/0.0625), so once heat drops far enough
 	// (uv.y past ~0.813, i.e. the bottom ~19% of the screen, furthest from the fire)
 	// the flame is provably zero and its whole colour ladder is a no-op. Skipping
-	// that band takes THREE of this shader's four fbm calls — the two domain-warp
-	// samples and the flame sample, ~36 gradient-noise evaluations — off those
-	// pixels. Output is bit-identical; the embers there still need `q`.
+	// that band takes THREE of this shader's four noise reads — the two domain-warp
+	// samples and the flame sample — off those pixels. Output is bit-identical; the
+	// embers there still need `q`.
 	if (heat * 1.7 * 0.9375 > 0.18) {
-		vec2 warp = vec2(fbm(q * 1.3 + vec2(0.0, TIME * 0.50)),
-						 fbm(q * 1.3 + vec2(3.1, TIME * 0.40)));
-		float n = fbm(q + warp * 1.5 + vec2(0.0, TIME * 0.60));
+		vec2 warp = vec2(nfbm(q * 1.3 + vec2(0.0, TIME * 0.50)),
+						 nfbm(q * 1.3 + vec2(3.1, TIME * 0.40)));
+		float n = nfbm(q + warp * 1.5 + vec2(0.0, TIME * 0.60));
 		float flame = clamp(n * heat * 1.7 - 0.18, 0.0, 1.0);
 		// color ladder: deep purple base -> magenta -> red -> orange -> yellow core
 		vec3 c1 = vec3(0.12, 0.02, 0.20);
@@ -115,7 +195,7 @@ void fragment() {
 		col = mix(col, fc, smoothstep(0.0, 0.26, flame));
 	}
 	// glowing embers — small high-frequency hot spots, biased to the bottom half
-	float emb = fbm(q * 3.0 + vec2(0.0, TIME * 1.10));
+	float emb = nfbm(q * 3.0 + vec2(0.0, TIME * 1.10));
 	col += vec3(1.0, 0.60, 0.20) * smoothstep(0.82, 0.98, emb) * heat * 0.70;
 	// a soft top-edge vignette so the fire sits in a darker frame
 	col *= mix(0.50, 1.0, smoothstep(0.0, 0.50, 1.0 - uv.y));
@@ -6890,6 +6970,11 @@ var _bg: ColorRect               # live shader layer (animated themes)
 var _mat: ShaderMaterial
 var _static_rect: TextureRect    # baked still-image layer (fully-static themes)
 var _cache: Dictionary = {}     # theme_id -> Shader
+# The two themes whose shaders read the baked noise field (see _NOISE_LUT_SHADER).
+const _NOISE_LUT_THEMES := {"skybound": true, "inferno": true}
+# The baked field itself, and a guard so two callers can't bake it twice.
+var _noise_lut: ImageTexture
+var _noise_lut_baking := false
 
 # Themes whose shader contains NO TIME term — they render the exact same pixels
 # every frame, so the per-frame procedural recompute is pure waste. These are
@@ -7034,6 +7119,7 @@ func _ready() -> void:
 	CoinsManager.themes_changed.connect(_on_themes_changed)
 	CoinsManager.simon_changed.connect(_on_themes_changed)   # equipping a skin can change the bg
 	get_tree().root.size_changed.connect(_fit_to_viewport)
+	await _ensure_noise_lut()                               # Inferno/Skybound read this field
 	_apply_theme()
 	_prebake_equipped()                                     # warm the cache during the loading screen
 	if DEBUG_FPS:
@@ -7120,6 +7206,7 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 	var mat := ShaderMaterial.new()
 	mat.shader = _get_shader(theme_id)
 	mat.set_shader_parameter("aspect", size.x / maxf(1.0, size.y))
+	_apply_noise_lut(mat, theme_id)
 	rect.material = mat
 	return rect
 
@@ -7192,6 +7279,7 @@ func _compile_preview_shader(theme_id: String) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = _get_shader(theme_id)
 	mat.set_shader_parameter("aspect", 1.0)
+	_apply_noise_lut(mat, theme_id)
 	rect.material = mat
 	vp.add_child(rect)
 	add_child(vp)
@@ -7330,7 +7418,10 @@ func _apply_theme() -> void:
 			_show_live(key)                                # full shader until the plate lands
 			_ensure_plate(key)
 		return
-	# Other animated themes (skybound/inferno/skins): live full-screen shader.
+	# Skybound and Inferno also run a live full-screen shader, but theirs reads the
+	# baked noise field instead of evaluating fbm per pixel (see _NOISE_LUT_SHADER),
+	# which puts them below every plate-backed theme — so there is nothing left worth
+	# splitting out into a plate. Skin backgrounds still run their scene shader.
 	_node_key = ""
 	_node_plate = null
 	_clear_props()
@@ -7345,7 +7436,14 @@ func _show_live(key: Variant) -> void:
 		if _render_mode != "BAKED" and _render_mode != "NODES":
 			_render_mode = "none"
 		return
+	if _NOISE_LUT_THEMES.has(key) and _noise_lut == null:
+		# Its noise field hasn't baked yet — only reachable for a frame or two at
+		# boot. Paint nothing (the screen's own background shows) rather than the
+		# black an unbound sampler would give; _ready re-applies once it lands.
+		_show_live(null)
+		return
 	_mat.shader = _get_shader(key)
+	_apply_noise_lut(_mat, key)
 	_bg.material = _mat
 	_bg.color = Color(1, 1, 1, 1)                           # opaque so shader fills
 	_render_mode = "FULL"
@@ -7421,6 +7519,36 @@ func _render_plate(shader: Shader, size := Vector2.ZERO) -> ImageTexture:
 	var img := vp.get_texture().get_image()
 	vp.queue_free()
 	return ImageTexture.create_from_image(img)
+
+# Bake the tiling noise field once, at boot, before anything can paint with it.
+# One 1024x1024 render replaces four fbm() calls per pixel per frame for as long
+# as Inferno or Skybound is on screen. Kept as R8 (1 MB) — nfbm() reads one channel.
+func _ensure_noise_lut() -> void:
+	if _noise_lut != null:
+		return
+	if _noise_lut_baking:
+		# Someone else started it — wait for that bake rather than running a second.
+		while _noise_lut_baking:
+			await get_tree().process_frame
+		return
+	_noise_lut_baking = true
+	var sh := _compiled("noise_lut", _NOISE_LUT_SHADER)
+	var tex: ImageTexture = await _render_plate(sh, Vector2(_NOISE_LUT_PX, _NOISE_LUT_PX))
+	_noise_lut_baking = false
+	if tex == null:
+		return
+	var img := tex.get_image()
+	img.convert(Image.FORMAT_R8)
+	_noise_lut = ImageTexture.create_from_image(img)
+	# Anything already waiting on the field (a theme applied while it was still
+	# baking took the paint-nothing branch in _show_live) can be shown now.
+	if _NOISE_LUT_THEMES.has(_resolved_bg_key()):
+		_apply_theme()
+
+# Hand the baked field to a material about to draw one of the lookup themes.
+func _apply_noise_lut(mat: ShaderMaterial, key: String) -> void:
+	if _NOISE_LUT_THEMES.has(key) and _noise_lut != null:
+		mat.set_shader_parameter("noise_tex", _noise_lut)
 
 # Bake `key`'s plate into the RAM cache if not already there (dedup via _baking).
 # Safe to call off-gameplay (pre-bake). After it lands, if this theme is the one
