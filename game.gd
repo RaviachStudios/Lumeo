@@ -27,7 +27,11 @@ var flash_time: float
 var flash_gap: float
 var speed_inc: float
 
-var _wheel: SimonWheel
+# The play device. Deliberately untyped: "moderate" plays on the modelled
+# five-button PentagonDevice, easy/hard on the procedural SimonWheel. Both expose
+# the same API (configure / apply_skin / set_lit / set_press / segment_at_point /
+# set_level / the skin flourishes), so everything below drives either one.
+var _wheel
 var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
 # True when this game was launched from inside an Arena contest (GameState holds
@@ -72,9 +76,11 @@ func _ready() -> void:
 	flash_time = GameState.flash_time
 	flash_gap = GameState.flash_gap
 	speed_inc = GameState.speed_increase
-	# 3D Simon wheel (rendered via SubViewport). Added before the HUD so it sits
-	# behind the labels/buttons; it ignores mouse input - taps are handled here.
-	_wheel = SimonWheel.new()
+	# The 3D play device (rendered via SubViewport). Added before the HUD so it
+	# sits behind the labels/buttons; it ignores mouse input - taps are handled
+	# here. Moderate plays on the modelled five-button pentagonal console; easy
+	# and hard keep the procedural 4/6-segment wheel.
+	_wheel = PentagonDevice.new() if GameState.difficulty == "moderate" else SimonWheel.new()
 	add_child(_wheel)
 	_layout_wheel()
 	_wheel.configure(num_buttons, BUTTON_COLORS)
@@ -212,7 +218,7 @@ func _input(event: InputEvent) -> void:
 	if frame == _last_input_frame:
 		return
 	_last_input_frame = frame
-	var btn := _wheel.segment_at_point(tap_pos - _wheel.position)
+	var btn: int = _wheel.segment_at_point(tap_pos - _wheel.position)
 	if btn >= 0:
 		_player_pressed(btn)
 		get_viewport().set_input_as_handled()
