@@ -28,9 +28,10 @@ var flash_gap: float
 var speed_inc: float
 
 # The play device. Deliberately untyped: "moderate" plays on the modelled
-# five-button PentagonDevice, easy/hard on the procedural SimonWheel. Both expose
-# the same API (configure / apply_skin / set_lit / set_press / segment_at_point /
-# set_level / the skin flourishes), so everything below drives either one.
+# five-button MemoryGameUI panel, easy/hard on the procedural SimonWheel. Both
+# expose the same API (configure / apply_skin / set_lit / set_press /
+# segment_at_point / set_level / the skin flourishes), so everything below drives
+# either one.
 var _wheel
 var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
@@ -78,9 +79,18 @@ func _ready() -> void:
 	speed_inc = GameState.speed_increase
 	# The 3D play device (rendered via SubViewport). Added before the HUD so it
 	# sits behind the labels/buttons; it ignores mouse input - taps are handled
-	# here. Moderate plays on the modelled five-button pentagonal console; easy
+	# here. Moderate plays on the modelled five-button memory-game panel; easy
 	# and hard keep the procedural 4/6-segment wheel.
-	_wheel = PentagonDevice.new() if GameState.difficulty == "moderate" else SimonWheel.new()
+	if GameState.difficulty == "moderate":
+		var panel := MemoryGameUI.new()
+		# The panel can hit-test and react to its own taps, but a press is only
+		# legal during the player's turn and never behind the quit dialog. That
+		# policy lives in _input below, so its own handler stays off and there is
+		# no second, ungated path into _player_pressed.
+		panel.input_enabled = false
+		_wheel = panel
+	else:
+		_wheel = SimonWheel.new()
 	add_child(_wheel)
 	_layout_wheel()
 	_wheel.configure(num_buttons, BUTTON_COLORS)
@@ -152,6 +162,17 @@ func _layout_wheel() -> void:
 	if _wheel == null:
 		return
 	var sz := get_viewport_rect().size
+	if GameState.difficulty == "moderate":
+		# The modelled board is a wide tabletop seen in perspective, not a disc, so
+		# it gets the WHOLE viewport instead of a centred square — a square would
+		# waste the sides and shrink the buttons for nothing. It fits its own
+		# framing to whatever rect it is given (MemoryGameUI._fit_camera), and the
+		# open front of the pentagon leaves the bottom centre free for the status
+		# pill.
+		_wheel.size = sz
+		_wheel.position = Vector2.ZERO
+		_layout_countdown(sz)
+		return
 	var s: float = minf(sz.x, sz.y) * 0.92
 	_wheel.size = Vector2(s, s)
 	# Raise the wheel a little now that the coins HUD has moved out of the top
