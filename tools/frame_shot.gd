@@ -72,11 +72,15 @@ func _shop() -> void:
 	for _i in 120:
 		await get_tree().process_frame
 	await _save("user://shop_frames.png")
-	# ...and the second row, which only exists now that there are sixteen cards.
-	(shop.get("_frames_root") as ScrollContainer).scroll_vertical = 342
-	for _i in 30:
-		await get_tree().process_frame
-	await _save("user://shop_frames_row2.png")
+	# ...and the rows below the fold. Sixteen cards is four rows, and every one of
+	# them has to be looked at: the card art is a live 3D preview per frame, so a
+	# frame that failed to load is a black tile and nothing else says so.
+	var scroller := shop.get("_frames_root") as ScrollContainer
+	for row in [1, 2, 3]:
+		scroller.scroll_vertical = 342 * row
+		for _i in 30:
+			await get_tree().process_frame
+		await _save("user://shop_frames_row%d.png" % (row + 1))
 	# The confirm dialog for a free unlock — the price must read 0.
 	shop.call("_on_frame_action", "tiger_glow")
 	for _i in 60:

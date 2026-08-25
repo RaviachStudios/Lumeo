@@ -2,7 +2,7 @@ extends Node
 # Throwaway acceptance check for memory_game_ui.gd (V3 board). Verifies the claims
 # a screenshot cannot: spacing, colour separation, that the five buttons really do
 # lie on one plane, per-button input and animation isolation, a stationary frame,
-# and a stage indicator that is nowhere near the middle and touches nothing.
+# and a level readout that is nowhere near the middle and touches nothing.
 
 const W := 1920
 const H := 1080
@@ -53,7 +53,7 @@ func _ready() -> void:
 	_check_colours()
 	await _check_input()
 	await _check_animation()
-	_check_stage()
+	_check_indicator()
 	_check_composition()
 
 	print("\n==== ", "ALL CHECKS PASSED" if _fails == 0 else "%d CHECK(S) FAILED" % _fails, " ====")
@@ -190,7 +190,7 @@ func _check_input() -> void:
 	_ok(_dev.segment_at_point(_cam.unproject_position(Vector3(0.0, 0.02, 0.0))) == -1,
 		"the empty middle is not a button")
 	_ok(_dev.segment_at_point(_cam.unproject_position(
-		_dev.STAGE_POS)) == -1, "the stage plate is not a button")
+		Vector3(0.0, 0.02, -5.10))) == -1, "the dead board behind the back button is not one either")
 
 	_dev.input_enabled = true
 	var ev := InputEventMouseButton.new()
@@ -254,43 +254,57 @@ func _capture() -> Dictionary:
 		out[n.name] = (n as MeshInstance3D).global_position
 	return out
 
-# 8 + 9. The stage indicator is deliberately placed, outside the middle, and
-#        clear of every button both in the board and on screen.
-func _check_stage() -> void:
-	print("\n-- stage indicator --")
-	var plate := _dev_vp.find_child("StagePlate", true, false) as Node3D
-	var label := _dev_vp.find_child("RoundNumber", true, false) as Label3D
-	_ok(plate != null and label != null, "stage plate + numeral present")
-	if plate == null:
+# 8 + 9. The level readout is separate Godot UI in game.gd's left-hand HUD
+#        gutter, high on the left, outside every button, and nothing is added to
+#        the board itself.
+func _check_indicator() -> void:
+	print("\n-- level tab --")
+	_ok(_dev_vp.find_child("StagePlate", true, false) == null,
+		"nothing was added to the board itself")
+	_ok(_dev_vp.find_child("RoundNumber", true, false) == null,
+		"and no numeral lies on it either")
+	var tab: Control = _dev._tab
+	_ok(tab != null and tab.get_parent() == _dev, "it is a 2D Control over the board")
+	if tab == null:
 		return
-	var pos := plate.position
-	_ok(Vector2(pos.x, pos.z).length() > 3.0, "not in the empty middle",
-		"%.2f from centre" % Vector2(pos.x, pos.z).length())
-	_ok(pos.z < _holder("Cyan").position.z, "sits behind the back button")
-	# Screen-space clearance from every button's silhouette.
-	var hs: Vector2 = _dev.STAGE_SIZE * 0.5
-	var pmin := Vector2(INF, INF)
-	var pmax := Vector2(-INF, -INF)
-	for sx: float in [-1.0, 1.0]:
-		for sz: float in [-1.0, 1.0]:
-			var s := _cam.unproject_position(pos + Vector3(hs.x * sx, 0.0, hs.y * sz))
-			pmin = pmin.min(s)
-			pmax = pmax.max(s)
-	var clear := INF
+	_ok(tab.mouse_filter == Control.MOUSE_FILTER_IGNORE, "it never eats a tap")
+	_ok(tab._num.text == "12", "shows the round it was given", tab._num.text)
+	_dev.set_round_number(148)
+	_ok(tab._num.text == "148", "set_round_number(148)", tab._num.text)
+	_ok(tab._num._size_for("148", tab._face()) < tab._num.base_size,
+		"the numeral shrinks to fit once it is 3 digits",
+		"%d px" % tab._num._size_for("148", tab._face()))
+	_dev.set_round_number(12)
+	_ok(tab._num.text == "12", "and back", tab._num.text)
+	var r := Rect2(tab.position, tab.size)
+	_ok(r.position.x >= 0.0 and r.position.y >= 0.0 and r.end.x <= W and r.end.y <= H,
+		"on screen", str(r))
+	_ok(r.end.x < W * 0.5, "sits in the LEFT-hand column")
+	_ok(r.position.x >= tab.TAB_MARGIN - 0.5 and r.position.x <= tab.TAB_MARGIN_MAX + 0.5,
+		"comfortable spacing from the screen edge", "%.0f px" % r.position.x)
+	# Riding at 75% of the screen height, measured up from the bottom.
+	_ok(absf(r.get_center().y - H * tab.TAB_CENTRE_Y) < 1.0,
+		"centred 75% of the way up the screen",
+		"badge centre %.0f vs %.0f" % [r.get_center().y, H * tab.TAB_CENTRE_Y])
+	_ok(r.position.y >= 88.0 - 0.5, "never up into the watch-ad / Quit row")
+	_ok(r.end.y <= H - 84.0 + 0.5, "clear of the status pill's row",
+		"bottom %.0f vs %.0f" % [r.end.y, H - 84.0])
+	# Clear of every button's silhouette. The plate is what must not overlap; its
+	# bloom is a soft halo over a near-black bezel and is allowed to graze the
+	# outermost rim, which is what keeps the reserved column narrow enough that the
+	# board barely has to move for it.
+	var plate := r.grow(6.0)
+	var overlaps := ""
 	for key: String in ORDER:
 		var c := _holder(key).position
-		for i in 32:
-			var a := TAU * float(i) / 32.0
-			for pt: Vector3 in [c + Vector3(cos(a) * 0.745, 0.525, sin(a) * 0.745),
-					c + Vector3(cos(a), 0.0, sin(a))]:
-				var s := _cam.unproject_position(pt)
-				if s.x > pmin.x and s.x < pmax.x:
-					clear = minf(clear, s.y - pmax.y)
-	_ok(clear > 15.0, "clears every button on screen", "%.0f px of gap" % clear)
-	_ok(label.text == "12", "shows the round it was given", label.text)
-	_dev.set_round_number(148)
-	_ok(label.text == "148", "set_round_number(148)", label.text)
-	_dev.set_round_number(12)
+		for i in 48:
+			var a := TAU * float(i) / 48.0
+			for pt: Vector3 in [c + Vector3(cos(a), 0.0, sin(a)),
+					c + Vector3(cos(a) * 0.745, 0.525, sin(a) * 0.745)]:
+				if plate.has_point(_cam.unproject_position(pt)):
+					overlaps = key
+	_ok(overlaps == "", "clear of every button on screen", "overlaps %s" % overlaps)
+	_ok(_dev.segment_at_point(r.get_center()) == -1, "a tap on it is not a button")
 
 # 10. Nothing cropped, and the board fills the frame.
 func _check_composition() -> void:

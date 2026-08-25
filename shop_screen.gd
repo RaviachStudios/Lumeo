@@ -40,10 +40,17 @@ const CATEGORIES := [
 		# "default" is included so players can revert after equipping a paid
 		# theme; its card is always "owned" and free, so the buy/equip flow
 		# handles it without special casing. Ordered by price, ascending.
+		# The nine "bg_*" ids at the end are the modelled 3D backgrounds
+		# (BackgroundScenes). They are ordinary theme cards in every respect the shop
+		# cares about — the only difference is that their preview comes from a baked
+		# 3D render instead of a live shader, which BackgroundManager.make_preview
+		# resolves on its own.
 		"items": ["default",
 			"midnight", "indigo", "sunset", "crimson", "slate", "skybound",
 			"forest", "desert", "clouds", "speedway", "kitty", "rainbow",
-			"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace"],
+			"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace",
+			"bg_neongrid", "bg_hexfloor", "bg_circuit", "bg_darkmetal",
+			"bg_deepspace", "bg_volcanic", "bg_arcade", "bg_crystal", "bg_aurora"],
 	},
 	# Button-frame cosmetics for the modelled boards. No flat `items` list — its cards
 	# come from ButtonFrames.ORDER and are built specially in _render_category /

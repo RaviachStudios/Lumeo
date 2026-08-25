@@ -6941,9 +6941,16 @@ const _SHADERS := {
 	"castle": _NIGHT_SHADER,
 }
 
-# Whether a theme id is renderable by this manager (animated shader OR gradient).
+# Whether a theme id is renderable by this manager (animated shader OR gradient OR
+# one of the nine modelled 3D backgrounds).
+#
+# The 3D ones are not painted HERE — they are geometry inside the board's own
+# SubViewport (BackgroundScenes / memory_game_ui.gd) — but they must still answer
+# true, because that is what makes is_themed() true, which is what tells the
+# gameplay screen to stop drawing its own gradient over them (game.gd::_draw).
 func _has_theme(theme_id: String) -> bool:
-	return _SHADERS.has(theme_id) or _GRADIENTS.has(theme_id)
+	return _SHADERS.has(theme_id) or _GRADIENTS.has(theme_id) \
+		or BackgroundScenes.has_scene(theme_id)
 
 # Build the GLSL for an elegant static-gradient theme from a _GRADIENTS entry.
 func _gradient_shader(def: Dictionary) -> String:
@@ -7202,6 +7209,15 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 		# distinct from "empty slot".
 		rect.color = Color(0.10, 0.14, 0.28)
 		return rect
+	if BackgroundScenes.has_scene(theme_id):
+		# A modelled background has no shader to run on a rect — its preview is one
+		# baked frame of the real 3D scene, rendered through the real gameplay camera
+		# (see _show_scene_still). Same static-thumbnail treatment the SPECIAL SKINS
+		# cards already use, and for the same reason: a grid of live 3D scenes is not
+		# something a shop should be paying for.
+		rect.color = BackgroundScenes.BACKDROP_COLOR.linear_to_srgb()
+		_show_scene_still(rect, theme_id, size)
+		return rect
 	rect.color = Color(1, 1, 1, 1)
 	var mat := ShaderMaterial.new()
 	mat.shader = _get_shader(theme_id)
@@ -7209,6 +7225,51 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 	_apply_noise_lut(mat, theme_id)
 	rect.material = mat
 	return rect
+
+# Bake one frame of a modelled 3D background at `size` and blit it onto `rect`.
+# Cached per (id,size) in the same dictionary the skin thumbnails use, so scrolling
+# the THEMES grid back and forth re-uses the still instead of re-rendering a 3D
+# scene per card.
+func _show_scene_still(rect: ColorRect, theme_id: String, size: Vector2) -> void:
+	var ck := "scenepv:" + theme_id + "@" + str(int(size.x)) + "x" + str(int(size.y))
+	var tex: ImageTexture = _skin_preview_cache.get(ck, null)
+	if tex == null:
+		tex = await _render_scene_plate(theme_id, size)
+		if tex == null:
+			return
+		_skin_preview_cache[ck] = tex
+	if not is_instance_valid(rect):
+		return
+	rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = _compiled("blit", _BLIT_SHADER)
+	mat.set_shader_parameter("plate_tex", tex)
+	rect.material = mat
+
+# Render a modelled background on its own, with no board in front of it, into a
+# card-sized still. The camera is the Hard board's — the pose these scenes were
+# composed against in Blender — so a card shows the same framing the player gets.
+func _render_scene_plate(theme_id: String, size: Vector2) -> ImageTexture:
+	var scene := BackgroundScenes.build(theme_id)
+	if scene == null:
+		return null
+	var px := Vector2i(maxi(2, int(size.x)), maxi(2, int(size.y)))
+	var vp := SubViewport.new()
+	vp.size = px
+	vp.transparent_bg = false
+	vp.own_world_3d = true
+	vp.msaa_3d = Viewport.MSAA_DISABLED
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	vp.add_child(BackgroundScenes.make_preview_environment())
+	vp.add_child(BackgroundScenes.make_preview_camera(float(px.x) / maxf(1.0, float(px.y))))
+	vp.add_child(scene)
+	add_child(vp)
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	vp.queue_free()
+	return ImageTexture.create_from_image(img)
 
 # True while the preview-shader prewarm queue is still draining, so the shop's loading
 # screen can hold until every THEMES preview shader has compiled (no first-scroll hitch).
@@ -7232,6 +7293,10 @@ func prewarm_previews(theme_ids: Array) -> void:
 	for t in theme_ids:
 		var tid := String(t)
 		if tid == CoinsManager.DEFAULT_THEME or not _has_theme(tid):
+			continue
+		# Modelled backgrounds have no full-screen shader to pre-compile; their card
+		# is a baked still that make_preview renders on demand.
+		if BackgroundScenes.has_scene(tid):
 			continue
 		if _prewarmed_previews.has(tid) or _prewarm_queue.has(tid):
 			continue
@@ -7383,6 +7448,21 @@ func _on_themes_changed() -> void:
 
 func _apply_theme() -> void:
 	var key := _resolved_bg_key()
+	# A modelled 3D background draws itself, in the board's viewport, in front of
+	# this layer. All this layer owes it is the colour of its own far distance, so
+	# that the one frame before the viewport's first draw is that colour rather than
+	# black, and so that nothing shows through if the board's silhouette ever fails
+	# to cover a corner. No shader, no plate, no per-frame cost.
+	if BackgroundScenes.has_scene(key):
+		_node_key = ""
+		_node_plate = null
+		_clear_props()
+		_static_rect.visible = false
+		_bg.material = null
+		_bg.color = BackgroundScenes.BACKDROP_COLOR.linear_to_srgb()
+		_render_mode = "SCENE3D"
+		_fit_to_viewport()
+		return
 	if key.is_empty():
 		_node_key = ""
 		_node_plate = null

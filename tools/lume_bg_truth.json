@@ -1,0 +1,2851 @@
+{
+ "materials": {
+  "BG_ArcadeRoom_M_Cabinet": {
+   "albedo": [
+    0.0105,
+    0.0098,
+    0.0165
+   ],
+   "metallic": 0.35,
+   "roughness": 0.36,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_ArcadeRoom_M_CabinetTrim": {
+   "albedo": [
+    0.018,
+    0.017,
+    0.026
+   ],
+   "metallic": 0.75,
+   "roughness": 0.28,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_ArcadeRoom_M_Floor": {
+   "albedo": [
+    0.0062,
+    0.0058,
+    0.011
+   ],
+   "metallic": 0.3,
+   "roughness": 0.155,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_ArcadeRoom_M_Marquee": {
+   "albedo": [
+    0.006,
+    0.006,
+    0.012
+   ],
+   "metallic": 0.0,
+   "roughness": 0.3,
+   "emission_strength": 1.8,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_ArcadeRoom_M_Neon": {
+   "albedo": [
+    0.01,
+    0.008,
+    0.02
+   ],
+   "metallic": 0.0,
+   "roughness": 0.22,
+   "emission_strength": 3.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_ArcadeRoom_M_Screen": {
+   "albedo": [
+    0.004,
+    0.004,
+    0.008
+   ],
+   "metallic": 0.0,
+   "roughness": 0.18,
+   "emission_strength": 2.2,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Aurora_M_Ground": {
+   "albedo": [
+    0.0038,
+    0.0048,
+    0.008
+   ],
+   "metallic": 0.35,
+   "roughness": 0.22,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Aurora_M_Motes": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 3.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Aurora_M_Ribbon": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 1.15,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "BLENDED"
+  },
+  "BG_Aurora_M_Ridge": {
+   "albedo": [
+    0.0025,
+    0.0032,
+    0.0055
+   ],
+   "metallic": 0.0,
+   "roughness": 0.65,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Bezel": {
+   "albedo": [
+    0.015,
+    0.017,
+    0.026
+   ],
+   "metallic": 0.85,
+   "roughness": 0.28,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Chip": {
+   "albedo": [
+    0.009,
+    0.01,
+    0.014
+   ],
+   "metallic": 0.35,
+   "roughness": 0.52,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_ChipLED": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.4,
+   "emission_strength": 3.2,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_HubGlow": {
+   "albedo": [
+    0.006,
+    0.02,
+    0.036
+   ],
+   "metallic": 0.0,
+   "roughness": 0.3,
+   "emission_strength": 1.4,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Panel": {
+   "albedo": [
+    0.0075,
+    0.0115,
+    0.027
+   ],
+   "metallic": 0.25,
+   "roughness": 0.42,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Pulse": {
+   "albedo": [
+    0.006,
+    0.02,
+    0.036
+   ],
+   "metallic": 0.0,
+   "roughness": 0.3,
+   "emission_strength": 2.4,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Substrate": {
+   "albedo": [
+    0.004,
+    0.006,
+    0.015
+   ],
+   "metallic": 0.15,
+   "roughness": 0.62,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Trace": {
+   "albedo": [
+    0.058,
+    0.044,
+    0.024
+   ],
+   "metallic": 0.95,
+   "roughness": 0.3,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Circuit_M_Via": {
+   "albedo": [
+    0.075,
+    0.058,
+    0.032
+   ],
+   "metallic": 0.95,
+   "roughness": 0.3,
+   "emission_strength": 2.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_CrystalCave_M_Core": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.1,
+   "emission_strength": 6.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_CrystalCave_M_Crystal": {
+   "albedo": [
+    0.01,
+    0.014,
+    0.03
+   ],
+   "metallic": 0.0,
+   "roughness": 0.08,
+   "emission_strength": 2.8,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.45,
+   "render_method": "DITHERED"
+  },
+  "BG_CrystalCave_M_Motes": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 3.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_CrystalCave_M_Rock": {
+   "albedo": [
+    0.009,
+    0.0092,
+    0.0112
+   ],
+   "metallic": 0.1,
+   "roughness": 0.72,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_AccentAmber": {
+   "albedo": [
+    0.02,
+    0.01,
+    0.002
+   ],
+   "metallic": 0.0,
+   "roughness": 0.28,
+   "emission_strength": 2.6,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_AccentCyan": {
+   "albedo": [
+    0.004,
+    0.014,
+    0.02
+   ],
+   "metallic": 0.0,
+   "roughness": 0.28,
+   "emission_strength": 2.6,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_Bolt": {
+   "albedo": [
+    0.032,
+    0.0332,
+    0.0378
+   ],
+   "metallic": 1.0,
+   "roughness": 0.24,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_Groove": {
+   "albedo": [
+    0.006,
+    0.0063,
+    0.0078
+   ],
+   "metallic": 1.0,
+   "roughness": 0.46,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_Gunmetal": {
+   "albedo": [
+    0.0195,
+    0.0203,
+    0.0236
+   ],
+   "metallic": 1.0,
+   "roughness": 0.3,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_TurnedA": {
+   "albedo": [
+    0.0245,
+    0.0256,
+    0.0298
+   ],
+   "metallic": 1.0,
+   "roughness": 0.18,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DarkMetal_M_TurnedB": {
+   "albedo": [
+    0.0158,
+    0.0165,
+    0.0196
+   ],
+   "metallic": 1.0,
+   "roughness": 0.36,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DeepSpace_M_Dust": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 2.4,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DeepSpace_M_Nebula": {
+   "albedo": [
+    0.003,
+    0.0036,
+    0.0086
+   ],
+   "metallic": 0.55,
+   "roughness": 0.2,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DeepSpace_M_Star": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 7.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_DeepSpace_M_Void": {
+   "albedo": [
+    0.003,
+    0.0036,
+    0.0086
+   ],
+   "metallic": 0.55,
+   "roughness": 0.2,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_HexFloor_M_LitSeam": {
+   "albedo": [
+    0.006,
+    0.01,
+    0.024
+   ],
+   "metallic": 0.0,
+   "roughness": 0.3,
+   "emission_strength": 2.1,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_HexFloor_M_Panel": {
+   "albedo": [
+    0.0075,
+    0.0078,
+    0.0098
+   ],
+   "metallic": 0.62,
+   "roughness": 0.34,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_HexFloor_M_Seams": {
+   "albedo": [
+    0.0022,
+    0.0024,
+    0.0038
+   ],
+   "metallic": 0.0,
+   "roughness": 0.55,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_Floor": {
+   "albedo": [
+    0.0042,
+    0.005,
+    0.011
+   ],
+   "metallic": 0.3,
+   "roughness": 0.33,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_GridAccent": {
+   "albedo": [
+    0.014,
+    0.006,
+    0.04
+   ],
+   "metallic": 0.0,
+   "roughness": 0.35,
+   "emission_strength": 0.55,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_GridMajor": {
+   "albedo": [
+    0.006,
+    0.016,
+    0.04
+   ],
+   "metallic": 0.0,
+   "roughness": 0.35,
+   "emission_strength": 0.55,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_GridMinor": {
+   "albedo": [
+    0.004,
+    0.008,
+    0.02
+   ],
+   "metallic": 0.0,
+   "roughness": 0.4,
+   "emission_strength": 0.16,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_Horizon": {
+   "albedo": [
+    0.0042,
+    0.005,
+    0.011
+   ],
+   "metallic": 0.3,
+   "roughness": 0.33,
+   "emission_strength": 0.85,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_Pulse": {
+   "albedo": [
+    0.012,
+    0.006,
+    0.036
+   ],
+   "metallic": 0.0,
+   "roughness": 0.35,
+   "emission_strength": 0.34,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_NeonGrid_M_RingMetal": {
+   "albedo": [
+    0.016,
+    0.017,
+    0.028
+   ],
+   "metallic": 0.85,
+   "roughness": 0.3,
+   "emission_strength": 0.0,
+   "glow": false,
+   "alpha_vc": false,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Volcanic_M_Basalt": {
+   "albedo": [
+    0.0125,
+    0.0116,
+    0.011
+   ],
+   "metallic": 0.05,
+   "roughness": 0.8,
+   "emission_strength": 1.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Volcanic_M_CrackWall": {
+   "albedo": [
+    0.011,
+    0.006,
+    0.0038
+   ],
+   "metallic": 0.05,
+   "roughness": 0.62,
+   "emission_strength": 2.6,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Volcanic_M_Ember": {
+   "albedo": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "emission_strength": 5.0,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  },
+  "BG_Volcanic_M_Lava": {
+   "albedo": [
+    0.03,
+    0.006,
+    0.001
+   ],
+   "metallic": 0.0,
+   "roughness": 0.42,
+   "emission_strength": 2.8,
+   "glow": true,
+   "alpha_vc": true,
+   "coat": 0.0,
+   "render_method": "DITHERED"
+  }
+ },
+ "lights": {
+  "BG_NeonGrid": [
+   {
+    "name": "BG_NeonGrid_Light_Blue",
+    "type": "AREA",
+    "origin": [
+     6.8,
+     2.0,
+     -5.8
+    ],
+    "basis": [
+     [
+      -0.829038,
+      0.502599,
+      0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      -0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 13.0,
+    "color": [
+     0.1,
+     0.42,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_NeonGrid_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.6,
+     4.8
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 6.0,
+    "color": [
+     0.28,
+     0.32,
+     0.78
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_NeonGrid_Light_Violet",
+    "type": "AREA",
+    "origin": [
+     -6.6,
+     2.2,
+     -6.2
+    ],
+    "basis": [
+     [
+      -0.829038,
+      -0.502599,
+      -0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 15.0,
+    "color": [
+     0.45,
+     0.17,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   }
+  ],
+  "BG_DeepSpace": [
+   {
+    "name": "BG_DeepSpace_Light_Blue",
+    "type": "AREA",
+    "origin": [
+     7.2,
+     2.4,
+     -6.0
+    ],
+    "basis": [
+     [
+      -0.848048,
+      0.484105,
+      0.215538
+     ],
+     [
+      0.0,
+      0.406737,
+      -0.913545
+     ],
+     [
+      -0.529919,
+      -0.77473,
+      -0.344932
+     ]
+    ],
+    "energy": 9.0,
+    "color": [
+     0.14,
+     0.3,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 7.0,
+    "size_y": 1.2,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DeepSpace_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.0,
+     5.4
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.809017,
+      -0.587785
+     ],
+     [
+      0.0,
+      0.587785,
+      0.809017
+     ]
+    ],
+    "energy": 4.0,
+    "color": [
+     0.24,
+     0.26,
+     0.62
+    ],
+    "shape": "RECTANGLE",
+    "size": 10.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DeepSpace_Light_Violet",
+    "type": "AREA",
+    "origin": [
+     -7.0,
+     2.6,
+     -6.4
+    ],
+    "basis": [
+     [
+      -0.848048,
+      -0.484105,
+      -0.215538
+     ],
+     [
+      0.0,
+      0.406737,
+      -0.913545
+     ],
+     [
+      0.529919,
+      -0.77473,
+      -0.344932
+     ]
+    ],
+    "energy": 10.0,
+    "color": [
+     0.36,
+     0.2,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 7.0,
+    "size_y": 1.2,
+    "radius": 0.0
+   }
+  ],
+  "BG_Aurora": [
+   {
+    "name": "BG_Aurora_Light_Aurora_C",
+    "type": "AREA",
+    "origin": [
+     4.5,
+     1.5,
+     -5.0
+    ],
+    "basis": [
+     [
+      -0.990268,
+      0.118026,
+      0.073751
+     ],
+     [
+      0.0,
+      0.529919,
+      -0.848048
+     ],
+     [
+      -0.139173,
+      -0.839795,
+      -0.524762
+     ]
+    ],
+    "energy": 14.0,
+    "color": [
+     0.14,
+     0.9,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 8.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Aurora_Light_Aurora_G",
+    "type": "AREA",
+    "origin": [
+     -4.0,
+     1.6,
+     -5.2
+    ],
+    "basis": [
+     [
+      -0.990268,
+      -0.118026,
+      -0.073751
+     ],
+     [
+      0.0,
+      0.529919,
+      -0.848048
+     ],
+     [
+      0.139173,
+      -0.839795,
+      -0.524762
+     ]
+    ],
+    "energy": 16.0,
+    "color": [
+     0.24,
+     1.0,
+     0.5
+    ],
+    "shape": "RECTANGLE",
+    "size": 8.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Aurora_Light_Aurora_V",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     1.2,
+     -6.4
+    ],
+    "basis": [
+     [
+      -1.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      0.0,
+      -0.898794,
+      -0.438371
+     ]
+    ],
+    "energy": 9.0,
+    "color": [
+     0.45,
+     0.22,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Aurora_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.8,
+     5.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.809017,
+      -0.587785
+     ],
+     [
+      0.0,
+      0.587785,
+      0.809017
+     ]
+    ],
+    "energy": 4.0,
+    "color": [
+     0.3,
+     0.42,
+     0.62
+    ],
+    "shape": "RECTANGLE",
+    "size": 10.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   }
+  ],
+  "BG_Circuit": [
+   {
+    "name": "BG_Circuit_Light_Cyan",
+    "type": "AREA",
+    "origin": [
+     -6.4,
+     2.2,
+     -6.0
+    ],
+    "basis": [
+     [
+      -0.829038,
+      -0.502599,
+      -0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 16.0,
+    "color": [
+     0.12,
+     0.68,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Circuit_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.8,
+     5.0
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 7.0,
+    "color": [
+     0.24,
+     0.34,
+     0.72
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Circuit_Light_Violet",
+    "type": "AREA",
+    "origin": [
+     6.6,
+     2.0,
+     -5.6
+    ],
+    "basis": [
+     [
+      -0.829038,
+      0.502599,
+      0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      -0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 13.0,
+    "color": [
+     0.42,
+     0.16,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   }
+  ],
+  "BG_HexFloor": [
+   {
+    "name": "BG_HexFloor_Light_Cyan",
+    "type": "AREA",
+    "origin": [
+     6.8,
+     2.2,
+     -5.4
+    ],
+    "basis": [
+     [
+      -0.829038,
+      0.502599,
+      0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      -0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 15.0,
+    "color": [
+     0.08,
+     0.62,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.5,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_HexFloor_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.9,
+     5.0
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 9.0,
+    "color": [
+     0.28,
+     0.32,
+     0.66
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_HexFloor_Light_Violet",
+    "type": "AREA",
+    "origin": [
+     -6.6,
+     2.4,
+     -5.8
+    ],
+    "basis": [
+     [
+      -0.829038,
+      -0.502599,
+      -0.245134
+     ],
+     [
+      0.0,
+      0.438371,
+      -0.898794
+     ],
+     [
+      0.559193,
+      -0.745134,
+      -0.363426
+     ]
+    ],
+    "energy": 18.0,
+    "color": [
+     0.42,
+     0.16,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 6.5,
+    "size_y": 1.0,
+    "radius": 0.0
+   }
+  ],
+  "BG_DarkMetal": [
+   {
+    "name": "BG_DarkMetal_Light_Amber",
+    "type": "AREA",
+    "origin": [
+     7.0,
+     2.2,
+     -2.6
+    ],
+    "basis": [
+     [
+      -0.374607,
+      0.818655,
+      0.435286
+     ],
+     [
+      0.0,
+      0.469472,
+      -0.882948
+     ],
+     [
+      -0.927184,
+      -0.330758,
+      -0.175867
+     ]
+    ],
+    "energy": 22.0,
+    "color": [
+     1.0,
+     0.58,
+     0.18
+    ],
+    "shape": "RECTANGLE",
+    "size": 5.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Cyan",
+    "type": "AREA",
+    "origin": [
+     -7.2,
+     2.0,
+     1.2
+    ],
+    "basis": [
+     [
+      0.309017,
+      -0.868833,
+      -0.38683
+     ],
+     [
+      0.0,
+      0.406737,
+      -0.913545
+     ],
+     [
+      0.951057,
+      0.282301,
+      0.125689
+     ]
+    ],
+    "energy": 17.0,
+    "color": [
+     0.1,
+     0.62,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 5.0,
+    "size_y": 1.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Far",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.2,
+     -5.4
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 32.0,
+    "color": [
+     0.6,
+     0.7,
+     0.95
+    ],
+    "shape": "RECTANGLE",
+    "size": 15.0,
+    "size_y": 5.5,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Key",
+    "type": "AREA",
+    "origin": [
+     -6.0,
+     3.4,
+     -5.4
+    ],
+    "basis": [
+     [
+      -0.788011,
+      -0.522111,
+      -0.326251
+     ],
+     [
+      0.0,
+      0.529919,
+      -0.848048
+     ],
+     [
+      0.615661,
+      -0.668271,
+      -0.417582
+     ]
+    ],
+    "energy": 66.0,
+    "color": [
+     0.55,
+     0.72,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 7.0,
+    "size_y": 1.4,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Sweep",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.4,
+     5.6
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.809017,
+      -0.587785
+     ],
+     [
+      0.0,
+      0.587785,
+      0.809017
+     ]
+    ],
+    "energy": 30.0,
+    "color": [
+     0.72,
+     0.78,
+     0.92
+    ],
+    "shape": "RECTANGLE",
+    "size": 11.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Wing_L",
+    "type": "AREA",
+    "origin": [
+     -6.6,
+     2.4,
+     -1.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 9.0,
+    "color": [
+     0.35,
+     0.55,
+     0.95
+    ],
+    "shape": "RECTANGLE",
+    "size": 5.0,
+    "size_y": 7.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_DarkMetal_Light_Wing_R",
+    "type": "AREA",
+    "origin": [
+     6.6,
+     2.4,
+     -1.0
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 9.0,
+    "color": [
+     0.95,
+     0.62,
+     0.28
+    ],
+    "shape": "RECTANGLE",
+    "size": 5.0,
+    "size_y": 7.0,
+    "radius": 0.0
+   }
+  ],
+  "BG_CrystalCave": [
+   {
+    "name": "BG_CrystalCave_Light_Ambient",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.0,
+     -4.6
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 5.0,
+    "color": [
+     0.2,
+     0.42,
+     0.9
+    ],
+    "shape": "RECTANGLE",
+    "size": 12.0,
+    "size_y": 5.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_CrystalCave_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.8,
+     5.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 4.0,
+    "color": [
+     0.28,
+     0.34,
+     0.7
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_01",
+    "type": "POINT",
+    "origin": [
+     -5.501,
+     0.4091,
+     -4.1982
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     0.45,
+     0.13,
+     1.0
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_02",
+    "type": "POINT",
+    "origin": [
+     -3.0953,
+     0.3144,
+     -4.7671
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     0.05,
+     0.8,
+     1.0
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_03",
+    "type": "POINT",
+    "origin": [
+     -2.8515,
+     0.2872,
+     -4.9113
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     1.0,
+     0.14,
+     0.62
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_04",
+    "type": "POINT",
+    "origin": [
+     0.2353,
+     0.229,
+     -5.2202
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     0.06,
+     0.22,
+     1.0
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_05",
+    "type": "POINT",
+    "origin": [
+     -0.341,
+     0.279,
+     -4.9549
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     0.05,
+     0.8,
+     1.0
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_06",
+    "type": "POINT",
+    "origin": [
+     2.5115,
+     0.3087,
+     -4.7693
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     1.0,
+     0.14,
+     0.62
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   },
+   {
+    "name": "BG_CrystalCave_Light_Xtal_07",
+    "type": "POINT",
+    "origin": [
+     2.5171,
+     0.312,
+     -4.78
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 2.0,
+    "color": [
+     1.0,
+     0.14,
+     0.62
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.28
+   }
+  ],
+  "BG_Volcanic": [
+   {
+    "name": "BG_Volcanic_Light_Ambient",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.0,
+     -4.4
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 6.0,
+    "color": [
+     0.55,
+     0.24,
+     0.1
+    ],
+    "shape": "RECTANGLE",
+    "size": 12.0,
+    "size_y": 5.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Volcanic_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.8,
+     5.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 4.0,
+    "color": [
+     0.42,
+     0.3,
+     0.34
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_01",
+    "type": "POINT",
+    "origin": [
+     -5.4,
+     0.1,
+     -4.9
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_02",
+    "type": "POINT",
+    "origin": [
+     3.9,
+     0.1,
+     -5.3
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_03",
+    "type": "POINT",
+    "origin": [
+     -4.2,
+     0.1,
+     0.4
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_04",
+    "type": "POINT",
+    "origin": [
+     5.2,
+     0.1,
+     -1.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_06",
+    "type": "POINT",
+    "origin": [
+     0.6,
+     0.1,
+     -6.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_07",
+    "type": "POINT",
+    "origin": [
+     -2.6,
+     0.1,
+     3.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   },
+   {
+    "name": "BG_Volcanic_Light_Vent_08",
+    "type": "POINT",
+    "origin": [
+     3.4,
+     0.1,
+     3.4
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 1.8,
+    "color": [
+     1.0,
+     0.34,
+     0.06
+    ],
+    "shape": "",
+    "size": 0,
+    "size_y": 0,
+    "radius": 0.45
+   }
+  ],
+  "BG_ArcadeRoom": [
+   {
+    "name": "BG_ArcadeRoom_Light_Blue",
+    "type": "AREA",
+    "origin": [
+     2.0,
+     0.8,
+     -4.1
+    ],
+    "basis": [
+     [
+      -1.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      0.309017,
+      -0.951057
+     ],
+     [
+      0.0,
+      -0.951057,
+      -0.309017
+     ]
+    ],
+    "energy": 3.5,
+    "color": [
+     0.12,
+     0.28,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 2.0,
+    "size_y": 0.6,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_ArcadeRoom_Light_Cyan",
+    "type": "AREA",
+    "origin": [
+     4.6,
+     0.9,
+     -4.0
+    ],
+    "basis": [
+     [
+      -1.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      0.309017,
+      -0.951057
+     ],
+     [
+      0.0,
+      -0.951057,
+      -0.309017
+     ]
+    ],
+    "energy": 4.5,
+    "color": [
+     0.06,
+     0.78,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 2.4,
+    "size_y": 0.7,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_ArcadeRoom_Light_Fill",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     2.8,
+     5.2
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.788011,
+      -0.615662
+     ],
+     [
+      0.0,
+      0.615662,
+      0.788011
+     ]
+    ],
+    "energy": 3.0,
+    "color": [
+     0.34,
+     0.3,
+     0.6
+    ],
+    "shape": "RECTANGLE",
+    "size": 9.0,
+    "size_y": 3.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_ArcadeRoom_Light_Magenta",
+    "type": "AREA",
+    "origin": [
+     -5.0,
+     0.9,
+     -4.0
+    ],
+    "basis": [
+     [
+      -1.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      0.309017,
+      -0.951057
+     ],
+     [
+      0.0,
+      -0.951057,
+      -0.309017
+     ]
+    ],
+    "energy": 5.0,
+    "color": [
+     1.0,
+     0.16,
+     0.62
+    ],
+    "shape": "RECTANGLE",
+    "size": 2.4,
+    "size_y": 0.7,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_ArcadeRoom_Light_Sweep",
+    "type": "AREA",
+    "origin": [
+     0.0,
+     3.2,
+     -0.6
+    ],
+    "basis": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "energy": 5.0,
+    "color": [
+     0.3,
+     0.34,
+     0.72
+    ],
+    "shape": "RECTANGLE",
+    "size": 13.0,
+    "size_y": 7.0,
+    "radius": 0.0
+   },
+   {
+    "name": "BG_ArcadeRoom_Light_Violet",
+    "type": "AREA",
+    "origin": [
+     -1.8,
+     0.8,
+     -4.1
+    ],
+    "basis": [
+     [
+      -1.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      0.309017,
+      -0.951057
+     ],
+     [
+      0.0,
+      -0.951057,
+      -0.309017
+     ]
+    ],
+    "energy": 3.5,
+    "color": [
+     0.5,
+     0.14,
+     1.0
+    ],
+    "shape": "RECTANGLE",
+    "size": 2.0,
+    "size_y": 0.6,
+    "radius": 0.0
+   }
+  ]
+ },
+ "objects": {
+  "BG_ArcadeRoom": [
+   {
+    "name": "BG_ArcadeMachines",
+    "slots": [
+     "BG_ArcadeRoom_M_Cabinet",
+     "BG_ArcadeRoom_M_CabinetTrim"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_ArcadeNeonSigns",
+    "slots": [
+     "BG_ArcadeRoom_M_Neon"
+    ],
+    "anim": "neon_pulse | 2-5s per sign, occasional 1-frame dropout"
+   },
+   {
+    "name": "BG_ArcadeRoom_Floor",
+    "slots": [
+     "BG_ArcadeRoom_M_Floor"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_ArcadeRoom_Marquees",
+    "slots": [
+     "BG_ArcadeRoom_M_Marquee"
+    ],
+    "anim": "emission_breathe | 3s"
+   },
+   {
+    "name": "BG_ArcadeScreens",
+    "slots": [
+     "BG_ArcadeRoom_M_Screen"
+    ],
+    "anim": "screen_flicker | per-screen random 0.05-0.4s, +-25%"
+   }
+  ],
+  "BG_Aurora": [
+   {
+    "name": "BG_Aurora_Ground",
+    "slots": [
+     "BG_Aurora_M_Ground"
+    ],
+    "anim": "emission_breathe follows ribbons | 14s"
+   },
+   {
+    "name": "BG_Aurora_Motes",
+    "slots": [
+     "BG_Aurora_M_Motes"
+    ],
+    "anim": "drift_translate | slow upward"
+   },
+   {
+    "name": "BG_Aurora_Ribbon_01",
+    "slots": [
+     "BG_Aurora_M_Ribbon"
+    ],
+    "anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"
+   },
+   {
+    "name": "BG_Aurora_Ribbon_02",
+    "slots": [
+     "BG_Aurora_M_Ribbon"
+    ],
+    "anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"
+   },
+   {
+    "name": "BG_Aurora_Ribbon_03",
+    "slots": [
+     "BG_Aurora_M_Ribbon"
+    ],
+    "anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"
+   },
+   {
+    "name": "BG_Aurora_Ribbon_04",
+    "slots": [
+     "BG_Aurora_M_Ribbon"
+    ],
+    "anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"
+   },
+   {
+    "name": "BG_Aurora_Ribbon_05",
+    "slots": [
+     "BG_Aurora_M_Ribbon"
+    ],
+    "anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"
+   },
+   {
+    "name": "BG_Aurora_Ridge_Far",
+    "slots": [
+     "BG_Aurora_M_Ridge"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Aurora_Ridge_Mid",
+    "slots": [
+     "BG_Aurora_M_Ridge"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Aurora_Ridge_Near",
+    "slots": [
+     "BG_Aurora_M_Ridge"
+    ],
+    "anim": "static"
+   }
+  ],
+  "BG_Circuit": [
+   {
+    "name": "BG_Circuit_ChipLEDs",
+    "slots": [
+     "BG_Circuit_M_ChipLED"
+    ],
+    "anim": "blink | 1-3s random"
+   },
+   {
+    "name": "BG_Circuit_Chips",
+    "slots": [
+     "BG_Circuit_M_Chip"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Circuit_HubBezel",
+    "slots": [
+     "BG_Circuit_M_Bezel",
+     "BG_Circuit_M_HubGlow"
+    ],
+    "anim": "emission_breathe | 4s"
+   },
+   {
+    "name": "BG_Circuit_Panels",
+    "slots": [
+     "BG_Circuit_M_Panel"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Circuit_Substrate",
+    "slots": [
+     "BG_Circuit_M_Substrate"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Circuit_Vias",
+    "slots": [
+     "BG_Circuit_M_Via"
+    ],
+    "anim": "blink | random 0.2s flashes on pulse arrival"
+   },
+   {
+    "name": "BG_CircuitPulse",
+    "slots": [
+     "BG_Circuit_M_Pulse"
+    ],
+    "anim": "trace_pulse | bright head travelling outward from the hub, 2.6s, staggered"
+   },
+   {
+    "name": "BG_CircuitTraces",
+    "slots": [
+     "BG_Circuit_M_Trace"
+    ],
+    "anim": "static"
+   }
+  ],
+  "BG_DeepSpace": [
+   {
+    "name": "BG_CosmicDust",
+    "slots": [
+     "BG_DeepSpace_M_Dust"
+    ],
+    "anim": "drift_translate | +X 0.02 u/s, wrap"
+   },
+   {
+    "name": "BG_DeepSpace_Void",
+    "slots": [
+     "BG_DeepSpace_M_Void"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_Nebula",
+    "slots": [
+     "BG_DeepSpace_M_Nebula"
+    ],
+    "anim": "emission_breathe | 12s, hue drift +-4deg"
+   },
+   {
+    "name": "BG_Stars",
+    "slots": [
+     "BG_DeepSpace_M_Star"
+    ],
+    "anim": "uv_parallax_drift + per-star twinkle | extremely slow"
+   }
+  ],
+  "BG_CrystalCave": [
+   {
+    "name": "BG_CrystalCave_Cores",
+    "slots": [
+     "BG_CrystalCave_M_Core"
+    ],
+    "anim": "emission_breathe | 5s, per-crystal phase offset"
+   },
+   {
+    "name": "BG_CrystalCave_Crystals",
+    "slots": [
+     "BG_CrystalCave_M_Crystal"
+    ],
+    "anim": "emission_breathe | 5s, 40% depth"
+   },
+   {
+    "name": "BG_CrystalCave_Ground",
+    "slots": [
+     "BG_CrystalCave_M_Rock"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_CrystalCave_Particles",
+    "slots": [
+     "BG_CrystalCave_M_Motes"
+    ],
+    "anim": "drift_translate | slow rise + fade"
+   }
+  ],
+  "BG_DarkMetal": [
+   {
+    "name": "BG_DarkMetal_Accent_Amber",
+    "slots": [
+     "BG_DarkMetal_M_AccentAmber"
+    ],
+    "anim": "emission_breathe | 6s, 3s offset"
+   },
+   {
+    "name": "BG_DarkMetal_Accent_Cyan",
+    "slots": [
+     "BG_DarkMetal_M_AccentCyan"
+    ],
+    "anim": "emission_breathe | 6s"
+   },
+   {
+    "name": "BG_DarkMetal_Bolts",
+    "slots": [
+     "BG_DarkMetal_M_Bolt"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_DarkMetal_Floor",
+    "slots": [
+     "BG_DarkMetal_M_Gunmetal"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_DarkMetal_Grooves",
+    "slots": [
+     "BG_DarkMetal_M_Groove"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_DarkMetal_Plates",
+    "slots": [
+     "BG_DarkMetal_M_Gunmetal"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_DarkMetal_Turning",
+    "slots": [
+     "BG_DarkMetal_M_TurnedA",
+     "BG_DarkMetal_M_TurnedB"
+    ],
+    "anim": "static"
+   }
+  ],
+  "BG_NeonGrid": [
+   {
+    "name": "BG_EnergyPulse",
+    "slots": [
+     "BG_NeonGrid_M_RingMetal",
+     "BG_NeonGrid_M_Pulse"
+    ],
+    "anim": "radial_pulse | scale 1.0->1.06 + emission 0.7->1.4, 3.2s"
+   },
+   {
+    "name": "BG_GridLines",
+    "slots": [
+     "BG_NeonGrid_M_GridMajor"
+    ],
+    "anim": "emission_scroll_v  | slow energy travelling along the grid"
+   },
+   {
+    "name": "BG_GridLines_Accent",
+    "slots": [
+     "BG_NeonGrid_M_GridAccent"
+    ],
+    "anim": "emission_pulse | 4s offset from majors"
+   },
+   {
+    "name": "BG_NeonGrid_Floor",
+    "slots": [
+     "BG_NeonGrid_M_Floor"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_NeonGrid_GridLines_Minor",
+    "slots": [
+     "BG_NeonGrid_M_GridMinor"
+    ],
+    "anim": "emission_breathe | 0.85x-1.15x, 6s"
+   },
+   {
+    "name": "BG_NeonGrid_Horizon",
+    "slots": [
+     "BG_NeonGrid_M_Horizon"
+    ],
+    "anim": "emission_breathe | 9s, very subtle"
+   }
+  ],
+  "BG_HexFloor": [
+   {
+    "name": "BG_HexFloor_Lit",
+    "slots": [
+     "BG_HexFloor_M_LitSeam"
+    ],
+    "anim": "hex_wave | illumination sweeping outward, 5s, per-hex delay = radius"
+   },
+   {
+    "name": "BG_HexFloor_Panels",
+    "slots": [
+     "BG_HexFloor_M_Panel"
+    ],
+    "anim": "static"
+   },
+   {
+    "name": "BG_HexFloor_Seams",
+    "slots": [
+     "BG_HexFloor_M_Seams"
+    ],
+    "anim": "emission_breathe | 8s, +-12%"
+   }
+  ],
+  "BG_Volcanic": [
+   {
+    "name": "BG_LavaCracks",
+    "slots": [
+     "BG_Volcanic_M_Lava"
+    ],
+    "anim": "emission_breathe + slow flow | 7s"
+   },
+   {
+    "name": "BG_Volcanic_Crust",
+    "slots": [
+     "BG_Volcanic_M_Basalt",
+     "BG_Volcanic_M_CrackWall"
+    ],
+    "anim": "crack_edge_breathe (slot 1 only) | 7s, in phase with lava"
+   },
+   {
+    "name": "BG_Volcanic_Embers",
+    "slots": [
+     "BG_Volcanic_M_Ember"
+    ],
+    "anim": "drift_translate | slow rise, fade out at top"
+   }
+  ]
+ },
+ "world": {
+  "ramp": [
+   [
+    0.3,
+    [
+     0.0035,
+     0.0042,
+     0.006
+    ]
+   ],
+   [
+    0.62,
+    [
+     0.023,
+     0.029,
+     0.042
+    ]
+   ],
+   [
+    0.86,
+    [
+     0.062,
+     0.076,
+     0.105
+    ]
+   ]
+  ],
+  "strength": 1.0
+ },
+ "view": {
+  "transform": "AgX",
+  "look": "AgX - Punchy",
+  "exposure": -0.3
+ },
+ "camera": {
+  "loc_godot": [
+   0,
+   5.85,
+   8.95
+  ],
+  "elev_deg": 33.5,
+  "lens": 45,
+  "sensor": 36
+ },
+ "tall_radius": {
+  "BG_NeonGrid": null,
+  "BG_DeepSpace": null,
+  "BG_Aurora": 3.854,
+  "BG_Circuit": null,
+  "BG_HexFloor": null,
+  "BG_DarkMetal": null,
+  "BG_CrystalCave": 3.7516,
+  "BG_Volcanic": 4.9132,
+  "BG_ArcadeRoom": 3.9401
+ },
+ "tall_object": {
+  "BG_NeonGrid": "",
+  "BG_DeepSpace": "",
+  "BG_Aurora": "BG_Aurora_Ribbon_03",
+  "BG_Circuit": "",
+  "BG_HexFloor": "",
+  "BG_DarkMetal": "",
+  "BG_CrystalCave": "BG_CrystalCave_Crystals",
+  "BG_Volcanic": "BG_Volcanic_Crust",
+  "BG_ArcadeRoom": "BG_ArcadeNeonSigns"
+ },
+ "furniture_far_y": {
+  "BG_NeonGrid": null,
+  "BG_DeepSpace": null,
+  "BG_Aurora": 5.9792,
+  "BG_Circuit": null,
+  "BG_HexFloor": null,
+  "BG_DarkMetal": null,
+  "BG_CrystalCave": 5.459,
+  "BG_Volcanic": null,
+  "BG_ArcadeRoom": 5.7347
+ },
+ "furniture_object": {
+  "BG_NeonGrid": "",
+  "BG_DeepSpace": "",
+  "BG_Aurora": "BG_Aurora_Ribbon_05",
+  "BG_Circuit": "",
+  "BG_HexFloor": "",
+  "BG_DarkMetal": "",
+  "BG_CrystalCave": "BG_CrystalCave_Crystals",
+  "BG_Volcanic": "",
+  "BG_ArcadeRoom": "BG_ArcadeMachines"
+ }
+}

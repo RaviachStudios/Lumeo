@@ -29,6 +29,38 @@ Ordered by price, as shown in the shop.
 | Coral Reef | 1,200 |
 | Deep Space | 1,600 |
 
+### Modelled backgrounds (3D)
+
+The nine below are a different kind of item behind the same shop card. Everything
+above is a full-screen 2D shader painted behind the UI; these are 3D floors built
+into the board's own viewport, with the buttons standing on them (`background_scenes.gd`,
+imported from `Themes/Themes1.blend`). Ownership, purchase, equip and persistence
+are the existing theme path, unchanged — `owned_themes` / `selected_theme`.
+
+The ids carry a `bg_` prefix because `deepspace` and `aurora` are already taken by
+two of the shader themes above, and these ids are what saved wallets contain.
+"Deep Void" is named apart from the existing "Deep Space" for the same reason.
+
+| Item | Id | Price |
+|---|---|---|
+| Neon Grid | `bg_neongrid` | 0 |
+| Hexagon Floor | `bg_hexfloor` | 0 |
+| Circuit Board | `bg_circuit` | 0 |
+| Dark Metal | `bg_darkmetal` | 0 |
+| Deep Void | `bg_deepspace` | 0 |
+| Volcanic | `bg_volcanic` | 0 |
+| Arcade Room | `bg_arcade` | 0 |
+| Crystal Cave | `bg_crystal` | 0 |
+| Aurora | `bg_aurora` | 0 |
+
+All nine ship at 0 coins deliberately, exactly as the button-frame cosmetics do.
+`CoinsManager.purchase_theme` still runs the full deduct-and-save path for them, so
+re-pricing any of them is a one-line edit to `CoinsManager.THEMES` and nothing else
+has to change. They are not pre-owned: the player still taps Buy once, which is what
+writes the id into `owned_themes` and makes the equip persist.
+
+No existing price changed.
+
 ## Difficulty Unlocks
 
 | Item | Price |

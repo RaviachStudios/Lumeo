@@ -10,8 +10,8 @@ extends Node
 
 var _fails := 0
 
-func _check(ok: bool, what: String) -> void:
-	print(("  PASS  " if ok else "  FAIL  ") + what)
+func _check(ok: bool, what: String, detail: String = "") -> void:
+	print(("  PASS  " if ok else "  FAIL  ") + what + ("  -- " + detail if detail != "" else ""))
 	if not ok:
 		_fails += 1
 
@@ -274,10 +274,19 @@ func _one_board(label: String, dev: MemoryGameUI, keys: Array) -> void:
 	var t_before: Transform3D = worn[0].transform
 	var surf_before: Transform3D = dev.surface_mesh(keys[0]).transform
 	dev.set_press(0, 1.0)
-	for _i in 12:
+	# Sample the PEAK of the sink rather than the transform after a fixed number of
+	# frames. The clip sinks and raises on its own inside 0.283 s, so a single late
+	# sample sees the surface already back at rest and calls that "it never moved" —
+	# which is a race on how fast the run happens to be stepping, not a fact about
+	# the cosmetic. Watching every frame is deterministic and asserts the stronger
+	# thing: how far it actually travelled (0.115 as authored).
+	var sank := 0.0
+	for _i in 24:
 		await get_tree().process_frame
-	_check(dev.surface_mesh(keys[0]).transform != surf_before,
-		"the press clip still sinks the coloured surface")
+		sank = maxf(sank, absf(dev.surface_mesh(keys[0]).transform.origin.y
+			- surf_before.origin.y))
+	_check(sank > 0.05, "the press clip still sinks the coloured surface",
+		"peak travel %.3f" % sank)
 	_check(worn[0].transform == t_before, "the cosmetic is stationary through a press")
 	var others_still := true
 	for mi in worn:

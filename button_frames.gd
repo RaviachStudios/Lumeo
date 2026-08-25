@@ -9,6 +9,13 @@ class_name ButtonFrames
 # is the catalog, the loader, and the small amount of material work Godot has to do
 # because glTF cannot carry the idle animation the frames were authored with.
 #
+# The library was re-authored on 2026-08-25 (the "colour-forward" pass): same
+# meshes, vertex for vertex, but every body now carries its own colour in a
+# base-colour map zoned along v instead of being near-black, and every frame has an
+# emissive map to go with it. The ids, the prices, the ownership and the equip
+# system are untouched by that — a wallet that owned `zebra_glow` still owns it and
+# still equips it; what changed is what `zebra_glow` LOOKS like.
+#
 # Fifteen of them are shop cosmetics the player buys and equips. The other three are
 # SKIN FRAMES: one each for the Arcade, Jackpot and Luna Park Special Skins, worn
 # automatically while that skin is the active look and never sold, owned or equipped.
@@ -75,7 +82,16 @@ class_name ButtonFrames
 #    white. Multiplying in the shader (`emis_col` under `source_color`, times a
 #    plain float) is a linear multiply and reproduces Blender's authored level.
 #
-# The geometry is never touched by any of this: the idle is emission and UV only.
+# 3. THE ROOM. The frames are authored and verified under the asset's own
+#    five-light presentation room; this board's studio is deliberately almost
+#    black. A metal has no diffuse at all, so in that studio a metallic ring is a
+#    mirror with nothing to be a mirror of — which rendered the silver Zebra body
+#    black. The shader paints the missing room back on, derived from each
+#    material's OWN metallic, roughness and albedo (see `env`). No colour is
+#    invented and no material is second-guessed; the light is.
+#
+# The geometry is never touched by any of this: the idle is emission and UV only,
+# and everything else is a lighting term.
 #
 # ---------------------------------------------------------------------------
 # Memory
@@ -97,11 +113,13 @@ const INSTANCE_NAME := "Cosmetic_Frame"
 # file recreates or edits either.
 const LIBRARY_PATH := "res://models/Button_Frame_Cosmetics.glb"
 
-# How hard the painted Fresnel sheen runs, and the roughness it has faded out by.
-# See the note in the shader: this exists because the board's studio is too dark for
-# a mirror to reflect anything, not as a stylistic choice.
-const SHEEN_MAX := 0.90
-const SHEEN_ROUGH_CUTOFF := 0.25
+# The painted room, in the shader's own units: how much of its own albedo a fully
+# metallic, mirror-smooth surface hands back, and how much of that a fully rough
+# one loses. See the note in the shader — this exists because the board's studio is
+# too dark for a mirror to reflect anything, not as a stylistic choice, and it is
+# derived per material rather than being a per-frame value anyone tuned by eye.
+const ENV_MAX := 1.15
+const ENV_ROUGH_FADE := 0.45
 
 # The idle loop, in seconds. The asset is authored at 30 fps over frames 1..180 and
 # is seamless (frame 181 is frame 1 exactly), so 6.0 is not a taste value.
@@ -121,111 +139,120 @@ const INNER_OPENING_R := 0.766
 #
 # `anim` is one entry per MESH SURFACE, in the GLB's own slot order —
 # [0] Body (90% of the area), [1] Accent (the cut channel), [2] Trim (the raised
-# lip) — each `[amplitude, phase, drift]`:
-#   amplitude  the +-fraction the emission breathes by (0.10..0.18 as authored)
-#   phase      radians, different per frame so no two frames pulse together
-#   drift      how far the EMISSIVE sampler's u advances over one 6 s loop. It is
-#              always exactly one pattern period (0.50 for most, 0.25 for Circuit,
-#              1/3 for Holographic and Volcanic), which is why the pattern appears
-#              to stand still and only the hot-spots travel. 0 = no drift at all.
+# lip) — each `[amplitude, phase, drift]`. Every number is the asset's OWN authored
+# figure, from the table in Button_Frame_Cosmetics_README.md, not a value chosen
+# here: glTF cannot carry material animation, so the 6 s loop is re-stated rather
+# than re-invented.
+#   amplitude  the +-fraction the emission breathes by. The asset publishes each
+#              frame's PEAK-TO-PEAK swing (8.8% on Obsidian up to 32% on Volcanic),
+#              and this is half of it, which is what `S(t)` below multiplies by.
+#   phase      radians, different per frame so no two frames pulse together, and
+#              different per surface so a frame's own three parts do not either.
+#   drift      how far the EMISSIVE sampler's u advances over one 6 s loop, always
+#              an exact multiple of that texture's own u-period — 1/2 for most,
+#              1/3 for Electric Blue / Obsidian / Volcanic, 1/4 for Circuit and
+#              Luna's bulbs, 1/12 and 1/16 for Arcade's ticks and Casino's
+#              scallops. That is why the pattern appears to stand still and only
+#              the bright features travel. 0 = no drift at all, which is what the
+#              two hides are authored with (their stripes must not smear).
 const FRAMES := {
 	"default": {
 		"name": "Default", "price": 0, "blurb": "Smooth black metal.",
 		"accent": Color(0.60, 0.64, 0.76), "glow": Color(0.24, 0.28, 0.40),
 	},
-	# --- 01-05 neon: a dark chassis with a lit channel. Breathing only. ---
+	# --- 01-05 neon: a coloured chassis with a lit channel through it. ---
 	"purple_neon": {
-		"name": "Purple Neon", "price": 0, "blurb": "Lit from the inside.",
+		"name": "Purple Neon", "price": 0, "blurb": "Violet body, lit through.",
 		"node": "Frame_01_PurpleNeon",
-		"accent": Color(0.70, 0.32, 1.00), "glow": Color(0.44, 0.08, 0.96),
-		"anim": [[0.00, 0.00, 0.00], [0.14, 0.00, 0.00], [0.08, 2.10, 0.00]],
+		"accent": Color(0.48, 0.21, 0.86), "glow": Color(0.30, 0.11, 0.60),
+		"anim": [[0.06, 0.00, 0.00], [0.12, 0.00, 0.50], [0.06, 2.10, 0.00]],
 	},
 	"cyan_neon": {
 		"name": "Cyan Neon", "price": 0, "blurb": "Cold light in a groove.",
 		"node": "Frame_02_CyanNeon",
-		"accent": Color(0.30, 0.90, 1.00), "glow": Color(0.05, 0.62, 0.90),
-		"anim": [[0.00, 0.00, 0.00], [0.14, 0.83, 0.00], [0.08, 2.93, 0.00]],
+		"accent": Color(0.08, 0.73, 0.86), "glow": Color(0.05, 0.38, 0.60),
+		"anim": [[0.06, 0.83, 0.00], [0.12, 0.83, 0.50], [0.06, 2.93, 0.00]],
 	},
 	"magenta_neon": {
 		"name": "Magenta Neon", "price": 0, "blurb": "Loud, in one colour.",
 		"node": "Frame_03_MagentaNeon",
-		"accent": Color(1.00, 0.30, 0.80), "glow": Color(0.88, 0.05, 0.55),
-		"anim": [[0.00, 0.00, 0.00], [0.15, 1.66, 0.00], [0.08, 3.76, 0.00]],
+		"accent": Color(0.86, 0.12, 0.51), "glow": Color(0.53, 0.06, 0.36),
+		"anim": [[0.06, 1.66, 0.00], [0.12, 1.66, 0.50], [0.06, 3.76, 0.00]],
 	},
 	"electric_blue": {
 		"name": "Electric Blue", "price": 0, "blurb": "Straight off the mains.",
 		"node": "Frame_04_ElectricBlue",
-		"accent": Color(0.36, 0.62, 1.00), "glow": Color(0.10, 0.32, 1.00),
-		"anim": [[0.00, 0.00, 0.00], [0.16, 2.49, 0.00], [0.08, 4.59, 0.00]],
+		"accent": Color(0.13, 0.31, 0.86), "glow": Color(0.08, 0.16, 0.60),
+		"anim": [[0.07, 2.49, 0.00], [0.15, 2.49, 0.3333], [0.07, 4.59, 0.00]],
 	},
 	"emerald_neon": {
 		"name": "Emerald Neon", "price": 0, "blurb": "Green, and expensive.",
 		"node": "Frame_05_EmeraldNeon",
-		"accent": Color(0.24, 1.00, 0.66), "glow": Color(0.02, 0.72, 0.44),
-		"anim": [[0.00, 0.00, 0.00], [0.14, 3.32, 0.00], [0.08, 5.42, 0.00]],
+		"accent": Color(0.08, 0.86, 0.50), "glow": Color(0.05, 0.45, 0.35),
+		"anim": [[0.05, 3.32, 0.00], [0.10, 3.32, 0.50], [0.05, 5.42, 0.00]],
 	},
-	# --- 06-08 polished metal: no neon, just a highlight walking the trim. ---
+	# --- 06-08 polished metal: a highlight walking the whole ring. ---
 	"golden_chrome": {
 		"name": "Golden Chrome", "price": 0, "blurb": "Mirror-polished gold.",
 		"node": "Frame_06_GoldenChrome",
-		"accent": Color(1.00, 0.86, 0.46), "glow": Color(0.82, 0.56, 0.10),
-		"anim": [[0.00, 0.00, 0.00], [0.06, 4.15, 0.50], [0.06, 5.15, 0.50]],
+		"accent": Color(0.87, 0.66, 0.17), "glow": Color(0.54, 0.35, 0.12),
+		"anim": [[0.06, 4.15, 0.50], [0.06, 4.65, 0.50], [0.06, 5.15, 0.50]],
 	},
 	"rose_gold": {
 		"name": "Rose Gold", "price": 0, "blurb": "Warm metal, quiet finish.",
 		"node": "Frame_07_RoseGold",
-		"accent": Color(1.00, 0.78, 0.72), "glow": Color(0.86, 0.44, 0.42),
-		"anim": [[0.00, 0.00, 0.00], [0.06, 4.98, 0.50], [0.06, 5.98, 0.50]],
+		"accent": Color(0.86, 0.55, 0.47), "glow": Color(0.53, 0.29, 0.33),
+		"anim": [[0.06, 4.98, 0.50], [0.06, 5.48, 0.50], [0.06, 5.98, 0.50]],
 	},
 	"obsidian_chrome": {
 		"name": "Obsidian Chrome", "price": 0, "blurb": "Black, and very shiny.",
 		"node": "Frame_08_ObsidianChrome",
-		"accent": Color(0.72, 0.76, 0.86), "glow": Color(0.24, 0.26, 0.36),
-		"anim": [[0.00, 0.00, 0.00], [0.06, 5.81, 0.50], [0.06, 0.53, 0.50]],
+		"accent": Color(0.43, 0.49, 0.59), "glow": Color(0.27, 0.25, 0.41),
+		"anim": [[0.044, 5.81, 0.3333], [0.044, 0.17, 0.3333], [0.044, 0.53, 0.00]],
 	},
-	# --- 09/10 hides: the stripes hold still, two accents shimmer. ---
+	# --- 09/10 hides: the stripes hold still, the light inside them breathes. ---
 	"zebra_glow": {
-		"name": "Zebra Glow", "price": 0, "blurb": "Wild, in monochrome.",
+		"name": "Zebra Glow", "price": 0, "blurb": "Silver hide, black stripes.",
 		"node": "Frame_09_ZebraGlow",
-		"accent": Color(0.94, 0.95, 1.00), "glow": Color(0.52, 0.66, 0.95),
-		"anim": [[0.12, 0.36, 0.00], [0.12, 1.16, 0.00], [0.06, 2.06, 0.00]],
+		"accent": Color(0.81, 0.83, 0.86), "glow": Color(0.50, 0.43, 0.60),
+		"anim": [[0.155, 0.36, 0.00], [0.155, 1.16, 0.00], [0.08, 2.06, 0.00]],
 	},
 	"tiger_glow": {
 		"name": "Tiger Glow", "price": 0, "blurb": "Molten stripes.",
 		"node": "Frame_10_TigerGlow",
-		"accent": Color(1.00, 0.62, 0.18), "glow": Color(1.00, 0.36, 0.04),
-		"anim": [[0.12, 1.19, 0.00], [0.12, 1.99, 0.00], [0.06, 2.89, 0.00]],
+		"accent": Color(0.86, 0.54, 0.14), "glow": Color(0.53, 0.28, 0.10),
+		"anim": [[0.155, 1.19, 0.00], [0.155, 1.99, 0.00], [0.08, 2.89, 0.00]],
 	},
 	# --- 11-15 patterned: the light travels, the pattern does not. ---
 	"aurora": {
 		"name": "Aurora", "price": 0, "blurb": "Slow colour, moving.",
 		"node": "Frame_11_Aurora",
-		"accent": Color(0.56, 0.92, 0.86), "glow": Color(0.34, 0.42, 0.96),
-		"anim": [[0.00, 0.00, 0.00], [0.13, 2.02, 0.50], [0.08, 3.42, 0.00]],
+		"accent": Color(0.38, 0.55, 0.86), "glow": Color(0.24, 0.29, 0.60),
+		"anim": [[0.06, 2.02, 0.50], [0.06, 2.52, 0.50], [0.06, 3.42, 0.00]],
 	},
 	"circuit": {
 		"name": "Circuit", "price": 0, "blurb": "Pulses down the traces.",
 		"node": "Frame_12_Circuit",
-		"accent": Color(0.30, 0.94, 0.86), "glow": Color(0.06, 0.60, 0.66),
-		"anim": [[0.10, 2.85, 0.25], [0.12, 3.45, 0.25], [0.06, 4.75, 0.00]],
+		"accent": Color(0.16, 0.46, 0.86), "glow": Color(0.10, 0.24, 0.60),
+		"anim": [[0.115, 2.85, 0.25], [0.115, 3.45, 0.25], [0.06, 4.75, 0.00]],
 	},
 	"holographic": {
 		"name": "Holographic", "price": 0, "blurb": "Every colour, faintly.",
 		"node": "Frame_13_Holographic",
-		"accent": Color(0.86, 0.80, 1.00), "glow": Color(0.52, 0.72, 1.00),
-		"anim": [[0.08, 3.68, 0.3333], [0.10, 4.38, 0.3333], [0.07, 5.18, 0.3333]],
+		"accent": Color(0.46, 0.40, 0.91), "glow": Color(0.28, 0.21, 0.63),
+		"anim": [[0.055, 3.68, 0.50], [0.055, 4.38, 0.50], [0.055, 5.18, 0.00]],
 	},
 	"arctic_glow": {
 		"name": "Arctic Glow", "price": 0, "blurb": "Cold shimmer on ice.",
 		"node": "Frame_14_ArcticGlow",
-		"accent": Color(0.78, 0.94, 1.00), "glow": Color(0.34, 0.68, 0.94),
-		"anim": [[0.10, 4.51, 0.50], [0.12, 5.41, 0.50], [0.07, 0.14, 0.50]],
+		"accent": Color(0.60, 0.78, 0.86), "glow": Color(0.37, 0.40, 0.60),
+		"anim": [[0.05, 4.51, 0.00], [0.095, 5.41, 0.50], [0.095, 0.14, 0.50]],
 	},
 	"volcanic_glow": {
 		"name": "Volcanic Glow", "price": 0, "blurb": "Fire under the crust.",
 		"node": "Frame_15_VolcanicGlow",
-		"accent": Color(1.00, 0.52, 0.16), "glow": Color(0.86, 0.16, 0.02),
-		"anim": [[0.14, 5.34, 0.3333], [0.13, 0.14, 0.3333], [0.08, 1.44, 0.00]],
+		"accent": Color(0.86, 0.38, 0.12), "glow": Color(0.53, 0.20, 0.09),
+		"anim": [[0.16, 5.34, 0.00], [0.16, 0.14, 0.3333], [0.08, 1.44, 0.00]],
 	},
 	# --- 16-18 SKIN FRAMES: not sold, not owned, not equippable. Each one belongs to
 	# one Special Skin and is worn automatically while that skin is active (see
@@ -238,28 +265,31 @@ const FRAMES := {
 		"blurb": "Cabinet steel and marquee neon.",
 		"node": "Frame_16_ArcadeCabinet",
 		"accent": Color(0.30, 0.92, 1.00), "glow": Color(0.86, 0.10, 0.66),
-		# the chassis breathes in place (its louvres and ticks are too fine to drift
-		# without smearing); the marquee lamps march one cyan/magenta PAIR per loop,
-		# which is exactly the 1/8 their pattern repeats on
-		"anim": [[0.10, 0.62, 0.00], [0.16, 1.45, 0.125], [0.09, 2.60, 0.00]],
+		# The cabinet's ticks run 12 to a turn and its marquee dashes 48, so the
+		# body advances exactly one tick (1/12) and the accent exactly one dash
+		# pair (1/16) per loop — the authored periods, which is why the pattern
+		# stands still and only the lit features march.
+		"anim": [[0.12, 0.62, 0.0833], [0.15, 1.45, 0.0625], [0.09, 2.60, 0.00]],
 	},
 	"skin_casino": {
 		"name": "House Gold", "price": 0, "skin": "casino",
 		"blurb": "Engraved brass and oxblood.",
 		"node": "Frame_17_CasinoGold",
 		"accent": Color(1.00, 0.84, 0.42), "glow": Color(0.62, 0.06, 0.10),
-		# the gold body carries no light at all — the movement is one highlight
-		# walking the channel and another walking the polished lip, half a turn each
-		"anim": [[0.00, 0.00, 0.00], [0.09, 3.10, 0.50], [0.07, 4.20, 0.50]],
+		# The milled coin edge repeats 120 times a turn with 32- and 64-cycle
+		# scallops over it: the body and the lip carry a highlight half a turn per
+		# loop, the segment ring one scallop (1/16).
+		"anim": [[0.07, 2.60, 0.50], [0.10, 3.10, 0.0625], [0.07, 4.20, 0.50]],
 	},
 	"skin_lunapark": {
 		"name": "Fairground Lights", "price": 0, "skin": "lunapark",
 		"blurb": "Twenty-four bulbs, chasing.",
 		"node": "Frame_18_LunaCarnival",
 		"accent": Color(1.00, 0.86, 0.62), "glow": Color(1.00, 0.52, 0.22),
-		# the canopy glows on the spot; the bulbs' light walks six sockets a loop
-		# (one quarter of twenty-four), which is what makes it a chase and not a hum
-		"anim": [[0.08, 5.05, 0.00], [0.10, 0.35, 0.25], [0.07, 1.90, 0.00]],
+		# The tent stripes stand still (6 to a turn, they would smear); the 24 bulbs
+		# carry a 4-cycle envelope, so their light walks a quarter turn per loop,
+		# which is what makes it a chase and not a hum.
+		"anim": [[0.11, 5.05, 0.00], [0.17, 0.35, 0.25], [0.09, 1.90, 0.00]],
 	},
 }
 
@@ -358,7 +388,7 @@ uniform float breathe = 0.0;     // +- fraction the emission swells by
 uniform float phase = 0.0;       // radians, so no two frames pulse together
 uniform float drift = 0.0;       // u advance of the EMISSIVE sampler per loop
 uniform float cycle = 6.0;
-uniform float sheen = 0.0;       // grazing-angle lift for POLISHED metal only
+uniform float env = 0.0;         // painted room reflection, metals only
 
 void fragment() {
 	ALBEDO = texture(albedo_tex, UV).rgb * albedo_col.rgb;
@@ -377,26 +407,31 @@ void fragment() {
 	vec2 euv = vec2(UV.x + fract(TIME / cycle) * drift, UV.y);
 	EMISSION = texture(emis_tex, euv).rgb * emis_col.rgb * (emis_energy * s);
 
-	// The chrome problem. A fully metallic surface has no diffuse at all, so all it
-	// can show is what it reflects — and this board's studio is deliberately almost
-	// black (ambient 0.13, two directional lights at 0.14), because the coloured
-	// buttons are self-lit and anything brighter lifts the chassis to grey. The
-	// authored near-black frames never noticed; Golden Chrome, Rose Gold and
-	// Obsidian are mirrors with nothing to be a mirror OF, and rendered as mud.
+	// THE PAINTED ROOM.
 	//
-	// So their highlight is painted rather than lit, the same way this project draws
-	// its halos instead of using the (useless) Compatibility glow pass: a Fresnel
-	// lift in the metal's OWN colour, which is what a polished ring picks up off a
-	// room at grazing angles. `sheen` is derived from the material's own metallic
-	// and roughness and is exactly ZERO for every frame that isn't polished metal,
-	// so nothing else in the set is touched by it.
-	if (sheen > 0.0) {
+	// A metallic surface has no diffuse at all: everything it shows is what it
+	// reflects. The frames were authored and verified under the asset's own
+	// five-light presentation room, but this board's studio is deliberately almost
+	// black (ambient 0.13, two directional lights at 0.14) because the coloured
+	// buttons are self-lit and anything brighter lifts the chassis to grey. Put a
+	// metal ring in it and it is a mirror with nothing to be a mirror OF — which is
+	// what turned the silver Zebra body into a black one and left Golden Chrome,
+	// Rose Gold and Obsidian as mud.
+	//
+	// So the room is PAINTED, the same way this project draws its halos instead of
+	// using the (useless) Compatibility glow pass. `env` is derived from the
+	// material's OWN metallic and roughness and multiplies the material's OWN
+	// albedo — no per-frame constant, nothing recoloured, nothing about the
+	// authored material second-guessed. It reproduces the light the asset was lit
+	// by, not a look invented here.
+	//
+	// The split matters: a flat term (the room a ring stands in, which its top land
+	// faces almost squarely under this camera) plus a grazing term (the bright edge
+	// every polished ring has). Fresnel alone leaves exactly the face the player
+	// looks at as dark as before.
+	if (env > 0.0) {
 		float f = pow(1.0 - clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0), 2.6);
-		// A flat term (the room it stands in) plus a grazing term (the bright edge a
-		// polished ring always has). Fresnel alone was not enough: this frame's top
-		// land faces the camera almost squarely, so a pure edge lift left the part
-		// the player actually looks at as dark as before.
-		EMISSION += ALBEDO * (sheen * (0.34 + 0.66 * f));
+		EMISSION += ALBEDO * (env * (0.55 + 0.45 * f));
 	}
 }
 """
@@ -439,7 +474,7 @@ static var _cache: Dictionary = {}
 
 # The library scene, held only between the first build() of a batch and the
 # trim_cache() that closes it. It has to be held for at least that long: the shop
-# asks for all sixteen cards back to back, and reloading a 2.2 MB scene with 32
+# asks for all sixteen cards back to back, and reloading a 3.7 MB scene with 61
 # textures once per card is the difference between opening the tab and hanging on
 # it. It has to be RELEASED at the end, because a live PackedScene references all
 # fifteen meshes and every texture in the set — which is exactly what gameplay must
@@ -502,13 +537,13 @@ static func _material_for(src: Material, spec: Array) -> ShaderMaterial:
 		else:
 			mat.set_shader_parameter("emis_col", Color(0, 0, 0, 1))
 			mat.set_shader_parameter("emis_energy", 0.0)
-	# Polished metal only: full strength at roughness 0, gone by 0.25. Every neon
-	# body in the set sits at 0.26-0.34 and every accent strip is a dielectric, so
-	# this lands on exactly the three chrome frames' bodies and the textured trims
-	# that are authored as mirrors.
+	# Metals only, in proportion to how metallic and how polished they are. Every
+	# accent strip in the set is a dielectric (metallic 0) and gets exactly nothing;
+	# the bodies and trims, which are all metals in this library, get the room back
+	# in their own colour.
 	if sm != null:
-		mat.set_shader_parameter("sheen",
-			SHEEN_MAX * sm.metallic * clampf(1.0 - sm.roughness / SHEEN_ROUGH_CUTOFF, 0.0, 1.0))
+		mat.set_shader_parameter("env",
+			ENV_MAX * sm.metallic * clampf(1.0 - ENV_ROUGH_FADE * sm.roughness, 0.0, 1.0))
 	mat.set_shader_parameter("cycle", CYCLE)
 	mat.set_shader_parameter("breathe", float(spec[0]))
 	mat.set_shader_parameter("phase", float(spec[1]))

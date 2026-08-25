@@ -135,9 +135,7 @@ func _init() -> void:
 	_fit_fill_x = EASY_FIT_FILL_X
 	_fit_fill_y = EASY_FIT_FILL_Y
 	_fit_centre_y = EASY_FIT_CENTRE_Y
-	# No centre module on this board and no flat back edge to hang a plate off, so
-	# the round number is the parent's bottom-left "ROUND n" pill — the same one
-	# Hard uses, in the same corner, for the same reason. The empty middle of the
-	# triangle stays empty: the old wheel's centre hub is not coming back in any
-	# form.
-	_stage_in_board = false
+	# Nothing board-side for the level number: it is the parent's right-edge LEVEL
+	# tab (level_tab.gd), the same readout in the same place on all three
+	# difficulties. The empty middle of the triangle stays empty — the old wheel's
+	# centre hub is not coming back in any form.

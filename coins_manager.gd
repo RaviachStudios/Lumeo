@@ -76,6 +76,34 @@ const THEMES := {
 	"aurora":   {"name": "Northern Lights",   "price": 1050, "category": "themes"},
 	"reef":     {"name": "Coral Reef",        "price": 1200, "category": "themes"},
 	"deepspace":{"name": "Deep Space",        "price": 1600, "category": "themes"},
+	# The nine modelled backgrounds. Everything above is a full-screen 2D shader
+	# painted behind the UI; these are 3D floors that the buttons stand ON, built
+	# into the board's own viewport (BackgroundScenes / memory_game_ui.gd). The shop
+	# side is identical — same owned_themes, same selected_theme, same buy and equip
+	# path — so nothing here or in the shop needs to know the difference.
+	#
+	# The "bg_" prefix is not decoration: "deepspace" and "aurora" are already taken
+	# by two of the shader themes above, and these ids are what saved wallets
+	# contain.
+	#
+	# All nine ship at 0 coins, the same way every ButtonFrames cosmetic does.
+	# purchase_theme still runs the full deduct-and-save path for them (a price of 0
+	# deducts 0), so re-pricing any of them later is a one-line edit here and
+	# nothing else has to change. They are deliberately NOT added to owned_themes by
+	# default: a player still taps Buy once, which is what puts the id in their
+	# wallet and makes the equip state persist.
+	"bg_neongrid":  {"name": "Neon Grid",     "price": 0, "category": "themes"},
+	"bg_hexfloor":  {"name": "Hexagon Floor", "price": 0, "category": "themes"},
+	"bg_circuit":   {"name": "Circuit Board", "price": 0, "category": "themes"},
+	"bg_darkmetal": {"name": "Dark Metal",    "price": 0, "category": "themes"},
+	# Named "Deep Void" rather than "Deep Space": the shader theme five lines up is
+	# already called that, and two cards with the same name in the same tab is not
+	# something the buy flow can disambiguate for the player.
+	"bg_deepspace": {"name": "Deep Void",     "price": 0, "category": "themes"},
+	"bg_volcanic":  {"name": "Volcanic",      "price": 0, "category": "themes"},
+	"bg_arcade":    {"name": "Arcade Room",   "price": 0, "category": "themes"},
+	"bg_crystal":   {"name": "Crystal Cave",  "price": 0, "category": "themes"},
+	"bg_aurora":    {"name": "Aurora",        "price": 0, "category": "themes"},
 }
 
 # Difficulty unlocks. Every difficulty is free to play — this is the set of

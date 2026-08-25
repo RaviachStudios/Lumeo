@@ -69,18 +69,11 @@ const HARD_FIT_CENTRE_Y := 0.45
 # ---------------------------------------------------------------------------
 # Round readout
 # ---------------------------------------------------------------------------
-# Medium lies its round number on the board behind the back button, which works
-# because a pentagon has a flat back edge and dead space behind it. A hexagon has
-# neither: a plate back there is off to one side of nothing, and paying for it in
-# the camera fit costs ~15% of every button's on-screen size.
-#
-# So Hard sets `_stage_in_board = false` and takes the parent's bottom-left
-# "ROUND n" pill instead — 2D UI drawn over the board, outside all six buttons at
-# every viewport aspect, clear of the status pill in the bottom centre and of the
-# watch-ad button, Quit and the coins pill along the top. That pill used to live
-# in this file; it moved to MemoryGameUI unchanged when Easy's triangular board
-# turned out to need exactly the same thing (see easy_game_ui.gd). Nothing about
-# how it looks or where it sits changed in the move.
+# Nothing board-side. The level number is the parent's right-edge LEVEL tab
+# (level_tab.gd), the same readout in the same place on all three difficulties.
+# It used to be a plate lying on the board here — a hexagon has no flat back edge
+# to hang one off, and paying for one in the camera fit cost ~15% of every
+# button's on-screen size, so this board never had one and now nothing does.
 
 # The board spec. Everything not named here stays exactly as MemoryGameUI has it —
 # including SPACING_SCALE (this board is authored at the same 2.15 centre-to-centre
@@ -99,4 +92,3 @@ func _init() -> void:
 	_fit_fill_x = HARD_FIT_FILL_X
 	_fit_fill_y = HARD_FIT_FILL_Y
 	_fit_centre_y = HARD_FIT_CENTRE_Y
-	_stage_in_board = false

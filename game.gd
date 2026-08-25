@@ -1044,7 +1044,10 @@ func _game_over() -> void:
 
 func _update_hud() -> void:
 	if _wheel:
-		_wheel.set_level(level)
+		# Clamped at 1: _start_game calls this with level 0 before it starts the
+		# first round, and the LEVEL tab animates every change it is given — there
+		# is no round zero to roll away from.
+		_wheel.set_level(maxi(level, 1))
 	if _watch_ad_btn:
 		_watch_ad_btn.visible = AdManager.rewarded_ready
 

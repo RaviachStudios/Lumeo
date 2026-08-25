@@ -115,12 +115,9 @@ func _report() -> void:
 			mx = mx.max(s)
 	print("  buttons occupy x[%d..%d] of %d, y[%d..%d] of %d" % [
 		mn.x, mx.x, img.get_width(), mn.y, mx.y, img.get_height()])
-	var plate := _dev_vp.find_child("StagePlate", true, false) as Node3D
-	var lbl := _dev_vp.find_child("RoundNumber", true, false) as Label3D
-	if plate:
-		var s := cam.unproject_position(plate.position)
-		print("  stage plate centre screen=(%d,%d)  px=%s" % [
-			int(s.x), int(s.y), img.get_pixel(int(s.x), int(s.y))])
+	var tab: Control = _dev._tab
+	if tab:
+		print("  level tab rect=%s  showing %s" % [Rect2(tab.position, tab.size), tab._num.text])
 	# Ground pools, sampled outward from Crimson into the empty front-left where
 	# no other button contributes. Reference profile (its own hue channel, of 255):
 	#   r 1.25 -> 35   1.50 -> 31   1.75 -> 25   2.00 -> 21   2.50 -> 16

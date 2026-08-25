@@ -14,8 +14,8 @@ class_name MemoryGameUI
 # transforms and material values, never geometry:
 #   * the five button parents are pushed outward by SPACING_SCALE,
 #   * the Jade button is darkened to separate it from Cyan,
-#   * the round number is a Godot-side stage plate, because the V3 board has no
-#     centre module to put it in.
+#   * the round number is a Godot-side HUD tab, because the V3 board has no
+#     centre module to put it in (see level_tab.gd — every board uses it).
 #
 # Public API is a drop-in superset of SimonWheel's, so game.gd drives it with the
 # exact same calls (see game.gd's _wheel):
@@ -26,7 +26,7 @@ class_name MemoryGameUI
 #   set_lit(idx, on)              -> HIGHLIGHT emission (sequence playback)
 #   set_press(idx, amount)        -> Press_* clip + PRESSED emission
 #   segment_at_point(local_pos)   -> button index under a tap, or -1
-#   set_level(n)                  -> stage-number readout
+#   set_level(n)                  -> the LEVEL tab's readout
 #   apply_button_frame(frame_id)  -> wear a frame cosmetic on every bezel
 #                                    (resolved through _refresh_frame, so an active
 #                                     Special Skin's own frame outranks the equipped one)
@@ -54,10 +54,13 @@ class_name MemoryGameUI
 # (hard_game_ui.gd) for the six-button hexagon and EASY subclasses it
 # (easy_game_ui.gd) for the three-button triangle; each overrides only that
 # handful of values. The spacing, the emission state machine, the press clips, the
-# hit-testing, the camera fitting, the round pill and the frame cosmetics are the
+# hit-testing, the camera fitting, the LEVEL tab and the frame cosmetics are the
 # same code, unchanged, for all three.
 
 const MODEL: PackedScene = preload("res://models/MemoryGame_UI_Medium.glb")
+# The right-edge LEVEL readout, shared by all three boards. Preloaded rather than
+# referenced by class_name so it never depends on the editor's global-class scan.
+const LEVEL_TAB := preload("res://level_tab.gd")
 
 # Button index -> the GLB's colour key. The index order matches game.gd's
 # BUTTON_COLORS (Red, Green, Blue, Yellow, Orange) so the existing per-index tones
@@ -107,6 +110,12 @@ const SPACING_SCALE := 1.15
 # relationships the asset was authored with. The bright rim ring is deliberately
 # left alone — every button's ring is near-white, and dimming only Jade's would
 # make it the odd one out.
+# The authored radius of a button's frame disc, identical on all three boards
+# (they are the same button, vertex for vertex — see easy_game_ui.gd's note). Used
+# to work out how far the outermost button reaches, which is what limits how far a
+# 3D background may be seated (see _seat_background).
+const FRAME_RADIUS := 1.0
+
 const JADE_KEY := "Jade"
 const JADE_TARGET := Color("087a58")
 # How far the Jade emission and under-glow are pulled down. In pure colour terms
@@ -142,9 +151,20 @@ const CAM_DIST_MAX := 26.0
 # How much of the frame the board is fitted into, and where its centre lands.
 # The composition fills the viewport; the small vertical bias lifts it off the
 # bottom edge so game.gd's status pill has the front gap to itself.
+#
+# The band shrank from 0.89/0.485 when the round number stopped being a plate
+# lying on the board: the plate's corners were fit points, and dropping them let
+# the five buttons grow into the room it had been holding — far enough that the
+# two front buttons dipped into the status pill's row. These numbers put the
+# nearest button ~14 px clear of that pill, which is the clearance Easy and Hard
+# are already tuned to. They are very nearly Hard's own band (0.83/0.45), which
+# is the sanity check: same tabletop, same HUD above and below it, same answer.
+# The buttons still come out ~14% BIGGER than they were with the plate — the old
+# band was wider but the plate was eating the top of it. Measured, not guessed:
+# tools/tab_clear.tscn reports the clearance per board per aspect.
 const FIT_FILL_X := 0.94
-const FIT_FILL_Y := 0.89
-const FIT_CENTRE_Y := 0.485
+const FIT_FILL_Y := 0.83
+const FIT_CENTRE_Y := 0.448
 
 # ---------------------------------------------------------------------------
 # Emission states
@@ -203,11 +223,9 @@ const GLOW_R_CUT := 3.20      # ...and is gone here (the reference keeps its
                               # over the whole frame)
 const GLOW_PLANE_Y := 0.012   # just off the board plane, under every frame
 const GLOW_PLANE_SIZE := 18.0
-# Draw order for the transparent layers: pools on the board, then the stage
-# plate, then its numeral on top of the plate.
+# Draw order for the transparent layers: the ground pools sit under everything
+# else in the 3D scene.
 const GLOW_PRIORITY := -2
-const STAGE_PLATE_PRIORITY := -1
-const STAGE_TEXT_PRIORITY := 1
 
 const GLOW_SHADER := """
 shader_type spatial;
@@ -252,91 +270,22 @@ void fragment() {
 """
 
 # ---------------------------------------------------------------------------
-# Stage plate (the round number)
+# The LEVEL readout
 # ---------------------------------------------------------------------------
-# The V3 board has no centre module, so the round number is added here. It is NOT
-# put in the empty middle: it lies flat ON the board plane behind the back button,
-# so it shares the board's perspective, foreshortening and lighting and reads as
-# part of the same physical object rather than as a label floating over it.
+# None of the three boards models one: there is no centre module on any of them,
+# and the empty middle stays empty on all three (the old wheel's centre hub is not
+# coming back in any form). The readout is 2D HUD instead — `level_tab.gd`'s
+# deluxe tab, seated against the RIGHT edge under game.gd's Quit dome, identical
+# on Easy, Medium and Hard.
 #
-# It is a compact pill — a dark inset plate with a thin cool hairline edge — sized
-# and dimmed to stay clearly secondary to the five colours.
-const STAGE_POS := Vector3(0.0, 0.014, -5.10)
-const STAGE_SIZE := Vector2(2.60, 1.18)      # full width/depth of the pill
-const STAGE_CORNER := 0.59                   # = half the depth, so it is a capsule
-const STAGE_EDGE := 0.055                    # hairline thickness
-const STAGE_FILL := Color(0.20, 0.215, 0.25, 0.90)
-# HDR: AgX at this exposure rolls 1.0 down to a mid grey, so a hairline that
-# should read as bright metal has to be driven past white.
-const STAGE_EDGE_COLOR := Color(1.15, 1.30, 1.55)
-const STAGE_DIGIT_H := 0.78                  # cap height of the numeral
-const STAGE_MAX_W := 1.95
-const STAGE_FONT_SIZE := 96
-const STAGE_CAP_RATIO := 0.733               # cap height as a fraction of font_size
-const STAGE_BASELINE_BIAS := 0.024           # centres the digit ink, not the line box
-const STAGE_TEXT_COLOR := Color(0.86, 0.90, 0.96)
-const STAGE_TEXT_ENERGY := 2.60
-const STAGE_FONT_PATH := "res://fonts/arial.ttf"
-const STAGE_EMBOLDEN := 0.36
-
-const STAGE_SHADER := """
-shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
-
-uniform vec2 half_size;
-uniform float corner;
-uniform float edge;
-uniform vec4 fill_color : source_color;
-uniform vec4 edge_color : source_color;
-
-varying vec2 plate;
-
-void vertex() {
-	plate = VERTEX.xz;
-}
-
-void fragment() {
-	// Rounded-rectangle distance: negative inside, zero on the outline.
-	vec2 d = abs(plate) - (half_size - vec2(corner));
-	float sd = length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - corner;
-	float aa = max(fwidth(sd), 0.0015);
-	float inside = 1.0 - smoothstep(-aa, aa, sd);
-	// A hairline band hugging the outline from the inside.
-	float band = 1.0 - smoothstep(edge - aa, edge + aa, abs(sd + edge * 0.5));
-	band *= inside;
-	vec3 col = mix(fill_color.rgb, edge_color.rgb, band);
-	float a = max(fill_color.a * inside, edge_color.a * band);
-	ALBEDO = col;
-	ALPHA = a;
-}
-"""
-
-# ---------------------------------------------------------------------------
-# Round pill (the round number, when the board carries no plate)
-# ---------------------------------------------------------------------------
-# The alternative to the stage plate above, selected by `_stage_in_board = false`.
-# Medium can lie its round number on the board because a pentagon has a flat back
-# edge and dead space behind it. Hard's hexagon and Easy's triangle have neither:
-# a plate back there is off to one side of nothing, and paying for it in the
-# camera fit costs ~15% of every button's on-screen size.
+# Two earlier readouts are gone with it: Medium's plate lying on the board behind
+# its back button (which cost the camera fit ~15% of every button's on-screen size
+# and only a pentagon had an edge to hang it off) and Easy/Hard's flat "ROUND n"
+# pill in the bottom-left corner. One readout, one corner, one look.
 #
-# So those boards get separate 2D UI instead, drawn over the board in the
-# bottom-LEFT corner — outside every button at every viewport aspect (both
-# silhouettes leave the bottom corners empty), clear of game.gd's status pill in
-# the bottom centre, and clear of the watch-ad button, Quit and the coins pill
-# along the top. Nothing is ever placed in the empty middle: the old centre
-# button is not coming back in any form.
-const PILL_MARGIN := Vector2(20.0, 84.0)         # from the left/bottom edges
-const PILL_PAD := Vector2(18.0, 8.0)
-const PILL_GAP := 10.0                           # between "ROUND" and the numeral
-const PILL_CAPTION_SIZE := 15
-const PILL_NUMBER_SIZE := 30
-const PILL_HEIGHT := 52.0
-const PILL_BG := Color(0.04, 0.05, 0.13, 0.80)
-const PILL_BORDER := Color(0.45, 0.55, 1.0, 0.35)
-const PILL_SHADOW := Color(0.15, 0.25, 0.7, 0.30)
-const PILL_CAPTION_COLOR := Color(0.62, 0.70, 0.90)
-const PILL_NUMBER_COLOR := Color(0.93, 0.95, 1.0)
+# The board fit reserves the tab's column so no button can ever grow into it —
+# see `_fit_camera`, which only pays for that reserve on aspects where width
+# binds.
 
 # Emitted when a button is tapped, if this device is handling its own input
 # (see input_enabled). game.gd drives input itself, so it turns that off — these
@@ -356,7 +305,7 @@ var input_enabled := true
 # The whole of "which board is this". Every value here defaults to the Medium
 # board, so this class on its own is exactly what it always was; hard_game_ui.gd
 # overrides them in its _init() and inherits the rest of the file untouched.
-# Nothing below this block ever reads the MODEL / COLOR_KEYS / CAM_* / STAGE_POS
+# Nothing below this block ever reads the MODEL / COLOR_KEYS / CAM_*
 # constants directly — they are the DEFAULTS, and these vars are the truth.
 var _model: PackedScene = MODEL
 var _keys: Array = COLOR_KEYS
@@ -370,12 +319,6 @@ var _cam_dist_start: float = CAM_DIST_START
 var _fit_fill_x: float = FIT_FILL_X
 var _fit_fill_y: float = FIT_FILL_Y
 var _fit_centre_y: float = FIT_CENTRE_Y
-var _stage_pos: Vector3 = STAGE_POS
-# Whether the round number is the modelled plate lying on the board (Medium's
-# pentagon has a flat back edge for it to sit behind) or is left to the subclass
-# to present some other way. Hard's hexagon has no such edge, so it turns this off
-# and puts the readout in a 2D HUD pill instead — see hard_game_ui.gd.
-var _stage_in_board := true
 
 var _vpc: SubViewportContainer
 var _vp: SubViewport
@@ -411,10 +354,8 @@ var _anim_frame := -1
 # into both a MouseButton and a ScreenTouch event.
 var _tap_frame := -1
 
-var _readout: Label3D              # the round numeral, when _stage_in_board
-var _pill: Panel                   # ...and the 2D pill it uses when not
-var _pill_caption: Label
-var _pill_number: Label
+var _tab: Control                  # the left-edge LEVEL readout (LEVEL_TAB)
+var _board_rect := Rect2()         # the board's silhouette on screen, from the fit
 var _num_pack: Variant = null
 var _glow_mat: ShaderMaterial
 var _fit_points: PackedVector3Array = PackedVector3Array()
@@ -433,6 +374,12 @@ func _ready() -> void:
 	# owns this rather than game.gd because the cosmetic is purely presentational
 	# and has nothing to do with the round in progress.
 	CoinsManager.frames_changed.connect(_on_frames_changed)
+	# Equipping a 3D background in the shop re-dresses a live board the same way a
+	# frame does. Both signals fire on equip; themes_changed is the one that carries
+	# a background change, and simon_changed because equipping a complete skin drops
+	# whatever theme was on.
+	CoinsManager.themes_changed.connect(_on_background_changed)
+	CoinsManager.simon_changed.connect(_on_background_changed)
 
 # ---------------- build ----------------
 
@@ -469,6 +416,7 @@ func _build_shell() -> void:
 	_build_environment()
 	_build_camera()
 	_build_lights()
+	_build_background()
 
 	_board = _model.instantiate() as Node3D
 	_vp.add_child(_board)
@@ -479,10 +427,7 @@ func _build_shell() -> void:
 	_build_buttons()
 	_refresh_frame()
 	_build_ground_glow()
-	if _stage_in_board:
-		_build_stage_plate()
-	else:
-		_build_round_pill()
+	_build_level_tab()
 	_collect_fit_points()
 	_fit_camera()
 
@@ -595,6 +540,23 @@ func _place_camera(dist: float, slide: Vector3) -> void:
 	# look_at_from_position works off-tree too.
 	_cam.look_at_from_position(pos, target, Vector3.UP)
 
+# The visual layer the board itself occupies. Both lights below are culled to it,
+# so they light the buttons and nothing else.
+#
+# That matters only once a 3D background is behind them (BackgroundScenes puts its
+# meshes on layer 2). These two are a studio rig, not a physical one: their diffuse
+# is almost nothing and their SPECULAR is turned up past 1 precisely to plant a
+# highlight on six small metallic bezels. Pointed at a 20x15 metre floor of
+# metallic 0.3 / roughness 0.33 the same rig lays a broad grey sheen across the
+# whole frame — measured at (71,80,95) in the top-right corner of Neon Grid against
+# the Blender reference's (3,14,29), which is the single largest difference the
+# import had. Blender lights the floor with the background's OWN 47-light rig, and
+# so now does this.
+#
+# Nothing about the buttons changes: they are on BOARD_LAYER and this is the only
+# layer these lights were ever reaching.
+const BOARD_LAYER := 1
+
 func _build_lights() -> void:
 	# Front-upper-left key. Diffuse is small — the tops carry their own colour as
 	# emission — but the specular lobe is what puts the studio highlight on every
@@ -606,6 +568,7 @@ func _build_lights() -> void:
 	key.light_specular = 1.5
 	key.light_color = Color(1.0, 0.99, 0.97)
 	key.shadow_enabled = false
+	key.light_cull_mask = BOARD_LAYER
 	_vp.add_child(key)
 
 	# A cool grazing fill from behind the board. It barely touches anything facing
@@ -617,6 +580,7 @@ func _build_lights() -> void:
 	fill.light_specular = 1.2
 	fill.light_color = Color(0.80, 0.86, 1.0)
 	fill.shadow_enabled = false
+	fill.light_cull_mask = BOARD_LAYER
 	_vp.add_child(fill)
 
 # Per button: give the coloured face, its rim ring and the under-glow their OWN
@@ -795,159 +759,23 @@ func _push_glow() -> void:
 		tints.append(_pool_tint[idx] * (GLOW_PEAK * _ring_cur[idx]))
 	_glow_mat.set_shader_parameter("tints", tints)
 
-# The stage plate: a pill lying on the board behind the back button, carrying the
-# round number. Nothing about the five buttons is touched, and nothing is placed
-# in the empty middle.
-func _build_stage_plate() -> void:
-	var plane := PlaneMesh.new()
-	plane.size = STAGE_SIZE * 1.4        # room for the rounded corners' antialiasing
-	var sh := Shader.new()
-	sh.code = STAGE_SHADER
-	var mat := ShaderMaterial.new()
-	mat.shader = sh
-	# Explicit ordering for the three transparent layers. Distance sorting alone
-	# put the plate on top of its own numeral — the fill is 90% opaque, so the
-	# number came back out at (37,45,48), barely above the fill itself.
-	mat.render_priority = STAGE_PLATE_PRIORITY
-	mat.set_shader_parameter("half_size", STAGE_SIZE * 0.5)
-	mat.set_shader_parameter("corner", STAGE_CORNER)
-	mat.set_shader_parameter("edge", STAGE_EDGE)
-	mat.set_shader_parameter("fill_color", STAGE_FILL)
-	mat.set_shader_parameter("edge_color", STAGE_EDGE_COLOR)
+# ---------------- the LEVEL tab ----------------
 
-	var plate := MeshInstance3D.new()
-	plate.name = "StagePlate"
-	plate.mesh = plane
-	plate.material_override = mat
-	plate.position = _stage_pos
-	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_vp.add_child(plate)
-
-	var l := Label3D.new()
-	l.name = "RoundNumber"
-	l.text = "1"
-	l.font_size = STAGE_FONT_SIZE
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	# A lit readout emits its own light; shading it would sink it into the board's
-	# shadow and it would stop reading as part of the plate.
-	l.shaded = false
-	l.double_sided = false
-	l.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-	l.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	l.no_depth_test = false
-	l.render_priority = STAGE_TEXT_PRIORITY
-	l.modulate = STAGE_TEXT_COLOR * STAGE_TEXT_ENERGY
-	l.font = _stage_font()
-	# Lie the glyphs down onto the board: -90 deg about X puts the text plane's
-	# normal along +Y and its top toward -Z (the far edge, which is up on screen),
-	# so it reads the right way round under this camera.
-	l.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
-	l.position = _stage_pos + Vector3(0.0, 0.004, 0.0)
-	_vp.add_child(l)
-	_readout = l
-	_fit_readout()
-
-# Size and seat the readout so the digits keep a constant cap height, shrinking
-# only when a long number would overrun the plate.
-func _fit_readout() -> void:
-	if _readout == null:
-		return
-	var f: Font = _readout.font if _readout.font != null else ThemeDB.fallback_font
-	var cap_px := float(STAGE_FONT_SIZE) * STAGE_CAP_RATIO
-	var ps := STAGE_DIGIT_H / maxf(1.0, cap_px)
-	var w: float = f.get_string_size(
-		_readout.text, HORIZONTAL_ALIGNMENT_LEFT, -1, STAGE_FONT_SIZE).x * ps
-	if w > STAGE_MAX_W:
-		ps *= STAGE_MAX_W / w
-	_readout.pixel_size = ps
-	# Label3D centres the line box, but digits have no descender, so their ink sits
-	# above that centre. Push it back down by the measured bias. On the flat plate
-	# "down" on screen is +Z.
-	_readout.position.z = _stage_pos.z + STAGE_BASELINE_BIAS * float(STAGE_FONT_SIZE) * ps
-
-func _stage_font(base: Font = null) -> Font:
-	var src: Font = base
-	if src == null and ResourceLoader.exists(STAGE_FONT_PATH):
-		var f := load(STAGE_FONT_PATH)
-		if f is Font:
-			src = f
-	if src == null:
-		return null
-	var fv := FontVariation.new()
-	fv.base_font = src
-	fv.variation_embolden = STAGE_EMBOLDEN
-	return fv
-
-# ---------------- round pill ----------------
-
-# The round pill: dark glass, the same language as game.gd's status pill so the
-# two read as one HUD. It is a sibling of the SubViewportContainer and therefore
-# draws over the board, but it ignores mouse input, so a tap that lands on it
-# still reaches game.gd and is hit-tested against the board underneath.
-func _build_round_pill() -> void:
-	_pill = Panel.new()
-	_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var st := StyleBoxFlat.new()
-	st.bg_color = PILL_BG
-	st.set_corner_radius_all(int(PILL_HEIGHT * 0.5))
-	st.border_color = PILL_BORDER
-	st.set_border_width_all(1)
-	st.shadow_color = PILL_SHADOW
-	st.shadow_size = 14
-	_pill.add_theme_stylebox_override("panel", st)
-	add_child(_pill)
-
-	_pill_caption = _pill_label(PILL_CAPTION_SIZE, PILL_CAPTION_COLOR)
-	_pill_caption.text = "ROUND"
-	_pill.add_child(_pill_caption)
-
-	_pill_number = _pill_label(PILL_NUMBER_SIZE, PILL_NUMBER_COLOR)
-	_pill_number.text = "1"
-	_pill.add_child(_pill_number)
-
-	_apply_num_pack()
-	_layout_round_pill()
-
-func _pill_label(font_size: int, color: Color) -> Label:
-	var l := Label.new()
-	l.add_theme_font_size_override("font_size", font_size)
-	l.add_theme_color_override("font_color", color)
-	l.add_theme_color_override("font_shadow_color", Color(0, 0.02, 0.08, 0.6))
-	l.add_theme_constant_override("shadow_offset_x", 0)
-	l.add_theme_constant_override("shadow_offset_y", 2)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return l
-
-# Size the pill to its contents and seat it in the bottom-left corner. Called
-# whenever the text or the Control's own size changes, so the pill tracks a
-# rotation or a resize the same way the rest of the HUD does.
-func _layout_round_pill() -> void:
-	if _pill == null:
-		return
-	var cw := _text_width(_pill_caption, PILL_CAPTION_SIZE)
-	var nw := _text_width(_pill_number, PILL_NUMBER_SIZE)
-	var w := PILL_PAD.x * 2.0 + cw + PILL_GAP + nw
-	_pill.size = Vector2(w, PILL_HEIGHT)
-	_pill.position = Vector2(PILL_MARGIN.x, maxf(0.0, size.y - PILL_MARGIN.y - PILL_HEIGHT))
-	_pill_caption.position = Vector2(PILL_PAD.x, 0.0)
-	_pill_caption.size = Vector2(cw, PILL_HEIGHT)
-	_pill_number.position = Vector2(PILL_PAD.x + cw + PILL_GAP, 0.0)
-	_pill_number.size = Vector2(nw, PILL_HEIGHT)
-
-func _text_width(l: Label, font_size: int) -> float:
-	var f: Font = l.get_theme_font("font")
-	if f == null:
-		f = ThemeDB.fallback_font
-	return f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+# The round readout: a sibling of the SubViewportContainer, so it draws over the
+# board. It ignores mouse input, so a tap that lands on it still reaches game.gd
+# and is hit-tested against the board underneath. _fit_camera positions it, since
+# where it sits depends on where the board's left edge landed.
+func _build_level_tab() -> void:
+	_tab = LEVEL_TAB.new()
+	add_child(_tab)
+	_tab.layout_in(size, _board_rect)
+	_tab.apply_number_pack(_num_pack)
 
 # ---------------- camera fitting ----------------
 
 # Every point the framing must not crop: each button's frame rim and the top edge
-# of its raised surface, plus the stage plate's corners. Gathered once, since none
-# of it moves (the press animation only sinks a surface).
+# of its raised surface. Gathered once, since none of it moves (the press
+# animation only sinks a surface).
 func _collect_fit_points() -> void:
 	_fit_points = PackedVector3Array()
 	for idx in _count:
@@ -958,12 +786,6 @@ func _collect_fit_points() -> void:
 			var sa := sin(a)
 			_fit_points.append(Vector3(c.x + ca * 1.0, 0.0, c.y + sa * 1.0))
 			_fit_points.append(Vector3(c.x + ca * 0.745, 0.525, c.y + sa * 0.745))
-	if not _stage_in_board:
-		return
-	var hs := STAGE_SIZE * 0.5
-	for sx: float in [-1.0, 1.0]:
-		for sz: float in [-1.0, 1.0]:
-			_fit_points.append(_stage_pos + Vector3(hs.x * sx, 0.0, hs.y * sz))
 
 # Frame the board: pull the camera back until everything fits the viewport with a
 # margin, then slide the rig so the composition sits centred. Both steps iterate,
@@ -976,6 +798,22 @@ func _fit_camera() -> void:
 	if vp.x < 8.0 or vp.y < 8.0:
 		return
 	_fitted_size = _vp.size
+	# The LEVEL tab holds a fixed column against the LEFT edge, and no button may
+	# ever grow into it. It enters the fit as two LIMITS rather than as a margin:
+	# the width the board may span, and how far LEFT its centre may sit. Neither
+	# limit changes the board's SIZE on 16:9 and wider — height binds there, so the
+	# scale, the elevation, the lens and the button spacing are exactly what they
+	# were; the board only slides sideways to sit beside the column instead of on
+	# top of it. A narrow (tall) aspect, where width binds, also shrinks — same as
+	# it always did, since the column simply moved sides.
+	# _fit_fill_x is a margin as much as a width: the board is meant to keep
+	# (1 - fill) / 2 of the viewport clear on each side. The reserved column
+	# replaces that margin on the left; the right keeps it, so a tall viewport —
+	# where width binds and the column actually costs something — cannot push the
+	# far edge of the board flush against the screen.
+	var far_margin := vp.x * (1.0 - _fit_fill_x) * 0.5
+	var avail_x := minf(vp.x * _fit_fill_x,
+		maxf(vp.x - LEVEL_TAB.reserved_width() - far_margin, 64.0))
 	var dist := _cam_dist_start
 	var slide := Vector3.ZERO
 	for _pass in 3:
@@ -989,7 +827,7 @@ func _fit_camera() -> void:
 		var span := mx - mn
 		if span.x <= 0.0 or span.y <= 0.0:
 			return
-		var k := maxf(span.x / (vp.x * _fit_fill_x), span.y / (vp.y * _fit_fill_y))
+		var k := maxf(span.x / avail_x, span.y / (vp.y * _fit_fill_y))
 		dist = clampf(dist * k, CAM_DIST_MIN, CAM_DIST_MAX)
 		# Re-centre. Pixels -> world at the target's depth, then slide the rig along
 		# its own right/up axes so the framing translates without tilting.
@@ -1001,12 +839,38 @@ func _fit_camera() -> void:
 			mn = mn.min(s)
 			mx = mx.max(s)
 		var centre := (mn + mx) * 0.5
-		var want := Vector2(vp.x * 0.5, vp.y * _fit_centre_y)
+		# Centred, unless that would put the board's left edge under the tab, in
+		# which case it sits as far left as it can without doing so — and never so
+		# far right that it crops on the other side.
+		var half := span.x * 0.5
+		var lo := LEVEL_TAB.reserved_width() + half
+		var cx := clampf(vp.x * 0.5, lo, maxf(lo, vp.x - far_margin - half))
+		var want := Vector2(cx, vp.y * _fit_centre_y)
 		var per_world := (vp.y * 0.5) / (tan(deg_to_rad(_cam_fov_y()) * 0.5) * dist)
 		var delta := (want - centre) / maxf(per_world, 0.0001)
 		var b := _cam.global_transform.basis
 		slide += b.x * -delta.x + b.y * delta.y
 	_place_camera(dist, slide)
+	_board_rect = _screen_rect()
+	_seat_background()
+	if _tab != null:
+		_tab.layout_in(Vector2(_vp.size), _board_rect)
+
+# Where the board's silhouette actually lands on screen, in viewport pixels. The
+# tab seats itself against this rather than against a guessed margin, so each
+# board's own width decides how much air the badge gets.
+func _screen_rect() -> Rect2:
+	if _cam == null:
+		return Rect2()
+	var mn := Vector2(INF, INF)
+	var mx := Vector2(-INF, -INF)
+	for p: Vector3 in _fit_points:
+		var s := _cam.unproject_position(p)
+		mn = mn.min(s)
+		mx = mx.max(s)
+	if mn.x > mx.x:
+		return Rect2()
+	return Rect2(mn, mx - mn)
 
 # The effective VERTICAL fov. The camera is KEEP_WIDTH, so `fov` is horizontal and
 # the vertical one follows the viewport's aspect.
@@ -1220,19 +1084,11 @@ func set_all_enabled(on: bool) -> void:
 	for i in _count:
 		set_button_enabled(i, on)
 
-# The round number, on whichever readout this board carries — the plate lying on
-# the board, or the 2D pill in the bottom-left corner. Nothing about the buttons
-# changes either way.
+# The round number, on the right-edge LEVEL tab. Nothing about the buttons or the
+# 3D scene changes, so this never has to kick the viewport.
 func set_round_number(value: int) -> void:
-	if _pill_number != null:
-		_pill_number.text = str(value)
-		_layout_round_pill()
-		return
-	if _readout == null:
-		return
-	_readout.text = str(value)
-	_fit_readout()
-	_kick_render()
+	if _tab != null:
+		_tab.set_level(value)
 
 func frame_mesh(color_name: String) -> MeshInstance3D:
 	var idx := index_of(color_name)
@@ -1366,14 +1222,16 @@ func _input(event: InputEvent) -> void:
 # The container is anchored to this Control's full rect and drives the
 # SubViewport's size, so a resize only has to re-fit the framing.
 func _on_resized() -> void:
+	# _fit_camera re-seats the tab itself: the badge is placed against the board's
+	# new silhouette, so it can only be positioned once the fit has settled.
 	_fit_camera()
-	_layout_round_pill()
 	_kick_render()
 
 func _process(dt: float) -> void:
 	if _vp != null and _vp.size != _fitted_size:
 		_fit_camera()
 	_tick_frame_idle(dt)
+	_tick_bg_idle(dt)
 	var animating := _ap != null and _ap.is_playing()
 	var glow_dirty := false
 	var k := clampf(dt * EMIT_LERP, 0.0, 1.0)
@@ -1422,6 +1280,114 @@ var _skin_id := ""
 var _frame_idle := false            # is an ANIMATED cosmetic equipped?
 var _frame_idle_accum := 0.0
 
+# ---------------------------------------------------------------------------
+# The 3D gameplay background
+# ---------------------------------------------------------------------------
+# The nine LUME backgrounds (BackgroundScenes) are floors, not wallpaper: they were
+# authored in Blender against this exact camera, with the buttons standing on them.
+# So they are built into THIS viewport, as a sibling of the board, and share its
+# camera, its depth buffer and its tonemap. A button occludes the grid line behind
+# it, its ground pool lands on the floor, and the whole composition is one render.
+#
+# Everything else about the board is untouched by this. The background's meshes sit
+# on their own visual layer and its lights are culled to that layer, so no button's
+# colour, emission or frame can be moved by whatever is equipped behind it.
+#
+# The paid 2D themes are unaffected too: BackgroundManager paints those on a
+# CanvasLayer beneath this viewport, and this viewport is transparent everywhere a
+# 3D background is not drawn — so exactly one of the two is ever visible.
+var _bg_scene: Node3D
+var _bg_id := ""
+var _bg_idle := false               # is an ANIMATED background equipped?
+var _bg_idle_accum := 0.0
+
+func _build_background() -> void:
+	var want := _wanted_background()
+	if want == _bg_id:
+		return
+	_bg_id = want
+	if _bg_scene != null:
+		_bg_scene.queue_free()
+		_bg_scene = null
+	_bg_idle = false
+	if want.is_empty():
+		return
+	_bg_scene = BackgroundScenes.build(want)
+	if _bg_scene == null:
+		_bg_id = ""
+		return
+	_vp.add_child(_bg_scene)
+	_bg_idle = BackgroundScenes.is_animated(want)
+	_seat_background()
+
+# Which 3D background should be showing, or "" for none. A complete Special Skin
+# outranks everything while it is on — the same rule BackgroundManager applies to
+# the 2D themes — so a skin's bespoke world is never half-covered by a floor.
+func _wanted_background() -> String:
+	if not CoinsManager.is_simon_manual():
+		return ""
+	var t: String = CoinsManager.selected_theme
+	return t if BackgroundScenes.has_scene(t) else ""
+
+# Slide the 3D background along the ground so the composition its author framed
+# lands where they framed it under THIS board's camera (see BackgroundScenes'
+# REF_TOP_Y note). Runs from _fit_camera, so it re-seats on every resize and every
+# difficulty on its own.
+func _seat_background() -> void:
+	# _build_shell builds the background BEFORE the board (so the floor is behind
+	# it in the tree and draws first), which means the very first call has no
+	# buttons to measure a reach from. _fit_camera runs a few lines later, once the
+	# board exists, and seats it properly.
+	if _bg_scene == null or _cam == null or _vp == null or _board == null:
+		return
+	var vp := Vector2(_vp.size)
+	if vp.x < 8.0 or vp.y < 8.0:
+		return
+	# Where the ray through the middle of the TOP edge meets the board plane.
+	var px := Vector2(vp.x * 0.5, 1.0)
+	var o := _cam.project_ray_origin(px)
+	var d := _cam.project_ray_normal(px)
+	if d.y > -0.0001:
+		return                        # looking at or above the horizon: nothing to seat
+	# Godot z is the negation of Blender y.
+	var top_y := -(o + d * (-o.y / d.y)).z
+	_bg_scene.position.z = minf(
+		BackgroundScenes.seat_wanted(_bg_id, top_y),
+		BackgroundScenes.seat_allowed(_bg_id, _board_reach()))
+
+# How far the outermost button reaches from the middle of the board: the furthest
+# button parent plus the frame radius. Measured off the live board rather than
+# taken from a constant, so a re-spaced or re-authored board stays correct.
+func _board_reach() -> float:
+	var r := 0.0
+	for key: String in _keys:
+		var holder := _board.find_child("Button_%s" % key, true, false) as Node3D
+		if holder != null:
+			r = maxf(r, Vector2(holder.position.x, holder.position.z).length())
+	return r + FRAME_RADIUS
+
+func _on_background_changed() -> void:
+	if _vp == null:
+		return
+	_build_background()
+	_kick_render()
+
+# Same treatment an animated button frame gets: the animation runs on TIME inside
+# the background's shaders, so it only advances when this SubViewport actually
+# draws, and this board deliberately does not draw while nothing is moving. Nudge
+# it at BG_IDLE_HZ rather than pinning UPDATE_ALWAYS (which is what leaked the
+# mobile GL driver's heap — see _update_render_activity).
+func _tick_bg_idle(dt: float) -> void:
+	if not _bg_idle or _vp == null:
+		return
+	if _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
+		return                       # something else is already driving the redraw
+	_bg_idle_accum += dt
+	if _bg_idle_accum < 1.0 / BackgroundScenes.BG_IDLE_HZ:
+		return
+	_bg_idle_accum = 0.0
+	_kick_render()
+
 func _tick_frame_idle(dt: float) -> void:
 	if not _frame_idle or _vp == null:
 		return
@@ -1454,37 +1420,9 @@ func _kick_render() -> void:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 # Apply the equipped level-number font package (CoinsManager.SIMON_NUMBER_FONTS,
-# whose storefront is retired). Only the
-# typeface and tint carry over — the numeral is part of a modelled plate here, so
-# it keeps the plate's own brightness rather than the hub-sized glow/outline
-# treatment SimonWheel gives it.
+# whose storefront is retired). Only the typeface and the tint carry over — the
+# tab keeps its own caption face, glow and outline so it still reads as interface
+# whatever the player has equipped.
 func _apply_num_pack() -> void:
-	var pack: Dictionary = _num_pack if (_num_pack is Dictionary) else {}
-	# The pill numeral takes the equipped typeface and tint too; the "ROUND"
-	# caption stays the HUD's own face so the pill keeps reading as interface.
-	if _pill_number != null:
-		var pfp := String(pack.get("font", ""))
-		if pfp != "" and ResourceLoader.exists(pfp):
-			var pf := load(pfp)
-			if pf is Font:
-				_pill_number.add_theme_font_override("font", pf)
-		else:
-			_pill_number.remove_theme_font_override("font")
-		var ptint: Color = pack.get("color", PILL_NUMBER_COLOR)
-		_pill_number.add_theme_color_override("font_color", ptint)
-		_layout_round_pill()
-		return
-	if _readout == null:
-		return
-
-	var font: Font = null
-	var fp := String(pack.get("font", ""))
-	if fp != "" and ResourceLoader.exists(fp):
-		var f := load(fp)
-		if f is Font:
-			font = f
-	_readout.font = _stage_font(font)
-
-	var tint: Color = pack.get("color", STAGE_TEXT_COLOR)
-	_readout.modulate = Color(tint.r, tint.g, tint.b) * STAGE_TEXT_ENERGY
-	_fit_readout()
+	if _tab != null:
+		_tab.apply_number_pack(_num_pack)

@@ -295,27 +295,43 @@ func _capture() -> Dictionary:
 		out[n.name] = (n as MeshInstance3D).global_position
 	return out
 
-# The round indicator is separate Godot UI, outside all six buttons, and not in
-# the middle where the old centre button used to be.
+# The level readout is separate Godot UI, high in the LEFT-hand gutter, outside
+# every button — and nothing was added to the board itself.
 func _check_indicator() -> void:
-	print("\n-- round indicator --")
-	_ok(_dev._readout == null and _dev_vp.find_child("StagePlate", true, false) == null,
+	print("\n-- level tab --")
+	_ok(_dev_vp.find_child("StagePlate", true, false) == null,
 		"nothing was added to the board itself")
-	var pill: Panel = _dev._pill
-	_ok(pill != null and pill.get_parent() == _dev, "it is a 2D Control over the board")
-	if pill == null:
+	var tab: Control = _dev._tab
+	_ok(tab != null and tab.get_parent() == _dev, "it is a 2D Control over the board")
+	if tab == null:
 		return
-	_ok(_dev._pill_number.text == "12", "shows the round it was given",
-		_dev._pill_number.text)
+	_ok(tab.mouse_filter == Control.MOUSE_FILTER_IGNORE, "it never eats a tap")
+	_ok(tab._num.text == "12", "shows the round it was given", tab._num.text)
 	_dev.set_level(148)
-	_ok(_dev._pill_number.text == "148", "set_level(148)", _dev._pill_number.text)
-	var wide := pill.size.x
+	_ok(tab._num.text == "148", "set_level(148)", tab._num.text)
+	_ok(tab._num._size_for("148", tab._face()) < tab._num.base_size,
+		"the numeral shrinks to fit once it is 3 digits",
+		"%d px" % tab._num._size_for("148", tab._face()))
 	_dev.set_level(7)
-	_ok(pill.size.x < wide, "the pill resizes to its number", "%.0f -> %.0f" % [wide, pill.size.x])
-	var r := Rect2(pill.position, pill.size)
+	_ok(tab._num.text == "7", "and back", tab._num.text)
+	var r := Rect2(tab.position, tab.size)
 	_ok(r.position.x >= 0.0 and r.position.y >= 0.0 and r.end.x <= W and r.end.y <= H,
 		"on screen", str(r))
-	# Clear of every button's silhouette.
+	_ok(r.end.x < W * 0.5, "sits in the LEFT-hand column")
+	_ok(r.position.x >= tab.TAB_MARGIN - 0.5 and r.position.x <= tab.TAB_MARGIN_MAX + 0.5,
+		"comfortable spacing from the screen edge", "%.0f px" % r.position.x)
+	# Riding at 75% of the screen height, measured up from the bottom.
+	_ok(absf(r.get_center().y - H * tab.TAB_CENTRE_Y) < 1.0,
+		"centred 75% of the way up the screen",
+		"badge centre %.0f vs %.0f" % [r.get_center().y, H * tab.TAB_CENTRE_Y])
+	_ok(r.position.y >= 88.0 - 0.5, "never up into the watch-ad / Quit row")
+	_ok(r.end.y <= H - 84.0 + 0.5, "clear of the status pill's row",
+		"bottom %.0f vs %.0f" % [r.end.y, H - 84.0])
+	# Clear of every button's silhouette. The plate is what must not overlap; its
+	# bloom is a soft halo over a near-black bezel and is allowed to graze the
+	# outermost rim, which is what keeps the reserved column narrow enough that the
+	# board barely has to move for it.
+	var plate := r.grow(6.0)
 	var overlaps := ""
 	for key: String in ORDER:
 		var c := _holder(key).position
@@ -323,13 +339,10 @@ func _check_indicator() -> void:
 			var a := TAU * float(i) / 48.0
 			for pt: Vector3 in [c + Vector3(cos(a), 0.0, sin(a)),
 					c + Vector3(cos(a) * 0.745, 0.525, sin(a) * 0.745)]:
-				if r.has_point(_cam.unproject_position(pt)):
+				if plate.has_point(_cam.unproject_position(pt)):
 					overlaps = key
-	_ok(overlaps == "", "clear of all six buttons on screen", "overlaps %s" % overlaps)
-	# Clear of game.gd's status pill, which is centred 84 px up from the bottom.
-	_ok(r.end.y <= H - 84.0 + 0.5, "clear of the status pill's row",
-		"bottom %.0f vs %.0f" % [r.end.y, H - 84.0])
-	_ok(r.position.y > H * 0.5, "sits in the bottom corner, not over the play area")
+	_ok(overlaps == "", "clear of every button on screen", "overlaps %s" % overlaps)
+	_ok(_dev.segment_at_point(r.get_center()) == -1, "a tap on it is not a button")
 
 # The global button-frame cosmetic dresses all six bezels and nothing else. The
 # same fifteen meshes that fit Medium's five buttons have to fit Hard's six at the
@@ -422,15 +435,14 @@ func _check_composition() -> void:
 	# The HUD game.gd draws over the board must not land on any button. The rects
 	# below are game.gd's own, in fractions of its 1280x720 design viewport so they
 	# scale with whatever this harness renders at: the watch-ad pill (top-left, sized
-	# generously at 360 px), Quit (top-right), the coins pill under it, and the
-	# status pill along the bottom centre.
+	# generously at 360 px), Quit (top-right), the LEVEL badge in the left gutter,
+	# and the status pill along the bottom centre.
 	var hud := {
 		"watch-ad button": Rect2(0.0156, 0.0278, 0.2813, 0.0666),
 		"quit button": Rect2(0.9438, 0.0278, 0.0406, 0.0722),
-		"coins pill": Rect2(0.8953, 0.1083, 0.0891, 0.0611),
 		"status pill": Rect2(0.3438, 0.8833, 0.3125, 0.0723),
-		"round pill": Rect2(_dev._pill.position.x / W, _dev._pill.position.y / H,
-			_dev._pill.size.x / W, _dev._pill.size.y / H),
+		"level tab": Rect2(_dev._tab.position.x / W, _dev._tab.position.y / H,
+			_dev._tab.size.x / W, _dev._tab.size.y / H),
 	}
 	for name: String in hud:
 		var r: Rect2 = hud[name]

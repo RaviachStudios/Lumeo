@@ -64,8 +64,8 @@ func _ready() -> void:
 		_ok(_game.level == round_no, "round %d: level counter" % round_no, "level=%d" % _game.level)
 		_ok(_game.sequence.size() == round_no, "round %d: sequence grew by one" % round_no,
 			str(_game.sequence))
-		_ok(_dev._pill_number.text == str(round_no), "round %d: the pill shows it" % round_no,
-			_dev._pill_number.text)
+		_ok(_dev._tab._num.text == str(round_no), "round %d: the LEVEL tab shows it" % round_no,
+			_dev._tab._num.text)
 		var seq: Array = _game.sequence.duplicate()
 		for step: int in seq:
 			await _tap(step)
