@@ -5287,7 +5287,7 @@ vec3 arcadeScene(vec2 a, vec2 uv) {
 // GDScript (BackgroundManager.arcade_omg, fired every 5th completed round) so all
 // cabinets switch and return in perfect sync. Cross-faded over the tube game.
 uniform float omg_active = 0.0;
-// Level-8 SIMON KING blackout (0 at rest): the hall falls dark and every cabinet CRT
+// Level-8 LUMEO KING blackout (0 at rest): the hall falls dark and every cabinet CRT
 // catches fire (see arcadeMotion + arcFire). Driven by BackgroundManager.arcade_king().
 uniform float king = 0.0;
 
@@ -5344,7 +5344,7 @@ vec3 arcOMG(vec2 s, float t, float fi) {
 	return c;
 }
 
-// A licking flame fill for a cabinet CRT during the SIMON KING blackout. s in 0..1
+// A licking flame fill for a cabinet CRT during the LUMEO KING blackout. s in 0..1
 // (y down: s.y ~ 1 is the bottom of the tube). Flames climb from the base with the
 // shared value-noise scrolling upward — deep orange-red body, hot yellow core, plus CRT
 // scanlines so it matches the other screens. fi de-syncs each cabinet's fire.
@@ -5362,7 +5362,7 @@ vec3 arcFire(vec2 s, float t) {
 }
 
 vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
-	// SIMON KING blackout: the baked hall falls to near-black so only the lit CRTs (which
+	// LUMEO KING blackout: the baked hall falls to near-black so only the lit CRTs (which
 	// are painted at full brightness below, and catch fire) shine. The room's own live
 	// lights (marquees, signs, dust, floor sweep, haze) are faded out by `roomLit` too.
 	col = mix(col, col * vec3(0.055, 0.05, 0.09), king);
@@ -5413,7 +5413,7 @@ vec3 arcadeMotion(vec3 col, vec2 a, vec2 uv, float t) {
 			if (omg_active > 0.001) {                                // OMG event: crossfade over the game
 				g = mix(g, arcOMG(s, t, fi), omg_active);
 			}
-			if (king > 0.001) {                                      // SIMON KING: the screen catches fire
+			if (king > 0.001) {                                      // LUMEO KING: the screen catches fire
 				g = mix(g, arcFire(s, t + fi * 2.7), king);
 			}
 			float vig = smoothstep(1.05, 0.4, length((s - 0.5) * 2.0));
@@ -7080,7 +7080,7 @@ var _active := false
 var _river_surge_tween: Tween
 # Active tween driving the Arcade skin's global "OMG" event (omg_active 0 -> 1, hold, -> 0).
 var _omg_tween: Tween
-# Active tween driving the Arcade skin's level-8 "SIMON KING" blackout (king 0 -> 1, hold, -> 0).
+# Active tween driving the Arcade skin's level-8 "LUMEO KING" blackout (king 0 -> 1, hold, -> 0).
 var _king_tween: Tween
 # Active tween driving the Volcano skin's level-8 thunderstorm (storm 0 -> 1, hold, -> 0).
 var _storm_tween: Tween
@@ -7715,8 +7715,8 @@ func _set_omg(v: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("omg_active", v)
 
-# Level-8 "SIMON KING" blackout on the Arcade skin: the whole hall drops to near-black
-# and every cabinet CRT catches fire for ~3s (behind the "SIMON KING" banner), then the
+# Level-8 "LUMEO KING" blackout on the Arcade skin: the whole hall drops to near-black
+# and every cabinet CRT catches fire for ~3s (behind the "LUMEO KING" banner), then the
 # lights ease back up. A single `king` uniform drives every tube + the room dimming, so
 # it's perfectly synced. No-op unless the live background is the Arcade skin.
 func arcade_king() -> void:

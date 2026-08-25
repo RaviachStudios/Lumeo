@@ -406,11 +406,11 @@ static func diff_label(d: String) -> String:
 # Funny fallback room names (all within TITLE_MAX). Offered as suggestions on the
 # create screen and used when a player leaves the name blank.
 const FUNNY_NAMES: Array[String] = [
-	"Thumb Wars", "Combo Chaos", "Brain Freeze", "Simon Smackdown",
+	"Thumb Wars", "Combo Chaos", "Brain Freeze", "Button Smackdown",
 	"Tap Titans", "Recall Rumble", "Pattern Panic", "Mind Meltdown",
 	"Button Mashers", "Sequence Slam", "The Gauntlet", "Neuron Nuke",
 	"Flashback Fight", "Echo Chamber", "Total Recall", "Memory Lane",
-	"Blinkin' Havoc", "Colour Clash", "Rapid Recall", "Simon Says No",
+	"Blinkin' Havoc", "Colour Clash", "Rapid Recall", "Lights Out",
 ]
 
 static func random_title() -> String:

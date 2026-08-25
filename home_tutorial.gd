@@ -105,7 +105,7 @@ func _build_card() -> void:
 	_card.add_theme_stylebox_override("panel", st)
 	add_child(_card)
 
-	# Winged-Simon mascot (baked, shared texture) as the friendly guide.
+	# The winged-button mascot (baked, shared texture) as the friendly guide.
 	_mascot = TextureRect.new()
 	_mascot.texture = SimonFlyer.frames()[1]
 	_mascot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE

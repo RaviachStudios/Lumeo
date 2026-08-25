@@ -109,7 +109,7 @@ func _ready() -> void:
 	add_child(_title)
 
 	_subtitle = Label.new()
-	_subtitle.text = "Race friends in a live Simon showdown"
+	_subtitle.text = "Race friends in a live memory showdown"
 	_subtitle.add_theme_font_size_override("font_size", 18)
 	_subtitle.add_theme_color_override("font_color", ArenaUI.MUTED)
 	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -269,7 +269,7 @@ func _show_entrances() -> void:
 		_create_btn.visible = true
 	if _join_btn:
 		_join_btn.visible = true
-	_subtitle.text = "Race friends in a live Simon showdown"
+	_subtitle.text = "Race friends in a live memory showdown"
 	_layout()
 
 # ---------------- create-contest popup ----------------

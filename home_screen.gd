@@ -4,13 +4,13 @@ extends Control
 # nodes + shaders + _draw() + tweens (no static images):
 #   - a deep purple→blue gradient sky with twinkling stars (BG_SHADER)
 #   - one large, thin glowing orbital ring of soft colored orbs behind everything
-#   - the SIMON logo (white, soft-shadowed; the "O" is the 4-colour Simon wheel)
+#   - the LUMEO logo (white, soft-shadowed; the "O" is a physical gold BUTTON)
 #     over a "MEMORY CHALLENGE" subtitle
 #   - TOP-LEFT: a gold coin pill + a Daily Hub button (red notification dot)
 #     that drops a panel holding the daily claim and the daily-task progress
 #   - TOP-RIGHT: three separate glass controls — a profile capsule (avatar +
 #     name), an auth button (sign out / sign in) and a settings disc
-#   - CENTER: a floating grassy island carrying the big circular START orb
+#   - CENTER: a floating grassy island carrying the big 3D START button
 #   - LEFT / RIGHT: premium Shop and Leaderboard cards (illustration + CTA button)
 #   - BOTTOM-CENTER: a small "How to Play" card
 # Everything is laid out symmetrically and re-flowed in _layout() on resize.
@@ -94,6 +94,29 @@ var _ring_line: Line2D
 var _orbs: Array[Node2D] = []
 var _orb_tex: Texture2D
 var _logo_box: Control
+# The logo's "O" is a real button, not a glyph: a static gold body (`_o_frame`)
+# with a raised gold cap (`_o_cap`) sunk into it, the cap carrying the white
+# illuminated trim (`_o_trim`) that draws the letter's counter. `_o_aura` is the
+# warm halo it sits in — its child `_o_glow` breathes, the parent flashes on press,
+# so the two tweens never touch the same property.
+var _o_frame: Node2D
+var _o_cap: Node2D
+var _o_trim: Node2D
+var _o_bloom: Node2D
+var _o_aura: Node2D
+var _o_glow: Sprite2D
+var _o_raise := 0.0                # how far the cap stands proud of the collar, px
+var _o_cap_rest := 0.0             # the cap's resting y inside its box
+
+# The START button, in the same three pieces: a static dark-metal frame drawn by the
+# landmark's own drawer, the luminous accent ring that cycles through the game's
+# colours (`_play_accent` = the hot trim, `_play_glow` = its coloured bloom), and the
+# violet cap that carries the arrow and is the only part that moves when pressed.
+var _play_accent: Node2D
+var _play_glow: Node2D
+var _play_cap: Node2D
+var _play_flash := 0.0             # 0 at rest .. 1 at the bottom of a press
+var _play_cap_rest := 0.0
 # The START orb is a clickable landmark widget {wrap, btn, art, drawer} floating in
 # the center. The Shop / Leaderboard / How-to navigation are premium cards
 # ({wrap} dicts) flanking it.
@@ -108,10 +131,13 @@ var _arena_card: Dictionary = {}   # bottom-center: opens the Arena (multiplayer
 # continuous idle motion (breathing, weight-shifts, shield fidget) layered on top.
 # The heavy colosseum backdrop stays fully static; only the small knight overlay
 # redraws each frame, so the animation is cheap.
-const _KN_TF_POS := Vector2(13.0, -23.6)   # matches _draw_arena_simon's canvas transform
+const _KN_TF_POS := Vector2(13.0, -23.6)   # matches _draw_arena_colosseum's canvas transform
 const _KN_TF_SCL := Vector2(1.28, 1.13)
 const _KN_L_FEET := Vector2(91.0, 86.0)    # neutral stance, pre-transform (ctr 107,74)
 const _KN_R_FEET := Vector2(123.0, 86.0)
+# One additive node per pad button, holding that button's "lit" state. Only their
+# `modulate:a` is animated (see _arena_pulse), so the colosseum art stays static.
+var _pad_lights: Array[Node2D] = []
 var _duel_rng := RandomNumberGenerator.new()
 var _duel_t := 0.0
 var _beat_start := 0.0
@@ -310,24 +336,23 @@ func _build_logo() -> void:
 	var font := ThemeDB.fallback_font
 	var f := 96
 
-	# "S I M [O] N" - the O is a 4-colour Simon ring, not a letter.
-	var w_left := font.get_string_size("S I M", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
-	var w_right := font.get_string_size("N", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
+	# "L U M E [O]" - the O is not a letter but a gold BUTTON shaped like one: the
+	# same seat/cap/lit-trim hardware the board's buttons are built from (see
+	# _make_o_button). It ends the word, so it is the piece the eye lands on last.
+	var w_left := font.get_string_size("L U M E", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
 	var w_space := font.get_string_size(" ", HORIZONTAL_ALIGNMENT_LEFT, -1, f).x
-	var dr := 72.0                                   # O-ring diameter (~ cap height)
-	var g := w_space * 0.7                           # gap on each side of the ring
+	var dr := 90.0                                   # O-button diameter (~ cap height)
+	var g := w_space * 0.60                          # gap before the button
 	var th := 112.0                                  # title band height
-	var group_w := w_left + g + dr + g + w_right
+	var group_w := w_left + g + dr
 	var x0 := (lw - group_w) * 0.5
 
-	_logo_box.add_child(_logo_letter("S I M", f, Vector2(x0, 0), Vector2(w_left, th)))
-	var ring := _make_o_ring(dr)
-	# Drop the ring slightly below the cap-height center so it visually sits
-	# alongside the lowercase center of the surrounding capitals (the letter "O"
-	# in this font reads optically lower than the cap-tops).
-	ring.position = Vector2(x0 + w_left + g + dr * 0.5, th * 0.6 + f * 0.04)
-	_logo_box.add_child(ring)
-	_logo_box.add_child(_logo_letter("N", f, Vector2(x0 + w_left + g + dr + g, 0), Vector2(w_right, th)))
+	_logo_box.add_child(_logo_letter("L U M E", f, Vector2(x0, 0), Vector2(w_left, th)))
+	# Drop the O slightly below the cap-height center so it visually sits alongside
+	# the lowercase center of the surrounding capitals (the letter "O" in this font
+	# reads optically lower than the cap-tops).
+	var o_ctr := Vector2(x0 + w_left + g + dr * 0.5, th * 0.6 + f * 0.04)
+	_logo_box.add_child(_make_o_button(dr, o_ctr))
 
 	# subtitle + glowing side lines, each ending in a small glowing dot
 	var sf := 20
@@ -380,38 +405,376 @@ func _logo_letter(txt: String, fsize: int, pos: Vector2, size: Vector2) -> Label
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return l
 
-# The Simon "O": four colored quarter-arcs (yellow/red/green/blue) around an
-# empty dark center, drawn as round-capped Line2D arcs. Centered on its origin.
-func _make_o_ring(diameter: float) -> Node2D:
-	var ring := Node2D.new()
-	var rr := diameter * 0.5
-	var thick := diameter * 0.2
-	var cols := [
-		Color(0.97, 0.78, 0.22),  # top    - yellow
-		Color(0.88, 0.22, 0.24),  # right  - red
-		Color(0.20, 0.70, 0.34),  # bottom - green
-		Color(0.24, 0.50, 0.95),  # left   - blue
-	]
-	var gap := deg_to_rad(12.0)
-	var base := -PI * 0.75                            # start of the top segment
-	for i in 4:
-		var a0: float = base + i * PI * 0.5 + gap * 0.5
-		var a1: float = base + (i + 1) * PI * 0.5 - gap * 0.5
-		var arc := Line2D.new()
-		arc.width = thick
-		arc.default_color = cols[i]
-		arc.antialiased = true
-		arc.begin_cap_mode = Line2D.LINE_CAP_ROUND
-		arc.end_cap_mode = Line2D.LINE_CAP_ROUND
-		var pts := PackedVector2Array()
-		var n := 14
-		var pr := rr - thick * 0.5
-		for j in n + 1:
-			var a: float = lerp(a0, a1, float(j) / n)
-			pts.append(Vector2(cos(a), sin(a)) * pr)
-		arc.points = pts
-		ring.add_child(arc)
-	return ring
+# ---------------- the logo "O": a gold button ----------------
+
+# The gold the logo's O is cut from. The START button next to it is dark metal, but
+# both are milled to the SAME profile (HW_* below), which is what makes them read as
+# two pieces of one machine rather than as two unrelated ornaments.
+const LUX_DEEP := Color(0.34, 0.19, 0.02)          # the shadow side / extruded wall
+const LUX_BASE := Color(0.86, 0.61, 0.13)          # the metal itself
+const LUX_HI := Color(1.00, 0.91, 0.55)            # where the key light lands
+const LUX_RIM := Color(1.00, 0.60, 0.20)           # warm bounce on the far edge
+const LUX_LIGHT := Vector2(-0.55, -0.84)           # key light, upper left
+
+# ---------------------------------------------------------------------------
+# The hardware profile
+# ---------------------------------------------------------------------------
+# Both buttons on this screen are turned from the same three parts, in the order an
+# illuminated arcade button is actually built: an ILLUMINATED BEZEL immediately
+# around the cap, a DARK SEAT it is screwed into, and the raised CAP itself. Read
+# from the rim inward as fractions of the bezel's outer radius:
+#
+#   1.00 .. 0.955  the outer CHAMFER — dark metal, the frame's own lip
+#   0.955 .. 0.845 the LIT LAND — the frame's face, and the only coloured part
+#   0.845 .. 0.800 the inner CHAMFER, rolling down off the land
+#   0.800 .. 0.745 the SEAT: the darkest ring on the object, which is what separates
+#                  the luminous frame from the cap instead of a slab of grey metal
+#   0.745 ..       the CAP: the raised violet surface, which owns the middle
+#
+# There used to be a wide gunmetal CROWN between the trim and the cap — 30% of the
+# radius of bare grey metal — and it was the single thing that made the button read
+# as a mechanical disk rather than a button. It is gone: the lit bezel now runs
+# straight into a thin dark seat, and the cap took the space back (0.745 of the
+# radius against the old 0.70, so the violet surface is 13% wider and the frame
+# around it is thin).
+#
+# Drawn from above with the key light at upper-left, so each band is shaded by how
+# squarely it faces that light and by how proud of the bevel it sits.
+const HW_LIP := 0.955           # bezel rim -> the lit land
+const HW_LAND := 0.845          # lit land -> inner chamfer
+const HW_CHAMFER := 0.800       # inner chamfer -> the seat
+const HW_SEAT := 0.745          # the seat -> the cap
+const HW_SEGS := 64
+
+# The O is turned from the same parts as START, in gold, and read from the rim in:
+#
+#   1.00 .. 0.930  the SEAT — a thin near-black collar, the gap the cap is sunk into
+#   0.930 ..       the CAP — the raised POLISHED gold surface, which owns the object
+#   0.659 .. 0.522 the white illuminated TRIM, seated in a groove milled in the cap
+#   0.430 ..       the BORE — the dark counter, the hole that makes it the letter O
+#
+# There used to be a wide gold BEZEL outside all of this — a knurled wall from 1.00
+# to 0.915 and a brushed crown down to 0.845, i.e. a fifth of the radius of frame
+# wrapped around the button. At logo size that outer ring was the biggest shape in
+# the object, so the O read as a decorative gold band with something in the middle
+# rather than as a letter. It is gone. The cap took the whole radius back (0.930
+# against the old 0.780, so the gold surface is 19% wider), the seat shrank to the
+# thin dark collar that is all a seated cap actually needs, and the depth now comes
+# from the button BODY's own barrel wall rather than from a frame around it.
+#
+# The trim and the bore were widened in the same proportion, so the white ring keeps
+# exactly its old share of the gold and the counter still reads as a hole punched
+# through a solid — which together are what spell the letter.
+const O_SEAT := 0.930           # the seat -> (the cap is sunk into it)
+const O_CAP := 0.930            # outer radius of the raised cap
+const O_TRIM := 0.590           # centre-line of the white trim tube
+const O_TRIM_W := 0.137         # its width, as a fraction of the radius
+const O_BORE := 0.430           # the counter: the hole through the button
+# The collar is the same alloy as the cap in a much duller finish. That tonal step —
+# dark bronze seat, polished cap — is what makes the raised surface read as its own
+# part instead of as a dome milled out of one lump of gold.
+const O_BEZEL := Color(0.46, 0.30, 0.06)
+
+# The LUMEO "O": a premium gold BUTTON whose cap happens to be a ring, so the letter
+# reads as a letter and the object reads as hardware.
+#
+#   _o_frame   static body — the extruded barrel that gives the object its thickness
+#              and the thin dark collar the cap is seated in
+#   _o_cap     the raised gold surface: an annular cap with a bevelled crown, its own
+#              wall of thickness underneath, and a specular streak on the lit shoulder
+#   _o_trim    the white illuminated trim ringing the counter — a lit tube seated in a
+#              groove milled into the cap's inner edge, NOT a stroke on top of it
+#
+# Only the cap + trim move on a press; the body never does. Everything is drawn once
+# into static Node2Ds — the idle breathing and the press ride on node transforms and
+# modulate, so nothing here ever repaints.
+func _make_o_button(d: float, center: Vector2) -> Control:
+	var box := Control.new()
+	box.size = Vector2(d, d * 1.16)                  # room under it for the barrel
+	box.position = center - Vector2(d, d) * 0.5
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var r := d * 0.5
+	_o_raise = d * 0.065                             # how far the cap stands proud
+
+	# the warm light the gold sits in. Two nodes so the idle breath (on the glow) and
+	# the press flare (on the aura) never fight over one property.
+	_o_aura = Node2D.new()
+	_o_aura.position = Vector2(r, r)
+	box.add_child(_o_aura)
+	_o_glow = Sprite2D.new()
+	_o_glow.texture = _orb_tex
+	_o_glow.scale = Vector2.ONE * (d * 2.1 / 128.0)
+	_o_glow.modulate = Color(1.0, 0.72, 0.26, 0.20)
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_o_glow.material = add
+	_o_aura.add_child(_o_glow)
+
+	_o_frame = Node2D.new()
+	_o_frame.position = Vector2(r, r)
+	_o_frame.draw.connect(_draw_o_frame.bind(_o_frame, r))
+	box.add_child(_o_frame)
+
+	_o_cap = Node2D.new()
+	_o_cap_rest = r - _o_raise
+	_o_cap.position = Vector2(r, _o_cap_rest)
+	_o_cap.draw.connect(_draw_o_cap.bind(_o_cap, r))
+	box.add_child(_o_cap)
+
+	# The trim rides on the cap (so it travels with it) but is its own node. Its tube
+	# is drawn OPAQUE — white over gold has to stay white, and additive white on gold
+	# only ever comes out yellow — with the bloom split into an additive child so a
+	# press can flare the light without bleaching the metal.
+	_o_trim = Node2D.new()
+	_o_trim.draw.connect(_draw_o_trim.bind(_o_trim, r))
+	_o_cap.add_child(_o_trim)
+	_o_bloom = Node2D.new()
+	_o_bloom.material = add
+	_o_bloom.draw.connect(_draw_o_bloom.bind(_o_bloom, r))
+	_o_trim.add_child(_o_bloom)
+
+	# input: a transparent disc over the button. It has no destination — the O is a
+	# piece of hardware you can push, and pushing it is the whole reward.
+	var btn := Button.new()
+	btn.size = Vector2(d, d)
+	btn.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		btn.add_theme_stylebox_override(st, empty)
+	btn.button_down.connect(_on_o_press)
+	btn.button_up.connect(_on_o_release)
+	box.add_child(btn)
+	return box
+
+# The static half of the O: the button BODY — everything that does not move when it
+# is pressed. With the outer bezel gone this is just two things: the barrel that
+# gives the object its thickness, and the thin dark collar the cap is seated in.
+func _draw_o_frame(c: Node2D, r: float) -> void:
+	var lit := LUX_LIGHT.normalized()
+	var depth := r * 0.20                            # how far the body stands off the page
+
+	# the barrel: the body's footprint stamped downward, darkest at the bottom and
+	# warming as it climbs, so the wall reads as gold turning under into shadow. This
+	# is now the ONLY thing carrying the button's depth, so it is worth its own
+	# rolled highlight at the top of the lit side.
+	var steps := 14
+	for i in range(steps, 0, -1):
+		var f := float(i) / float(steps)
+		c.draw_circle(Vector2(0.0, depth * f), r,
+			Color(0.10, 0.05, 0.01).lerp(Color(0.50, 0.32, 0.06), 1.0 - f))
+	# contact shadow where the barrel meets the page
+	c.draw_colored_polygon(_ellipse_pts(Vector2(0.0, depth * 1.05), r * 0.90, r * 0.16),
+		Color(0.03, 0.01, 0.06, 0.38))
+	# the bright turn at the very rim, where the wall rolls over into the cap collar
+	c.draw_arc(Vector2.ZERO, r * 0.985, deg_to_rad(-176.0), deg_to_rad(-92.0), 18,
+		Color(1.00, 0.86, 0.48, 0.42), r * 0.026, true)
+
+	# the SEAT the cap drops into — a thin near-black collar, deliberately the darkest
+	# ring on the object, so the raised surface reads as a separate piece seated in
+	# the body rather than as a dome milled out of one block
+	_ring_band(c, r, O_SEAT, 1.00, lit, 0.14, 0.02, LUX_DEEP.darkened(0.35))
+	for i in 4:                                      # the cap's shadow cast into it
+		var f := float(i) / 3.0
+		c.draw_arc(Vector2(0.0, _o_raise * 0.6), r * (O_CAP + 0.006 + f * 0.014), 0.0, TAU,
+			HW_SEGS, Color(0.04, 0.01, 0.00, 0.42 - f * 0.11), r * 0.026, true)
+
+	# clean antialiased silhouette over the flat-shaded quads
+	c.draw_arc(Vector2.ZERO, r, 0.0, TAU, HW_SEGS, Color(0.18, 0.09, 0.01, 0.80), 2.0, true)
+
+# The moving half: the raised gold ring-shaped cap that carries the white trim.
+func _draw_o_cap(c: Node2D, r: float) -> void:
+	var lit := LUX_LIGHT.normalized()
+	var outer := r * O_CAP                           # seated inside the body's collar
+	var inner := r * O_BORE                          # the counter — the hole in the O
+	var trim := r * O_TRIM                           # where the white trim is seated
+	var half := r * O_TRIM_W * 0.5                   # half the trim's width
+	var band := outer - (trim + half)                # the gold OUTSIDE the trim
+
+	# the cap's own thickness: the same annulus stamped down into the seat, which is
+	# what makes the surface read as standing proud rather than painted on
+	var steps := 9
+	for i in range(steps, 0, -1):
+		var f := float(i) / float(steps)
+		c.draw_arc(Vector2(0.0, _o_raise * f), (outer + inner) * 0.5, 0.0, TAU, HW_SEGS,
+			Color(0.20, 0.10, 0.01).lerp(Color(0.60, 0.38, 0.07), 1.0 - f), outer - inner, true)
+
+	# the gold surface: crown high in the middle of the band, both edges rolled away
+	var mid := (outer + trim + half) * 0.5
+	_gold_band(c, Vector2.ZERO, mid, band, lit)
+	# ...and the narrow shoulder that steps down from the trim groove into the bore
+	_ring_band(c, r, inner / r, (trim - half) / r, lit, 0.40, 0.06, LUX_BASE)
+
+	# specular streak where the key light grazes the crown, warm rim light opposite
+	c.draw_arc(Vector2.ZERO, mid + band * 0.10, deg_to_rad(-158.0), deg_to_rad(-106.0),
+		14, Color(1.0, 0.99, 0.92, 0.75), band * 0.34, true)
+	c.draw_arc(Vector2.ZERO, mid - band * 0.26, deg_to_rad(22.0), deg_to_rad(66.0),
+		12, Color(1.0, 0.86, 0.56, 0.38), band * 0.22, true)
+
+	# the cap's outer edge: a bright rolled bevel on the lit side over a dark
+	# silhouette, so the surface has a visible EDGE standing above the seat
+	c.draw_arc(Vector2.ZERO, outer, 0.0, TAU, HW_SEGS, Color(0.20, 0.10, 0.01, 0.80), 2.2, true)
+	c.draw_arc(Vector2.ZERO, outer - 1.4, deg_to_rad(-178.0), deg_to_rad(-88.0), 20,
+		Color(1.00, 0.92, 0.62, 0.60), 2.0, true)
+
+	# the bore, seen down the middle of the cap: a short dark wall so the counter is a
+	# hole through a solid object, not a disc of background
+	for i in 7:
+		var f := float(i) / 6.0
+		c.draw_circle(Vector2(0.0, _o_raise * 1.0 * f), inner * (1.0 - f * 0.05),
+			Color(0.18, 0.09, 0.01).lerp(Color(0.03, 0.015, 0.04), f))
+	c.draw_arc(Vector2.ZERO, inner, 0.0, TAU, HW_SEGS, Color(0.12, 0.06, 0.01, 0.80), 1.6, true)
+
+	# one four-point glint on the lit shoulder — the "deluxe" cue
+	var sa := deg_to_rad(-134.0)
+	_sparkle(c, Vector2(cos(sa), sin(sa)) * (mid + band * 0.14), r * 0.30)
+
+# The white trim: a lit tube seated in a groove milled around the counter. Opaque,
+# because the point of it is that it is WHITE against gold — and built as groove ->
+# tube -> hot core -> grazing highlight, so it has a body instead of an outline.
+func _draw_o_trim(c: Node2D, r: float) -> void:
+	var trim := r * O_TRIM
+	var w := r * O_TRIM_W
+	# the groove the tube lies in: a dark ring on the gold, which is what stops the
+	# white from reading as a stroke laid on top of the metal
+	c.draw_arc(Vector2.ZERO, trim, 0.0, TAU, HW_SEGS, Color(0.18, 0.09, 0.01, 0.90), w * 1.42, true)
+	# the tube: a full-width body in near-white, then a hot core down its middle. It
+	# is drawn at the full authored width (0.115 of the radius, ~5px at logo size)
+	# because a hairline here does not read as the letter O — it reads as a scratch.
+	c.draw_arc(Vector2.ZERO, trim, 0.0, TAU, HW_SEGS, Color(0.88, 0.91, 1.00, 1.0), w, true)
+	c.draw_arc(Vector2.ZERO, trim, 0.0, TAU, HW_SEGS, Color(1, 1, 1, 1.0), w * 0.52, true)
+	# the tube is round: a bright graze on its lit side, a cooler one opposite
+	c.draw_arc(Vector2.ZERO, trim - w * 0.24, deg_to_rad(-172.0), deg_to_rad(-96.0), 18,
+		Color(1, 1, 1, 0.95), w * 0.42, true)
+	c.draw_arc(Vector2.ZERO, trim + w * 0.30, deg_to_rad(22.0), deg_to_rad(80.0), 14,
+		Color(0.74, 0.79, 0.94, 0.60), w * 0.30, true)
+	# the two shadow lines where the tube meets the walls of its groove
+	c.draw_arc(Vector2.ZERO, trim + w * 0.60, 0.0, TAU, HW_SEGS, Color(0.16, 0.08, 0.01, 0.55), w * 0.20, true)
+	c.draw_arc(Vector2.ZERO, trim - w * 0.60, 0.0, TAU, HW_SEGS, Color(0.16, 0.08, 0.01, 0.55), w * 0.20, true)
+
+# The light the trim throws onto the gold either side of it. Additive and tight — a
+# lit part glows a little onto its own housing, it does not floodlight the button.
+func _draw_o_bloom(c: Node2D, r: float) -> void:
+	var trim := r * O_TRIM
+	var w := r * O_TRIM_W
+	for i in 3:
+		var f := float(i) / 2.0
+		c.draw_arc(Vector2.ZERO, trim, 0.0, TAU, HW_SEGS,
+			Color(0.86, 0.90, 1.00, 0.13 - f * 0.035), w * (1.5 + f * 1.3), true)
+
+# One flat-shaded band of the hardware profile: the annulus from `r0` to `r1` (both
+# fractions of the bezel radius `r`), shaded around the ring by the key light and
+# across the band by a linear crown ramp from `c0` at the outer edge to `c1` at the
+# inner one. Quads share their edge vertices exactly, so neighbouring bands meet
+# without a seam.
+func _ring_band(c: CanvasItem, r: float, r0: float, r1: float, lit: Vector2,
+		c0: float, c1: float, base: Color) -> void:
+	for i in HW_SEGS:
+		var a0 := TAU * float(i) / float(HW_SEGS)
+		var a1 := TAU * float(i + 1) / float(HW_SEGS)
+		var d0 := Vector2(cos(a0), sin(a0))
+		var d1 := Vector2(cos(a1), sin(a1))
+		var l0 := d0.dot(lit)
+		var l1 := d1.dot(lit)
+		c.draw_polygon(
+			PackedVector2Array([d0 * (r * r1), d1 * (r * r1), d1 * (r * r0), d0 * (r * r0)]),
+			PackedColorArray([_metal(l0, c0, base), _metal(l1, c0, base),
+				_metal(l1, c1, base), _metal(l0, c1, base)]))
+
+# The metal at one point on a band, for any base tone. `lam` is how squarely it faces
+# the key light (-1..1), `crown` how proud of the bevel it sits (0 at a rolled edge,
+# 1 at the crown). Shares its shaping with _lux, which is the gold-only special case.
+func _metal(lam: float, crown: float, base: Color) -> Color:
+	var dark := base.darkened(0.72)
+	var col := dark.lerp(base, 0.30 + 0.70 * (lam * 0.5 + 0.5))
+	col = col.lerp(base.lightened(0.62), pow(maxf(lam, 0.0), 2.0) * crown)
+	return col.lerp(dark, (1.0 - crown) * 0.40)
+
+# ---------------- the O's idle + press ----------------
+
+# Idle: nothing but a slow swell in the halo it sits in. No rotation, no bob — the
+# object is a machined part, and machined parts hold still.
+func _o_breathe() -> void:
+	if _o_glow == null:
+		return
+	var br := create_tween().set_loops()
+	br.tween_property(_o_glow, "modulate:a", 0.34, 2.4) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	br.tween_property(_o_glow, "modulate:a", 0.18, 2.4) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+# Press: the gold surface sinks into its collar, the trim brightens with it and the
+# gold's own light briefly swells. The body does not move.
+func _on_o_press() -> void:
+	if _o_cap == null:
+		return
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_o_cap, "position:y", _o_cap.position.y + _o_raise * 0.72, 0.07) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_o_bloom, "modulate", Color(2.3, 2.2, 2.05, 1.0), 0.07)
+	tw.tween_property(_o_trim, "modulate", Color(1.22, 1.22, 1.26, 1.0), 0.07)
+	tw.tween_property(_o_aura, "modulate", Color(1.62, 1.46, 1.26, 1.0), 0.07)
+
+func _on_o_release() -> void:
+	if _o_cap == null:
+		return
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_o_cap, "position:y", _o_cap_rest, 0.24) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_o_bloom, "modulate", Color.WHITE, 0.30)
+	tw.tween_property(_o_trim, "modulate", Color.WHITE, 0.30)
+	tw.tween_property(_o_aura, "modulate", Color.WHITE, 0.34)
+
+# One band of the logo gold, shaded in two directions at once: around the ring by
+# where the key light falls, and across the band by a rounded bevel profile (both
+# edges roll away, the crown catches the light).
+#
+# It is built as a quad strip with per-vertex colours rather than a stack of
+# draw_arc() calls: neighbouring quads share their edge vertices and colours exactly,
+# so the metal comes out smooth. Painting it as separate arc segments leaves a seam
+# at every joint and the ring reads as a milled gear instead of a solid.
+const LUX_SEGS := 64
+const LUX_PROFILE := [-0.50, -0.18, 0.16, 0.50]     # band-relative radii of the rings
+const LUX_CROWN := [0.30, 1.00, 0.90, 0.26]         # how much light each ring takes
+
+func _gold_band(c: CanvasItem, ctr: Vector2, radius: float, thick: float, lit: Vector2) -> void:
+	for i in LUX_SEGS:
+		var a0 := TAU * float(i) / float(LUX_SEGS)
+		var a1 := TAU * float(i + 1) / float(LUX_SEGS)
+		var d0 := Vector2(cos(a0), sin(a0))
+		var d1 := Vector2(cos(a1), sin(a1))
+		var l0 := d0.dot(lit)                        # -1 far side .. 1 facing the light
+		var l1 := d1.dot(lit)
+		for k in LUX_PROFILE.size() - 1:
+			var ra: float = radius + thick * LUX_PROFILE[k]
+			var rb: float = radius + thick * LUX_PROFILE[k + 1]
+			var wa: float = LUX_CROWN[k]
+			var wb: float = LUX_CROWN[k + 1]
+			c.draw_polygon(
+				PackedVector2Array([ctr + d0 * ra, ctr + d1 * ra, ctr + d1 * rb, ctr + d0 * rb]),
+				PackedColorArray([_lux(l0, wa), _lux(l1, wa), _lux(l1, wb), _lux(l0, wb)]))
+
+# The gold at one point on a band. `lam` is how squarely that point faces the key
+# light (-1..1); `crown` is how proud of the bevel it sits (0 at a rolled edge, 1 at
+# the crown). The far side never goes flat-dark — it picks up a warm bounce, which is
+# the difference between gold and brown.
+func _lux(lam: float, crown: float) -> Color:
+	var col := LUX_DEEP.lerp(LUX_BASE, 0.34 + 0.66 * (lam * 0.5 + 0.5))
+	col = col.lerp(LUX_HI, pow(maxf(lam, 0.0), 2.0) * crown)
+	col = col.lerp(LUX_RIM, pow(maxf(-lam, 0.0), 3.0) * 0.55)
+	return col.lerp(LUX_DEEP, (1.0 - crown) * 0.42)
+
+# A four-point star glint: two tapered spikes crossed, plus a hot core.
+func _sparkle(c: CanvasItem, ctr: Vector2, size: float) -> void:
+	var w := size * 0.16
+	for rot in [0.0, PI * 0.5]:
+		var dir := Vector2(cos(rot), sin(rot))
+		var nrm := Vector2(-dir.y, dir.x)
+		var long: float = size * (0.5 if rot == 0.0 else 0.34)
+		c.draw_colored_polygon(PackedVector2Array([
+			ctr - dir * long, ctr + nrm * w, ctr + dir * long, ctr - nrm * w]),
+			Color(1, 1, 1, 0.85))
+	c.draw_circle(ctr, w * 1.15, Color(1, 1, 1, 0.95))
 
 func _add_line(pos: Vector2, size: Vector2, col: Color) -> void:
 	var r := ColorRect.new()
@@ -520,8 +883,27 @@ func _build_arena_card() -> void:
 	art.size = Vector2(300, ARENA_SIZE.y)
 	art.position = Vector2(6, 0)
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	art.draw.connect(_draw_arena_simon.bind(art))
+	art.draw.connect(_draw_arena_colosseum.bind(art))
 	panel.add_child(art)
+
+	# The pad's six buttons light one at a time. Each one's light is its own additive
+	# node rather than a repaint of the pad, and they share the art's canvas transform
+	# so they land exactly on the buttons underneath. Added before the knights, so the
+	# fencers stay in front of the light rather than behind it.
+	var addm := CanvasItemMaterial.new()
+	addm.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	var lights := Node2D.new()
+	lights.position = art.position + _KN_TF_POS
+	lights.scale = _KN_TF_SCL
+	panel.add_child(lights)
+	_pad_lights.clear()
+	for i in PAD_COLS.size():
+		var lit := Node2D.new()
+		lit.material = addm
+		lit.modulate = Color(1, 1, 1, 0)
+		lit.draw.connect(_draw_arena_btn_light.bind(lit, i))
+		lights.add_child(lit)
+		_pad_lights.append(lit)
 
 	# The two duelling knights live on their own thin overlay above the (static)
 	# colosseum art, so only this tiny node redraws each frame. Same box + canvas
@@ -583,10 +965,10 @@ func _build_arena_card() -> void:
 	_duel_rng.randomize()
 
 # The Arena mascot: a medieval colosseum. Massive tiered stone grandstands ring a
-# central arena floor rendered as Simon himself (the four-colour wheel), where two
+# central arena floor carrying the BUTTON PAD (see _draw_arena_pad), where two
 # armoured knights duel with swords. Torches, banners, a wooden railing and a dark,
 # warm-lit mood set the epic medieval scene. Fully static. `c` is a ~214 x 124 box.
-func _draw_arena_simon(c: Control) -> void:
+func _draw_arena_colosseum(c: Control) -> void:
 	# The scene below is authored around the original 214x124 box; a scaled canvas
 	# transform blows it up crisply to fill the wider, deluxe art box.
 	# Squashed a touch vertically (sy 1.13 vs sx 1.28) so the bowl sits fully inside
@@ -670,32 +1052,189 @@ func _draw_arena_simon(c: Control) -> void:
 		var p := ctr + Vector2(cos(a) * 54.0, sin(a) * 25.5)
 		c.draw_line(p, p + Vector2(0, -3.0), Color(0.42, 0.28, 0.15), 1.4)
 
-	# --- Simon himself as the arena floor: the four-colour wheel (top gold, right
-	# red, bottom green, left blue), the sand showing through the gaps as a cross ---
-	var f_rx := 50.0
-	var f_ry := 24.0
-	var simon := [Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
-		Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
-	var gap := deg_to_rad(6.0)
-	for q in 4:
-		var a0 := -PI * 0.75 + q * PI * 0.5 + gap * 0.5
-		var a1 := -PI * 0.75 + (q + 1) * PI * 0.5 - gap * 0.5
-		var wedge := PackedVector2Array([ctr])
-		for k in 11:
-			var a: float = lerp(a0, a1, float(k) / 10.0)
-			wedge.append(ctr + Vector2(cos(a) * f_rx, sin(a) * f_ry))
-		c.draw_colored_polygon(wedge, simon[q])
-	# Glossy sheen across the top of the colour wheel — makes Simon read as polished.
-	c.draw_colored_polygon(_ellipse_pts(ctr + Vector2(0, -7), 34.0, 11.0), Color(1, 1, 1, 0.10))
-	# Thin gold ring binding the wheel, then the dark hub.
-	var wheel_ring := _ellipse_pts(ctr, f_rx, f_ry, 44)
-	wheel_ring.append(wheel_ring[0])
-	c.draw_polyline(wheel_ring, Color(0.98, 0.82, 0.34, 0.6), 1.4, true)
-	c.draw_colored_polygon(_ellipse_pts(ctr, 8.0, 4.0), Color(0.12, 0.12, 0.18))   # hub
-	c.draw_polyline(_ellipse_pts(ctr, 8.0, 4.0, 20), Color(0.98, 0.82, 0.34, 0.7), 1.0, true)  # gilded hub rim
+	# --- what the two knights are actually fighting over: the BUTTON PAD ---
+	_draw_arena_pad(c)
 
 	# The two duelling knights are drawn on a separate animated overlay
-	# (_draw_arena_knights), so nothing below the wheel needs to redraw per frame.
+	# (_draw_arena_knights), so nothing below the pad needs to redraw per frame; the
+	# pad's own idle light is a set of additive nodes above it (_draw_arena_btn_light).
+
+# ---------------- the Arena's button pad ----------------
+#
+# What stands on the arena floor is a miniature LUMEO board: six INDIVIDUAL physical
+# buttons standing on a dark hexagonal deck. It replaced a four-colour Simon wheel,
+# and the whole point of the swap is that nothing here is a slice of a disc — every
+# button is its own object, with its own bezel, its own seat and its own shadow, and
+# the deck underneath is neutral dark metal so the colour only ever lives in the caps.
+#
+# Everything is authored in the same ~214x124 space as the colosseum around it and
+# drawn once into the static art layer. The idle "one button lights up" pulse lives in
+# separate additive nodes on top (_draw_arena_btn_light), so the pad never repaints.
+const PAD_CTR := Vector2(107.0, 74.0)         # authored-space centre of the arena floor
+const PAD_RX := 43.0                          # deck radius, across the flats-to-points
+const PAD_RY := 20.5                          # ...squashed by the floor's own perspective
+const PAD_LIFT := 5.0                         # how tall the deck stands off the sand
+const PAD_RING := Vector2(29.0, 13.8)         # the ring the six buttons stand on
+const PAD_BTN := Vector2(9.0, 4.3)            # one button's frame, in the same perspective
+const PAD_BTN_H := 4.4                        # how tall a button stands off the deck
+
+# The six caps, in ring order from the top. Cyan / magenta / amber / blue / jade /
+# violet: the game's own palette, ordered so no two neighbours are the same family.
+const PAD_COLS := [
+	Color(0.22, 0.86, 0.96),   # cyan
+	Color(0.96, 0.30, 0.72),   # magenta
+	Color(1.00, 0.72, 0.20),   # amber
+	Color(0.28, 0.48, 0.99),   # deep blue
+	Color(0.16, 0.84, 0.56),   # jade
+	Color(0.60, 0.42, 1.00),   # violet
+]
+# The order the idle pulse walks them in. Deliberately NOT 0,1,2,3,4,5: a ring lighting
+# in sequence reads as a spinner, and this has to read as a remembered pattern.
+const PAD_SEQ := [0, 3, 1, 5, 2, 4]
+
+# Where button `i` stands, in authored space. Index 0 is the far one at the top.
+func _pad_btn_pos(i: int) -> Vector2:
+	var a := -PI * 0.5 + TAU * float(i) / float(PAD_COLS.size())
+	return PAD_CTR + Vector2(cos(a) * PAD_RING.x, sin(a) * PAD_RING.y)
+
+# The deck's outline: a hexagon in the floor's perspective, rotated 30 degrees off the
+# buttons so a corner sits between every neighbouring pair rather than behind one.
+func _pad_hex(ctr: Vector2, rx: float, ry: float) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in 6:
+		var a := TAU * float(i) / 6.0
+		pts.append(ctr + Vector2(cos(a) * rx, sin(a) * ry))
+	return pts
+
+func _closed(pts: PackedVector2Array) -> PackedVector2Array:
+	var out := PackedVector2Array(pts)
+	out.append(pts[0])
+	return out
+
+# The deck, then the six buttons standing on it, back to front.
+func _draw_arena_pad(c: CanvasItem) -> void:
+	var ctr := PAD_CTR
+
+	# the shadow the whole deck drops onto the sand
+	c.draw_colored_polygon(_ellipse_pts(ctr + Vector2(0.0, PAD_LIFT + 2.0),
+		PAD_RX * 1.04, PAD_RY * 1.10, 28), Color(0.0, 0.0, 0.0, 0.34))
+
+	# the deck's side wall: the hexagon stamped downward, dark at the foot and
+	# climbing into gunmetal, so the deck reads as a slab with thickness
+	for i in range(9, 0, -1):
+		var f := float(i) / 9.0
+		c.draw_colored_polygon(_pad_hex(ctr + Vector2(0.0, PAD_LIFT * f), PAD_RX, PAD_RY),
+			Color(0.035, 0.035, 0.055).lerp(Color(0.15, 0.15, 0.21), 1.0 - f))
+
+	# the deck's top face: dark brushed metal, lit a touch toward the middle. Built as
+	# a fan of six triangles so the falloff is a real gradient rather than a flat wash.
+	var rim := _pad_hex(ctr, PAD_RX, PAD_RY)
+	var face_mid := Color(0.235, 0.235, 0.315)
+	var face_edge := Color(0.115, 0.115, 0.165)
+	for i in 6:
+		c.draw_polygon(PackedVector2Array([ctr, rim[i], rim[(i + 1) % 6]]),
+			PackedColorArray([face_mid, face_edge, face_edge]))
+
+	# restrained machining: six shallow radial grooves running out to the corners,
+	# each a dark cut with a lit lip on its upper side
+	for i in 6:
+		var a := TAU * float(i) / 6.0
+		var d := Vector2(cos(a) * PAD_RX, sin(a) * PAD_RY)
+		c.draw_line(ctr + d * 0.34, ctr + d * 0.94, Color(0.06, 0.06, 0.10, 0.85), 1.2)
+		c.draw_line(ctr + d * 0.34 + Vector2(0.0, -0.7), ctr + d * 0.94 + Vector2(0.0, -0.7),
+			Color(0.42, 0.44, 0.56, 0.30), 0.6)
+
+	# the illuminated edge: one thin cool filament following the deck's top rim, with a
+	# fainter, wider copy under it standing in for its bloom
+	c.draw_polyline(_closed(rim), Color(0.30, 0.86, 1.00, 0.16), 3.0, true)
+	c.draw_polyline(_closed(rim), Color(0.62, 0.94, 1.00, 0.70), 1.1, true)
+	# ...and six tiny service lights, one at each corner
+	for p in rim:
+		c.draw_circle(p, 1.5, Color(0.40, 0.88, 1.00, 0.22))
+		c.draw_circle(p, 0.7, Color(0.86, 0.98, 1.00, 0.85))
+
+	# the centre medallion: a small sunk disc with a lit rim. It is the only thing in
+	# the middle of the deck, which is what keeps the six buttons the subject.
+	c.draw_colored_polygon(_ellipse_pts(ctr, 5.4, 2.6, 20), Color(0.07, 0.07, 0.11))
+	c.draw_polyline(_closed(_ellipse_pts(ctr, 5.4, 2.6, 20)), Color(0.52, 0.60, 0.78, 0.55), 0.8, true)
+	c.draw_circle(ctr + Vector2(0.0, -0.3), 1.1, Color(0.72, 0.86, 1.00, 0.50))
+
+	# the buttons, painted back to front so the near ones overlap the far ones
+	var order := [0, 1, 5, 2, 4, 3]
+	for i in order:
+		_draw_arena_button(c, _pad_btn_pos(i), PAD_COLS[i])
+
+# One physical button on the deck: contact shadow, a metal frame with a visible side
+# wall, the dark seat milled into it, and a raised coloured cap sitting in the seat.
+# The same four parts, in the same order, as the buttons the game is actually played
+# on — just small enough to fit on a card.
+func _draw_arena_button(c: CanvasItem, p: Vector2, col: Color) -> void:
+	var rx := PAD_BTN.x
+	var ry := PAD_BTN.y
+
+	# the shadow it drops on the deck, offset with the scene's key light
+	c.draw_colored_polygon(_ellipse_pts(p + Vector2(1.1, PAD_BTN_H * 0.55), rx * 1.10, ry * 1.10, 22),
+		Color(0.0, 0.0, 0.0, 0.40))
+
+	# the frame's side wall, stamped down onto the deck
+	for i in range(6, 0, -1):
+		var f := float(i) / 6.0
+		c.draw_colored_polygon(_ellipse_pts(p + Vector2(0.0, PAD_BTN_H * f), rx, ry, 22),
+			Color(0.045, 0.045, 0.065).lerp(Color(0.22, 0.22, 0.30), 1.0 - f))
+
+	# the frame's top face + its polished lip
+	c.draw_colored_polygon(_ellipse_pts(p, rx, ry, 22), Color(0.30, 0.30, 0.39))
+	c.draw_polyline(_closed(_ellipse_pts(p, rx, ry, 22)), Color(0.62, 0.65, 0.80, 0.85), 0.9, true)
+	c.draw_polyline(_ellipse_pts(p, rx * 0.99, ry * 0.99, 22).slice(11, 20),
+		Color(0.88, 0.92, 1.00, 0.55), 0.7, true)
+
+	# the seat: the dark gap the cap is sunk into. Thin, but it is the whole reason the
+	# cap reads as a separate part rather than as a coloured spot painted on the frame.
+	c.draw_colored_polygon(_ellipse_pts(p, rx * 0.76, ry * 0.76, 22), Color(0.05, 0.05, 0.075))
+
+	# the cap: raised out of the seat, with its own wall of thickness under it
+	var lift := 1.7
+	var crx := rx * 0.66
+	var cry := ry * 0.66
+	for i in range(4, 0, -1):
+		var f := float(i) / 4.0
+		c.draw_colored_polygon(_ellipse_pts(p + Vector2(0.0, lift * f), crx, cry, 22),
+			col.darkened(0.74).lerp(col.darkened(0.46), 1.0 - f))
+
+	# the cap's face: a vertical ramp from a lit crown to a deep shoulder
+	var top := p - Vector2(0.0, lift)
+	var face := _ellipse_pts(top, crx, cry, 22)
+	var fcol := PackedColorArray()
+	for pt in face:
+		var t: float = clampf((pt.y - (top.y - cry)) / maxf(2.0 * cry, 0.001), 0.0, 1.0)
+		fcol.append(col.lightened(0.34).lerp(col.darkened(0.42), smoothstep(0.0, 1.0, t)))
+	c.draw_polygon(face, fcol)
+	# the gloss on its crown, and a faint bounce of its own colour on the far shoulder
+	c.draw_colored_polygon(_ellipse_pts(top + Vector2(-0.4, -cry * 0.36), crx * 0.56, cry * 0.42, 16),
+		Color(1, 1, 1, 0.30))
+	c.draw_polyline(_closed(_ellipse_pts(top, crx, cry, 22)), col.lightened(0.55).lerp(Color(0, 0, 0, 1), 0.15), 0.6, true)
+
+# The light one button throws when the pad's idle pulse reaches it. Drawn additively in
+# the cap's own colour and animated with `modulate:a` alone — the pad itself is static
+# art and never repaints for this.
+func _draw_arena_btn_light(c: CanvasItem, i: int) -> void:
+	var p := _pad_btn_pos(i)
+	var col: Color = PAD_COLS[i]
+	var crx := PAD_BTN.x * 0.66
+	var cry := PAD_BTN.y * 0.66
+	var top := p - Vector2(0.0, 1.7)
+	# the halo standing in the air over the button
+	for k in 5:
+		var f := float(k) / 4.0
+		c.draw_colored_polygon(_ellipse_pts(top, crx * (1.5 + f * 2.4), cry * (1.5 + f * 2.4), 20),
+			Color(col.r, col.g, col.b, 0.10 - f * 0.018))
+	# the cap itself running hot, and a white-hot core on its crown
+	c.draw_colored_polygon(_ellipse_pts(top, crx, cry, 22), Color(col.r, col.g, col.b, 0.85))
+	c.draw_colored_polygon(_ellipse_pts(top + Vector2(0.0, -cry * 0.22), crx * 0.62, cry * 0.55, 16),
+		Color(1, 1, 1, 0.45))
+	# a spill of the same colour onto the deck the button stands on
+	c.draw_colored_polygon(_ellipse_pts(p + Vector2(0.0, PAD_BTN_H * 0.5), PAD_BTN.x * 1.7, PAD_BTN.y * 1.7, 22),
+		Color(col.r, col.g, col.b, 0.10))
 
 # A deluxe balustrade fence ringing the colosseum: a stone rail of gilded posts
 # linked by twin rails, each post crowned with a golden finial. `rx`,`ry` are the
@@ -1065,13 +1604,98 @@ func _on_card_press(wrap: Control, down: bool) -> void:
 
 const START_SIZE := Vector2(300.0, 300.0)
 
+# Where the button sits inside its 300x300 art box, and how big it is. Kept high in
+# the box so the barrel and its contact shadow clear the START label underneath.
+const PLAY_CTR := Vector2(150.0, 138.0)
+const PLAY_RAD := 113.0                              # bezel outer radius
+# The button was authored at radius 96 and is now the menu's hero, ~18% wider. Every
+# radius in the drawing is a fraction of PLAY_RAD and scales for free; the handful of
+# values that are honest PIXELS (barrel depth, cap lift, the arrow, hairline widths)
+# are multiplied by this instead, so the assembly grows as one object rather than a
+# big ring with a small arrow rattling around inside it.
+const PLAY_K := PLAY_RAD / 96.0
+# Top of the START label's box, inside the same 300x300 art. The word is the button's
+# caption, not a second element under it, so it is pinned to the hardware: the barrel
+# and its contact shadow bottom out at PLAY_CTR.y + PLAY_RAD + depth * 1.4 ≈ 266, and
+# the cap-height of a 36px "START" starts ~17px into a 48-tall centred box. 265 leaves
+# roughly ten clean pixels between the two — close enough that the word reads as
+# attached to the button, far enough that it never touches the shadow.
+const START_LABEL_Y := 265.0
+
+# The accent's colour wheel. ONE colour owns the ring at a time; a leg is a slow
+# sweep of hue from the colour it holds to the next, so the ring never becomes a
+# rainbow and never divides into segments — it just changes what it is lit with.
+# Hues (degrees) in the order the game reads them:
+#   RED -> YELLOW -> ORANGE -> BLUE -> PURPLE -> GREEN -> RED
+const PLAY_HUE := [0.0, 55.0, 30.0, 220.0, 265.0, 140.0]
+# The signed hue travel of each leg. Mostly the short way round, EXCEPT orange->blue,
+# which is swept forward through green/cyan: the short way back would drag the ring
+# through red and purple, i.e. through two colours the cycle is about to show anyway.
+# They sum to exactly 0, which is what makes the loop seamless.
+const PLAY_HUE_STEP := [55.0, -25.0, 190.0, 45.0, -125.0, -140.0]
+const PLAY_CYCLE := 11.0                             # seconds for the whole wheel
+const PLAY_BREATH := 3.2                             # seconds per idle glow swell
+
 func _build_start() -> void:
-	_start_lm = _landmark(START_SIZE, _draw_play_orb, _on_start)
-	_lm_label(_start_lm, "START", 36, Color.WHITE, ICON_BLUE.lightened(0.25), Vector2(0, 272), Vector2(START_SIZE.x, 48))
+	_start_lm = _landmark(START_SIZE, _draw_play_frame, _on_start)
+	var art: Control = _start_lm["art"]
+
+	# the coloured bloom the frame's light channel throws, then the hot trim lying in
+	# the channel itself, then the violet cap on top. Both luminous layers are drawn
+	# in white and additively blended, so tinting them is a modulate away — the colour
+	# cycle never repaints anything.
+	var add := CanvasItemMaterial.new()
+	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+
+	_play_glow = Node2D.new()
+	_play_glow.material = add
+	_play_glow.draw.connect(_draw_play_glow.bind(_play_glow))
+	art.add_child(_play_glow)
+
+	_play_accent = Node2D.new()
+	_play_accent.material = add
+	_play_accent.draw.connect(_draw_play_accent.bind(_play_accent))
+	art.add_child(_play_accent)
+
+	_play_cap = Node2D.new()
+	_play_cap_rest = 0.0
+	_play_cap.draw.connect(_draw_play_cap.bind(_play_cap))
+	art.add_child(_play_cap)
+
+	_lm_label(_start_lm, "START", 36, Color.WHITE, ICON_BLUE.lightened(0.25),
+		Vector2(0, START_LABEL_Y), Vector2(START_SIZE.x, 48))
+
+# The colour the accent is lit with `t` legs into the wheel (t in 0..6, wrapping).
+# smoothstep() across each leg makes the ring settle on every colour before easing
+# into the next, so it reads as "red ... blending ... yellow" rather than as a
+# constant-speed hue spin.
+func _play_accent_color(t: float) -> Color:
+	var leg := int(floor(t)) % PLAY_HUE.size()
+	var e: float = smoothstep(0.0, 1.0, t - floor(t))
+	var h: float = PLAY_HUE[leg] + PLAY_HUE_STEP[leg] * e
+	return Color.from_hsv(wrapf(h, 0.0, 360.0) / 360.0, 0.84, 1.0)
+
+# Drives the accent every frame: its colour from the wheel, its brightness from a
+# slow idle swell plus whatever the press is adding. Only modulate is touched, so
+# this costs two colour multiplies a frame and no redraw.
+func _play_accent_tick(t: float) -> void:
+	var col := _play_accent_color(t)
+	var breath: float = 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.001 * TAU / PLAY_BREATH)
+	# The land runs hot, but only barely mixed toward white (0.12, not the old 0.34):
+	# the accent is blended additively, so every point of white here is a point of
+	# saturation lost, and at this size a washed ring reads as "some pale light"
+	# rather than as RED, then YELLOW, then BLUE. The brightness that sells it comes
+	# from the alpha the band is drawn with, not from bleaching the hue.
+	var hot := col.lerp(Color.WHITE, 0.12) * (1.28 + 0.55 * _play_flash)
+	hot.a = 1.0
+	_play_accent.modulate = hot
+	var k: float = (0.94 + 0.16 * breath) * (1.0 + 1.20 * _play_flash)
+	_play_glow.modulate = Color(col.r * k, col.g * k, col.b * k, 1.0)
 
 # Build one clickable landmark: a transparent Button (input) wrapping an `art`
-# Control (scaled on hover/press, breathing while idle) which holds the procedural
-# `drawer`. Returns the pieces so callers can attach labels and the layout can
+# Control which holds the procedural `drawer` plus whatever extra layers the caller
+# adds on top. The press is handled per-part rather than by scaling `art` (see
+# _on_lm_press). Returns the pieces so callers can attach labels and the layout can
 # position the wrapper.
 func _landmark(art_size: Vector2, draw_cb: Callable, cb: Callable) -> Dictionary:
 	var wrap := Control.new()
@@ -1143,41 +1767,249 @@ func _ellipse_pts(center: Vector2, rx: float, ry: float, n: int = 48) -> PackedV
 		pts.append(center + Vector2(cos(a) * rx, sin(a) * ry))
 	return pts
 
-# Big glossy PLAY orb ringed by the four Simon colors, with a white play triangle.
-# Centered in a 300x300 art box (see START_SIZE).
-func _draw_play_orb(c: Control) -> void:
-	var ctr := Vector2(150.0, 150.0)
-	var rad := 104.0
-	_glow(c, ctr, rad + 60.0, Color(0.35, 0.60, 1.0), 7)
+# ---------------- the START button ----------------
+#
+# The same machine as the logo's O, one size up and in dark metal: a barrel standing
+# off its own contact shadow, milled to the HW_* profile (light channel, crown, slope,
+# bore) and carrying a raised violet cap. It is drawn in four layers so the parts that
+# animate are separate nodes from the parts that never do:
+#
+#   _draw_play_frame   the dark metal — barrel, channel groove, crown, slope, socket
+#   _draw_play_glow    the coloured bloom the channel throws (additive, tinted)
+#   _draw_play_accent  the hot trim lying in the channel (additive, tinted)
+#   _draw_play_cap     the violet dome + arrow — the only piece that moves on a press
+#
+# Nothing here repaints: the colour wheel and the idle swell ride on modulate, the
+# press on the cap's transform.
 
-	# four-color Simon ring
-	var ringR := rad + 14.0
-	var cols := [Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
-		Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
-	var gap := deg_to_rad(10.0)
-	for i in 4:
-		var a0 := -PI * 0.75 + i * PI * 0.5 + gap * 0.5
-		var a1 := -PI * 0.75 + (i + 1) * PI * 0.5 - gap * 0.5
-		c.draw_arc(ctr, ringR, a0, a1, 26, cols[i], 12.0, true)
+# The frame's own material. Near-black anodised metal, not gunmetal: it is only the
+# supporting structure the light sits in, and every tone it carries competes with
+# the colour the land is lit with. Dark enough that an additive colour laid over it
+# comes out saturated instead of washed toward white.
+const PLAY_METAL := Color(0.17, 0.17, 0.24)          # the frame's dark base tone
+const PLAY_SEAT := Color(0.045, 0.042, 0.085)        # the seat — the darkest ring
 
-	# orb body (vertical gradient sphere)
+func _draw_play_frame(c: Control) -> void:
+	var ctr := PLAY_CTR
+	var rad := PLAY_RAD
+	var depth := 13.0 * PLAY_K                       # how tall the barrel stands
+	var lit := LUX_LIGHT.normalized()
+
+	# contact shadow on the ground it stands on
+	c.draw_colored_polygon(
+		_ellipse_pts(ctr + Vector2(0.0, depth + rad * 0.78), rad * 0.90, rad * 0.17),
+		Color(0.02, 0.01, 0.08, 0.40))
+
+	# The barrel: the bezel's footprint stamped downward. Shallower and darker than
+	# it was — it is the frame's side wall, and its job is to say "this ring has
+	# thickness", not to add another disc of grey to the silhouette.
+	var steps := 14
+	for i in range(steps, 0, -1):
+		var f := float(i) / float(steps)
+		c.draw_circle(ctr + Vector2(0.0, depth * f),
+			rad, Color(0.025, 0.025, 0.05).lerp(Color(0.13, 0.13, 0.19), 1.0 - f))
+
+	c.draw_set_transform(ctr, 0.0, Vector2.ONE)
+	# The frame, in dark metal. The colour is NOT painted here — it is the additive
+	# accent layer above, so the wheel can re-tint it without repainting anything.
+	# outer chamfer, rolling up from the barrel to the land
+	_ring_band(c, rad, HW_LIP, 1.00, lit, 0.24, 0.86, PLAY_METAL)
+	# the land: the face the light lies on, kept flat and dark
+	_ring_band(c, rad, HW_LAND, HW_LIP, lit, 0.86, 0.80, PLAY_METAL.darkened(0.30))
+	# inner chamfer, rolling down off the land into the seat
+	_ring_band(c, rad, HW_CHAMFER, HW_LAND, lit, 0.80, 0.10, PLAY_METAL.darkened(0.42))
+	# the seat: the darkest ring on the object. This thin band is the whole
+	# separation between the luminous frame and the violet cap.
+	_ring_band(c, rad, HW_SEAT, HW_CHAMFER, lit, 0.14, 0.02, PLAY_SEAT)
+
+	# the bore under the cap, and the shadow the cap casts down into its seat
+	var bore := rad * HW_SEAT
+	for i in 6:
+		var f := float(i) / 5.0
+		c.draw_circle(Vector2(0.0, -5.0 * PLAY_K * (1.0 - f)), bore * (1.0 - f * 0.03),
+			Color(0.03, 0.03, 0.055).lerp(Color(0.09, 0.09, 0.14), f * 0.6))
+	for i in 3:
+		var f := float(i) / 2.0
+		c.draw_arc(Vector2(0.0, 3.0 * PLAY_K), rad * (HW_SEAT + 0.006 + f * 0.016), 0.0, TAU, 72,
+			Color(0.01, 0.01, 0.03, 0.34 - f * 0.10), rad * 0.030, true)
+
+	# antialiased silhouettes over the flat-shaded quads
+	c.draw_arc(Vector2.ZERO, rad, 0.0, TAU, 96, Color(0.03, 0.03, 0.06, 0.85), 2.4 * PLAY_K, true)
+	c.draw_arc(Vector2.ZERO, bore, 0.0, TAU, 96, Color(0.02, 0.02, 0.04, 0.85), 2.0 * PLAY_K, true)
+	# one cool graze on the outer chamfer's lit shoulder: the cue that the frame is
+	# machined metal even where the colour has not reached it
+	c.draw_arc(Vector2.ZERO, rad * 0.978, deg_to_rad(-166.0), deg_to_rad(-104.0), 18,
+		Color(0.86, 0.90, 1.00, 0.30), rad * 0.032, true)
+	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# The bloom the lit land throws into the air around the button and down into its own
+# seat. Drawn white; the cycle tints it. It is what makes the colour visible from
+# across the menu rather than only on the ring itself — but it stays a halo, never a
+# floodlight, or the whole button washes out.
+func _draw_play_glow(c: Node2D) -> void:
+	var rad := PLAY_RAD
+	c.draw_set_transform(PLAY_CTR, 0.0, Vector2.ONE)
+	# outward, into the air
+	for i in 6:
+		var f := float(i) / 5.0
+		c.draw_arc(Vector2.ZERO, rad * (0.99 + f * 0.075), 0.0, TAU, 72,
+			Color(1, 1, 1, 0.105 - f * 0.017), rad * (0.045 + f * 0.055), true)
+	# inward: a spill across the inner chamfer and into the seat, so the seat reads as
+	# a shadowed groove lit from its outer wall rather than as a painted black ring
+	for i in 3:
+		var f := float(i) / 2.0
+		c.draw_arc(Vector2.ZERO, rad * (0.828 - f * 0.030), 0.0, TAU, 72,
+			Color(1, 1, 1, 0.115 - f * 0.035), rad * (0.026 + f * 0.024), true)
+	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# The colour itself: the frame's whole LAND lit from within, plus a thin hot edge
+# running along its outer lip. This is the primary accent on the screen and the only
+# part of the button that ever changes colour.
+#
+# Everything here is drawn in WHITE with per-vertex ALPHA and blended ADDITIVELY over
+# the dark frame, so `modulate` alone re-lights it: the pixel ends up
+# `dark_metal + colour * alpha`, which stays a saturated colour instead of drifting
+# toward white the way a colour mixed toward white would. That is also why the land
+# is never taken to full alpha — a fully lit land at every hue would clip to white on
+# yellow and cyan and the colour would be gone at exactly the brightest moment.
+#
+# The band is shaded twice: across it by a bevel profile (both edges roll away, the
+# outer shoulder is proudest), and around it by the key light — but only gently, so
+# ONE colour still owns the whole ring rather than the ring reading as a gradient.
+const PLAY_LAND_PROFILE := [0.845, 0.876, 0.918, 0.952, 0.985]
+const PLAY_LAND_ALPHA := [0.16, 0.62, 0.86, 0.74, 0.20]
+
+func _draw_play_accent(c: Node2D) -> void:
+	var rad := PLAY_RAD
+	var lit := LUX_LIGHT.normalized()
+	c.draw_set_transform(PLAY_CTR, 0.0, Vector2.ONE)
+
+	for i in HW_SEGS:
+		var a0 := TAU * float(i) / float(HW_SEGS)
+		var a1 := TAU * float(i + 1) / float(HW_SEGS)
+		var d0 := Vector2(cos(a0), sin(a0))
+		var d1 := Vector2(cos(a1), sin(a1))
+		# 0.80 .. 1.00 of the authored alpha: the far side of the ring is still
+		# unmistakably lit, it just isn't the side the key light is on.
+		var k0: float = 0.80 + 0.20 * (d0.dot(lit) * 0.5 + 0.5)
+		var k1: float = 0.80 + 0.20 * (d1.dot(lit) * 0.5 + 0.5)
+		for j in PLAY_LAND_PROFILE.size() - 1:
+			var ra: float = rad * PLAY_LAND_PROFILE[j]
+			var rb: float = rad * PLAY_LAND_PROFILE[j + 1]
+			var aa: float = PLAY_LAND_ALPHA[j]
+			var ab: float = PLAY_LAND_ALPHA[j + 1]
+			c.draw_polygon(
+				PackedVector2Array([d0 * ra, d1 * ra, d1 * rb, d0 * rb]),
+				PackedColorArray([Color(1, 1, 1, aa * k0), Color(1, 1, 1, aa * k1),
+					Color(1, 1, 1, ab * k1), Color(1, 1, 1, ab * k0)]))
+
+	# the thin luminous edge: a hot filament along the land's outer shoulder, which is
+	# what gives the frame a defined lit EDGE instead of a soft coloured wash
+	c.draw_arc(Vector2.ZERO, rad * 0.941, 0.0, TAU, 96, Color(1, 1, 1, 0.42), rad * 0.020, true)
+	# ...and a second, finer one on the inner lip, so the frame is bounded on both
+	# sides and reads as a bezel seated around the cap
+	c.draw_arc(Vector2.ZERO, rad * 0.859, 0.0, TAU, 96, Color(1, 1, 1, 0.26), rad * 0.012, true)
+	# the land is a rolled surface, not a flat washer: a specular sweep where the key
+	# light grazes it
+	c.draw_arc(Vector2.ZERO, rad * 0.918, deg_to_rad(-168.0), deg_to_rad(-98.0), 22,
+		Color(1, 1, 1, 0.30), rad * 0.056, true)
+	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# The cap: a raised, glossy dome in LUMEO's own violet, carrying the play arrow. It
+# keeps its colour through the whole wheel — the cycle happens outside it.
+const PLAY_CAP_TOP := Color(0.62, 0.50, 1.00)        # lit crown of the dome
+const PLAY_CAP_BOT := Color(0.14, 0.09, 0.44)        # deep indigo where it rolls away
+
+func _draw_play_cap(c: Node2D) -> void:
+	var ctr := PLAY_CTR
+	var cap_r := PLAY_RAD * HW_SEAT - 2.5 * PLAY_K
+	var raise := 7.0 * PLAY_K                        # how far it stands out of the bore
+
+	c.draw_set_transform(ctr + Vector2(0.0, -raise), 0.0, Vector2.ONE)
+	# the cap's own wall of thickness, stamped down into the socket
+	for i in range(6, 0, -1):
+		var f := float(i) / 6.0
+		c.draw_circle(Vector2(0.0, raise * f + 2.0 * PLAY_K), cap_r,
+			Color(0.05, 0.04, 0.13).lerp(Color(0.19, 0.13, 0.44), 1.0 - f))
+
+	# the dome: a vertical ramp from a lit violet crown to deep indigo
 	var body := PackedVector2Array()
 	var bcol := PackedColorArray()
-	var n := 46
+	var n := 64
 	for i in n:
 		var a := TAU * float(i) / float(n)
-		var p := ctr + Vector2(cos(a), sin(a)) * rad
+		var p := Vector2(cos(a), sin(a)) * cap_r
 		body.append(p)
-		var t: float = clampf((p.y - (ctr.y - rad)) / (2.0 * rad), 0.0, 1.0)
-		bcol.append(Color(0.40, 0.68, 1.0).lerp(Color(0.08, 0.24, 0.62), t))
+		var t: float = clampf((p.y + cap_r) / (2.0 * cap_r), 0.0, 1.0)
+		bcol.append(PLAY_CAP_TOP.lerp(PLAY_CAP_BOT, smoothstep(0.0, 1.0, t)))
 	c.draw_polygon(body, bcol)
 
-	# gloss highlight + play triangle (nudged right for optical balance)
-	c.draw_circle(ctr + Vector2(-30, -34), 40.0, Color(1, 1, 1, 0.16))
-	c.draw_circle(ctr + Vector2(-34, -40), 21.0, Color(1, 1, 1, 0.22))
-	var tc := ctr + Vector2(11, 0)
-	c.draw_colored_polygon(PackedVector2Array([
-		tc + Vector2(-29, -40), tc + Vector2(-29, 40), tc + Vector2(40, 0)]), Color(1, 1, 1, 0.96))
+	# the dome's edge rolls away from the light: a dark inner ring reads as curvature,
+	# and a faint violet emission ring keeps the cap from going dead at the rim
+	c.draw_arc(Vector2.ZERO, cap_r - 3.5 * PLAY_K, 0.0, TAU, 64, Color(0.04, 0.02, 0.16, 0.26), 6.0 * PLAY_K, true)
+	c.draw_arc(Vector2.ZERO, cap_r - 1.6 * PLAY_K, 0.0, TAU, 64, Color(0.58, 0.46, 1.00, 0.34), 2.4 * PLAY_K, true)
+
+	# gloss: one broad sheen across the top of the dome, one tight hot spot in it
+	c.draw_colored_polygon(
+		_ellipse_pts(Vector2(-4.0 * PLAY_K, -cap_r * 0.44), cap_r * 0.74, cap_r * 0.34),
+		Color(1, 1, 1, 0.16))
+	c.draw_circle(Vector2(-cap_r * 0.36, -cap_r * 0.44), cap_r * 0.19, Color(1, 1, 1, 0.22))
+
+	_draw_play_arrow(c, Vector2(10.0 * PLAY_K, 0.0))
+	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# The play symbol: a rounded triangle built as a piece of lit acrylic set into the cap
+# — a cast shadow under it, a violet bounce beneath its lower edge, the white body,
+# and a brighter wedge along its lit side. Not a glyph; it has thickness.
+func _draw_play_arrow(c: CanvasItem, at: Vector2) -> void:
+	var k := PLAY_K
+	var tri := PackedVector2Array([
+		at + Vector2(-29.0, -40.0) * k, at + Vector2(-29.0, 40.0) * k, at + Vector2(41.0, 0.0) * k])
+	# the soft light the acrylic throws onto the dome around it: three swelling
+	# copies of the silhouette, each fainter, so the arrow sits IN the cap's light
+	# instead of being pasted onto it
+	for i in 3:
+		var f := float(i) / 2.0
+		var halo := PackedVector2Array()
+		for pt in tri:
+			halo.append(at + (pt - at) * (1.30 - f * 0.11))
+		_rounded_tri(c, halo, 9.0 * k, Color(0.86, 0.84, 1.00, 0.05 + f * 0.035))
+	var drop := PackedVector2Array()
+	for pt in tri:
+		drop.append(pt + Vector2(0.0, 4.0) * k)
+	_rounded_tri(c, drop, 7.0 * k, Color(0.03, 0.02, 0.16, 0.34))
+	var lift := PackedVector2Array()
+	for pt in tri:
+		lift.append(pt + Vector2(-1.0, -2.0) * k)
+	_rounded_tri(c, lift, 7.0 * k, Color(0.72, 0.66, 1.00, 0.55))    # violet bounce off the cap
+	_rounded_tri(c, tri, 7.0 * k, Color(1, 1, 1, 0.99))
+	# The bevel on the lit edge, pulled in so it sits inside the silhouette. It is the
+	# ONLY shading on the body: a second, darker wedge on the turned side was tried
+	# and it read as dirt on a white arrow rather than as a chamfer — at this size the
+	# depth has to come from the drop shadow, the violet bounce and this one highlight.
+	var bev := PackedVector2Array([
+		at + Vector2(-21.0, -25.0) * k, at + Vector2(-21.0, 6.0) * k, at + Vector2(17.0, -9.0) * k])
+	_rounded_tri(c, bev, 5.0 * k, Color(1, 1, 1, 1.0))
+
+# A triangle with rounded corners. Godot's polyline has no round joints, so it is
+# built as the inset triangle plus a round-capped stroke of width 2r along its edges:
+# each corner is pulled in along its own bisector by r/sin(half-angle), which is the
+# exact offset that lands the arc tangent to both edges. Dropping circles on the
+# original corners instead leaves three visible blobs on the acute tip.
+func _rounded_tri(c: CanvasItem, pts: PackedVector2Array, r: float, col: Color) -> void:
+	var inset := PackedVector2Array()
+	for i in 3:
+		var p := pts[i]
+		var a := (pts[(i + 2) % 3] - p).normalized()
+		var b := (pts[(i + 1) % 3] - p).normalized()
+		var bis := (a + b).normalized()
+		var half := acos(clampf(a.dot(bis), -1.0, 1.0))
+		inset.append(p + bis * (r / maxf(sin(half), 0.20)))
+	c.draw_colored_polygon(inset, col)
+	for i in 3:
+		c.draw_line(inset[i], inset[(i + 1) % 3], col, r * 2.0)
+	for pt in inset:
+		c.draw_circle(pt, r, col)
 
 # Leaderboard illustration: a 3-tier podium (silver / bronze / gold) with a gold
 # trophy on the winner's block. Drawn into the card; offset to centre in the art.
@@ -1586,16 +2418,26 @@ func _draw_gear(c: Control) -> void:
 		c.draw_line(ctr + d * s * 0.30, ctr + d * s * 0.45, col, w)
 	c.draw_arc(ctr, s * 0.30, 0.0, TAU, 32, col, w, true)
 
-func _on_lm_press(art: Control) -> void:
-	create_tween().tween_property(art, "scale", Vector2.ONE * 0.94, 0.09) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-
-func _on_lm_release(art: Control) -> void:
-	# Bounce back to rest (touch has no lingering hover, so settle at 1.0).
+# Pressing START pushes the CAP into its bezel — the frame, its channel and its light
+# stay exactly where they are. Scaling the whole widget would read as a UI element
+# being tapped; sinking one part of it reads as a switch being thrown. `_play_flash`
+# is picked up by the next _play_accent_tick, which brightens the current colour
+# without changing it.
+func _on_lm_press(_art: Control) -> void:
+	if _play_cap == null:
+		return
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(art, "scale", Vector2.ONE, 0.22) \
-		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(art, "modulate", Color.WHITE, 0.18)
+	tw.tween_property(_play_cap, "position:y", _play_cap_rest + 5.0 * PLAY_K, 0.07) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(self, "_play_flash", 1.0, 0.07)
+
+func _on_lm_release(_art: Control) -> void:
+	if _play_cap == null:
+		return
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_play_cap, "position:y", _play_cap_rest, 0.26) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(self, "_play_flash", 0.0, 0.34)
 
 # ---------------- credits ----------------
 
@@ -1724,15 +2566,38 @@ func _start_animations() -> void:
 		fl.tween_property(floater, "position:y", 0.0, dur) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
-	# the PLAY orb breathes — its inner drawer scales, independent of the hover/press
-	# scaling applied to the outer art node, so the two never fight.
-	if not _start_lm.is_empty():
-		var orb: Control = _start_lm["drawer"]
-		var br := create_tween().set_loops()
-		br.tween_property(orb, "scale", Vector2.ONE * 1.05, 1.1) \
+	# The START button does not pulse in size — it is a machined object. What moves is
+	# the light in its channel: one slow, seamless trip around the colour wheel, with
+	# an idle swell folded into the same per-frame tick (see _play_accent_tick). LINEAR
+	# so the wheel turns at a constant rate; the dwell on each colour comes from the
+	# smoothstep inside a leg, not from the tween.
+	if _play_accent:
+		create_tween().set_loops() \
+			.tween_method(_play_accent_tick, 0.0, float(PLAY_HUE.size()), PLAY_CYCLE) \
+			.set_trans(Tween.TRANS_LINEAR)
+
+	# ...and the logo's O breathes in its own gold.
+	_o_breathe()
+
+	# ...and the Arena pad remembers a pattern, one button at a time.
+	_arena_pulse()
+
+# The pad's idle: one button warms up, holds, fades, and after a beat of dark the next
+# one in the pattern does the same. ~2.4s a button, so a whole pass takes about fifteen
+# seconds — slow enough to read as ambience rather than as a sequence being played at
+# you. Nothing redraws: this is six `modulate:a` tweens on a chain.
+func _arena_pulse() -> void:
+	if _pad_lights.is_empty():
+		return
+	var tw := create_tween().set_loops()
+	for idx in PAD_SEQ:
+		var lit: Node2D = _pad_lights[idx]
+		tw.tween_property(lit, "modulate:a", 1.0, 0.55) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-		br.tween_property(orb, "scale", Vector2.ONE, 1.1) \
+		tw.tween_interval(0.28)
+		tw.tween_property(lit, "modulate:a", 0.0, 0.75) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_interval(0.85)
 
 # ---------------- account HUD (top-right) ----------------
 
@@ -3136,7 +4001,7 @@ func _show_settings_popup() -> void:
 		Color(0.15, 0.6, 0.95), overlay.queue_free)
 
 	var footer := Label.new()
-	footer.text = "Simon v%s   ·   %s" % [ProjectSettings.get_setting("application/config/version", ""), CONTACT_EMAIL]
+	footer.text = "LUMEO v%s   ·   %s" % [ProjectSettings.get_setting("application/config/version", ""), CONTACT_EMAIL]
 	footer.add_theme_font_size_override("font_size", 13)
 	footer.add_theme_color_override("font_color", Color(0.50, 0.53, 0.74, 0.65))
 	footer.position = Vector2(20, after_y + 60)
@@ -3191,7 +4056,7 @@ func _replay_tutorial(overlay: Control) -> void:
 	_start_tutorial()
 
 func _contact_us() -> void:
-	OS.shell_open("mailto:%s?subject=Simon%%20Feedback" % CONTACT_EMAIL)
+	OS.shell_open("mailto:%s?subject=LUMEO%%20Feedback" % CONTACT_EMAIL)
 
 func _open_privacy_policy() -> void:
 	OS.shell_open(PRIVACY_POLICY_URL)
@@ -3294,7 +4159,7 @@ func _show_welcome_popup() -> void:
 	# popup closes. (Picking "Sign In" routes through name-pick → a fresh home,
 	# whose _ready offers the tour based on the wallet-doc flag instead.)
 	_show_sign_in_popup(
-		"Welcome to Simon",
+		"Welcome to LUMEO",
 		"Sign in to save your coins, climb the leaderboards and claim daily rewards — or jump straight in as a guest.",
 		"Play as Guest",
 		_maybe_start_tutorial)
@@ -3582,10 +4447,10 @@ func _start_tutorial() -> void:
 	var steps: Array = []
 	steps.append({
 		"rect": Rect2(),
-		"title": "Welcome to Simon!",
+		"title": "Welcome to LUMEO!",
 		"body": "Quick tour, then you're off. Tap Next — skip anytime."})
 	if _coin_pill or _hub_btn or not _shop_card.is_empty():
-		var body_text := "Spend coins in the Shop to customize Simon."
+		var body_text := "Spend coins in the Shop to customize your board."
 		if _coin_pill or _hub_btn:
 			body_text = "Earn coins by playing and from your daily reward, then spend them in the Shop."
 		var rect := Rect2()
@@ -3604,7 +4469,7 @@ func _start_tutorial() -> void:
 		var c: Vector2 = (_start_lm["wrap"] as Control).get_global_rect().get_center()
 		steps.append({
 			"rect": Rect2(c - Vector2(120, 120), Vector2(240, 240)),
-			"title": "Play Simon",
+			"title": "Play LUMEO",
 			"body": "Medium and Hard add more buttons and move faster — pick your challenge and tap START."})
 	if not _ranks_card.is_empty():
 		steps.append({

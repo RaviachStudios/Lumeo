@@ -7,11 +7,14 @@ const ArenaUI := preload("res://arena_ui.gd")
 # Shop screen — same visual language as the leaderboards / difficulty / home
 # screens (deep-space shader background, slowly rotating orbit of glowing orbs,
 # glass back button, glowing header with diamond-underlined subtitle, segmented
-# category tabs). The category list starts with just "THEMES" (backgrounds),
-# but the tab row is built generically so adding more categories later is just
-# data. Inside THEMES, two items: SKYBOUND (blue + clouds, 2000) and INFERNO
-# (black + colorful fire, 5000). Each card shows a live preview of the theme
-# shader, the price, and a state-aware action button (BUY → EQUIP → EQUIPPED).
+# category tabs). Three categories, each built from data in one place:
+#   THEMES         — the background catalog (CoinsManager.THEMES), a scrolling grid
+#                    of live shader previews.
+#   BUTTON FRAMES  — the modelled boards' button-bezel cosmetics (ButtonFrames),
+#                    one row of cards, each previewing a real GLB button wearing it.
+#   SPECIAL SKINS  — complete pre-made wheel skins (CoinsManager.SIMON_SKINS).
+# Every card in every category shows a preview, the price, and the same state-aware
+# action button (BUY → EQUIP → EQUIPPED).
 #
 # Built entirely from Godot nodes + shaders + tweens — no PNG/MP3 assets.
 
@@ -42,11 +45,11 @@ const CATEGORIES := [
 			"forest", "desert", "clouds", "speedway", "kitty", "rainbow",
 			"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace"],
 	},
-	# Wheel colour customization. No flat `items` list — its content (live wheel
-	# preview + the three per-part colour tiles) is built specially in
-	# _render_category / _build_simon_panel.
+	# Button-frame cosmetics for the modelled boards. No flat `items` list — its cards
+	# come from ButtonFrames.ORDER and are built specially in _render_category /
+	# _build_frames_panel.
 	{
-		"key": "simon", "label": "SIMON", "icon": "diamond",
+		"key": "frames", "label": "BUTTON FRAMES", "icon": "diamond",
 		"accent": Color(0.58, 0.46, 1.00),
 	},
 	# Complete pre-made wheel skins, as their own category. Empty for now (a
@@ -55,13 +58,6 @@ const CATEGORIES := [
 		"key": "skins", "label": "SPECIAL SKINS", "icon": "diamond",
 		"accent": Color(0.92, 0.45, 0.78),
 	},
-]
-
-# Display order + pretty labels for the three customizable wheel parts.
-const SIMON_TILES := [
-	{"cat": "outer_circle", "label": "OUTER RING"},
-	{"cat": "inner_circle", "label": "CENTER HUB"},
-	{"cat": "level_number", "label": "LEVEL NUMBER"},
 ]
 
 # Reused shader from leaderboards_screen so the entire app feels like one place.
@@ -150,24 +146,18 @@ const OV_BAR_W := 260.0
 const OV_BAR_H := 10.0
 const LP_START := 0.05      # overlay painted, construction about to begin
 const LP_GRID := 0.30       # THEMES grid rendered
-const LP_PANELS := 0.50     # SIMON + SKINS panels prebuilt
+const LP_PANELS := 0.50     # BUTTON FRAMES + SKINS panels prebuilt
 const LP_COMPILE := 1.0     # every priority preview shader compiled
 
-# --- SIMON tab ---
-const SIMON_ACCENT := Color(0.58, 0.46, 1.00)
-var _simon_root: Control                 # SIMON colour panel (built lazily)
-var _simon_preview: SimonWheel           # live wheel reflecting the equipped colours
-var _simon_tiles_box: Control            # holds the three colour tiles
-var _simon_tiles: Dictionary = {}        # category -> {swatch}
+# --- BUTTON FRAMES tab ---
+var _frames_root: Control                # frame-cosmetic panel (built lazily) — a ScrollContainer
+var _frames_grid: GridContainer          # the card grid inside _frames_root
+var _frames_by_id: Dictionary = {}       # frame_id -> {root, btn, price_box, price_label, accent, preview}
 var _skins_root: Control                 # SPECIAL SKINS panel (built lazily) — the ScrollContainer
 										 # card grid, or a plain Control placeholder when detached
 										 # (_skins_coming_soon). Cast to ScrollContainer for scroll ops.
 var _skins_grid: GridContainer           # the card grid inside _skins_root
 var _skins_by_id: Dictionary = {}        # skin_id -> {root, btn, btn_label, price_label, accent, preview, y}
-# Colour popup (opened from a tile):
-var _color_popup: Control
-var _popup_category: String = ""
-var _popup_cards: Dictionary = {}        # color_id -> {btn, price_box, price_label, accent}
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -193,6 +183,7 @@ func _ready() -> void:
 	CoinsManager.balance_changed.connect(_on_balance_changed)
 	CoinsManager.themes_changed.connect(_queue_refresh)
 	CoinsManager.simon_changed.connect(_queue_refresh)
+	CoinsManager.frames_changed.connect(_queue_refresh)
 	# Everything the shop shows is already resident in CoinsManager (loaded on the
 	# boot loading screen) — there is nothing to fetch here. The lag came from the
 	# VISUALS: the THEMES grid drew ~20 full-screen animated shaders at once, and the
@@ -304,9 +295,9 @@ func _begin_load() -> void:
 func _prebuild_panels() -> void:
 	if not is_inside_tree():
 		return
-	if _simon_root == null:
-		_build_simon_panel()
-		_simon_root.visible = false
+	if _frames_root == null:
+		_build_frames_panel()
+		_frames_root.visible = false
 	await get_tree().process_frame
 	if not is_inside_tree():
 		return
@@ -321,6 +312,14 @@ func _prebuild_panels() -> void:
 	# loading instead of on the first tab switch. _begin_load idles them after that window.
 	_set_skins_preview_paused(false)
 	_layout()
+
+# Leaving the shop. The BUTTON FRAMES tab is the one place that needs all sixteen
+# cosmetics resident at once — sixteen meshes and their texture sets — and there is
+# no reason to carry that into a game. Hand everything back except what the player
+# is actually wearing; the board re-asks for that one and gets it from the cache.
+func _exit_tree() -> void:
+	ButtonFrames.trim_cache([CoinsManager.selected_frame])
+	ButtonFramePreview.release_template()
 
 # ---------------- background ----------------
 
@@ -638,17 +637,14 @@ func _queue_refresh() -> void:
 
 func _flush_refresh() -> void:
 	_refresh_queued = false
-	# An open colour popup is modal over any tab, so always refresh it (the guard
-	# inside makes it a no-op when none is open).
-	_refresh_color_cards()
 	# Equipping inside the shop can flip is_themed() (a paid theme / skin background),
 	# so keep the shop's own background in sync regardless of the active tab.
 	_sync_local_background()
 	match _current_cat:
 		"themes":
 			_refresh_cards()
-		"simon":
-			_refresh_simon_panel()
+		"frames":
+			_refresh_frame_cards()
 		"skins":
 			_refresh_skin_cards()
 
@@ -764,22 +760,23 @@ func _build_grid() -> void:
 # all ~21 cards + their preview shaders build in one synchronous burst. Tab switches call it
 # without the flag so the grid still swaps in a single frame.
 func _render_category(key: String, incremental := false) -> void:
-	# THEMES uses the card grid; SIMON and SPECIAL SKINS each have a bespoke panel.
+	# THEMES uses the card grid; BUTTON FRAMES and SPECIAL SKINS each have a bespoke panel.
 	# Hide them all, then show the one for this category.
 	_grid_scroll.visible = false
-	if _simon_root:
-		_simon_root.visible = false
+	if _frames_root:
+		_frames_root.visible = false
 	if _skins_root:
 		_skins_root.visible = false
 	# Any SPECIAL SKINS preview wheels idle while their tab is hidden; the skins branch
 	# below resumes them when that tab is the one being shown.
 	_set_skins_preview_paused(true)
 
-	if key == "simon":
-		if _simon_root == null:
-			_build_simon_panel()
-		_simon_root.visible = true
-		_refresh_simon_panel()
+	if key == "frames":
+		if _frames_root == null:
+			_build_frames_panel()
+		_frames_root.visible = true
+		(_frames_root as ScrollContainer).scroll_vertical = 0
+		_refresh_frame_cards()
 		_layout()
 		return
 	if key == "skins":
@@ -1075,68 +1072,164 @@ func _confirm_purchase(item_name: String, price: int, on_confirmed: Callable) ->
 	popup.confirmed.connect(on_confirmed)
 	add_child(popup)
 
-# ---------------- SIMON panel ----------------
+# ---------------- BUTTON FRAMES panel ----------------
+#
+# The frame cosmetics for the modelled boards' buttons — Medium's five and Hard's
+# six. One equipped frame is worn by every button on whichever board is in play, so
+# this is a single flat list of cards — no per-colour slot, no per-difficulty
+# inventory and no sub-popup. DEFAULT leads so reverting to the stock black bezel is
+# always one tap away; it is permanently owned and free, which lets it ride the same
+# BUY -> EQUIP -> EQUIPPED flow as the rest with no special casing.
+#
+# Sixteen cards (DEFAULT + the fifteen Blender cosmetics) no longer fit one row, so
+# this is a scrolling 4-wide grid built the same way the THEMES tab's is — same card
+# footprint, same gaps, same reserved scrollbar width — rather than a second kind of
+# list to maintain.
+const FRAME_CARD_W := 288.0
+const FRAME_CARD_H := 320.0
+const FRAME_CARD_GAP := 22.0
+const FRAME_PREVIEW_H := 152.0
+const FRAME_GRID_COLS := 4
+const FRAMES_PANEL_W := FRAME_GRID_COLS * FRAME_CARD_W \
+	+ (FRAME_GRID_COLS - 1) * FRAME_CARD_GAP
 
-const SIMON_PANEL_W := 700.0
-const SIMON_TILE_W := 210.0
-const SIMON_TILE_H := 196.0
-const SIMON_TILE_GAP := 34.0
-const SIMON_SWATCH := 96.0
-const PREVIEW_WHEEL := 168.0          # displayed size of the live wheel preview
-# SimonWheel's centre overlay (numeral + status dot) is sized in fixed pixels tuned
-# for the large in-game wheel, so we render the preview at this larger logical size
-# and scale it down — keeping the numeral/hub proportions correct at preview scale.
-const PREVIEW_WHEEL_LOGICAL := 340.0
-
-# Segment colours for the preview wheel — a fixed slice of game.gd's BUTTON_COLORS
-# (the preview only demonstrates the equipped rim/hub/numeral tints, so the button
-# colours themselves are arbitrary but should look like a real round).
+# Segment colours for the SPECIAL SKINS preview wheels — a fixed slice of game.gd's
+# BUTTON_COLORS (a preview only demonstrates the skin's rim/hub/numeral treatment, so
+# the segment colours themselves are arbitrary but should look like a real round).
 const PREVIEW_COLORS := [
 	Color(0.9, 0.15, 0.15), Color(0.15, 0.8, 0.15), Color(0.15, 0.35, 0.95),
 	Color(0.95, 0.85, 0.1), Color(0.95, 0.5, 0.1),
 ]
 
-func _build_simon_panel() -> void:
-	_simon_root = Control.new()
-	_simon_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_simon_root.custom_minimum_size = Vector2(SIMON_PANEL_W, 400)
-	_simon_root.size = Vector2(SIMON_PANEL_W, 400)
-	add_child(_simon_root)
+func _build_frames_panel() -> void:
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = false
+	_frames_root = scroll
+	add_child(_frames_root)
 
-	# Live wheel preview — equipping a colour is itself what the wheel wears, and
-	# this preview shows that look in real time. Updated by _refresh_simon_preview.
-	_simon_preview = SimonWheel.new()
-	_simon_preview.size = Vector2(PREVIEW_WHEEL_LOGICAL, PREVIEW_WHEEL_LOGICAL)
-	var pscale := PREVIEW_WHEEL / PREVIEW_WHEEL_LOGICAL
-	_simon_preview.scale = Vector2(pscale, pscale)   # scales toward the top-left pivot
-	_simon_preview.position = Vector2((SIMON_PANEL_W - PREVIEW_WHEEL) * 0.5, 0)
-	_simon_root.add_child(_simon_preview)
-	_simon_preview.configure(5, PREVIEW_COLORS)
-	_simon_preview.set_level(1)
-	# The numeral overlay is fixed-pixel (tuned for the large in-game wheel), so on
-	# this small preview it reads too big and the status dot is meaningless here —
-	# shrink the numeral to match the in-game proportion and drop the dot.
-	_simon_preview.set_overlay_compact(0.52, false)
-	# STATIC thumbnail (same as the SPECIAL SKINS cards): the SIMON preview only needs
-	# to show the equipped look, not animate it. A colour/skin change re-renders exactly
-	# one settled frame (apply_skin -> _kick_render), so the tile stays live-accurate
-	# while never redrawing every frame. This also freezes the Luna Park marquee ring
-	# (its own 2D overlay) and any animated-skin flames, which otherwise kept the SIMON
-	# preview animating — and hitching the store — the whole time the tab was open.
-	_simon_preview.set_static_preview(true)
+	_frames_grid = GridContainer.new()
+	_frames_grid.columns = FRAME_GRID_COLS
+	_frames_grid.add_theme_constant_override("h_separation", int(FRAME_CARD_GAP))
+	_frames_grid.add_theme_constant_override("v_separation", int(FRAME_CARD_GAP))
+	scroll.add_child(_frames_grid)
 
-	# The three per-part colour tiles, directly below the preview.
-	var content_y := PREVIEW_WHEEL + 30.0
-	_simon_tiles_box = Control.new()
-	_simon_tiles_box.position = Vector2(0, content_y)
-	_simon_tiles_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_simon_root.add_child(_simon_tiles_box)
-	var tiles_total := SIMON_TILES.size() * SIMON_TILE_W + (SIMON_TILES.size() - 1) * SIMON_TILE_GAP
-	var tx := (SIMON_PANEL_W - tiles_total) * 0.5
-	for i in SIMON_TILES.size():
-		var def: Dictionary = SIMON_TILES[i]
-		var tile := _make_simon_tile(def["cat"], def["label"], Vector2(tx + i * (SIMON_TILE_W + SIMON_TILE_GAP), 0))
-		_simon_tiles_box.add_child(tile)
+	_frames_by_id.clear()
+	for i in ButtonFrames.ORDER.size():
+		var frame_id: String = ButtonFrames.ORDER[i]
+		var card := _make_frame_card(frame_id)
+		_frames_grid.add_child(card["root"])
+		_frames_by_id[frame_id] = card
+	_refresh_frame_cards()
+
+func _make_frame_card(frame_id: String) -> Dictionary:
+	var accent := ButtonFrames.frame_accent(frame_id)
+	var glow := ButtonFrames.frame_glow(frame_id)
+
+	var root := Panel.new()
+	root.custom_minimum_size = Vector2(FRAME_CARD_W, FRAME_CARD_H)
+	root.size = Vector2(FRAME_CARD_W, FRAME_CARD_H)
+	root.mouse_filter = Control.MOUSE_FILTER_PASS
+	# Each card's border + drop shadow wear their own cosmetic's colours, so the four
+	# read as four different things before you have even looked at the previews.
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.06, 0.08, 0.20, 0.94)
+	cs.set_corner_radius_all(22)
+	cs.border_color = Color(accent.r, accent.g, accent.b, 0.85)
+	cs.set_border_width_all(2)
+	cs.shadow_color = Color(glow.r, glow.g, glow.b, 0.40)
+	cs.shadow_size = 16
+	root.add_theme_stylebox_override("panel", cs)
+
+	# The preview: one real GLB button wearing this frame, in a rounded inset.
+	var clip := Panel.new()
+	clip.size = Vector2(FRAME_CARD_W - 32, FRAME_PREVIEW_H)
+	clip.position = Vector2(16, 16)
+	clip.clip_contents = true
+	clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var clip_st := StyleBoxFlat.new()
+	clip_st.bg_color = Color(0.030, 0.035, 0.075)
+	clip_st.set_corner_radius_all(14)
+	clip_st.border_color = Color(accent.r, accent.g, accent.b, 0.20)
+	clip_st.set_border_width_all(1)
+	clip.add_theme_stylebox_override("panel", clip_st)
+	root.add_child(clip)
+
+	var preview := ButtonFramePreview.new()
+	preview.size = clip.size
+	preview.position = Vector2.ZERO
+	clip.add_child(preview)
+	preview.set_frame(frame_id)
+
+	var name_lbl := Label.new()
+	name_lbl.text = ButtonFrames.frame_name(frame_id).to_upper()
+	name_lbl.add_theme_font_size_override("font_size", 21)
+	name_lbl.add_theme_color_override("font_color", Color.WHITE)
+	name_lbl.add_theme_color_override("font_shadow_color", Color(glow.r, glow.g, glow.b, 0.55))
+	name_lbl.add_theme_constant_override("shadow_offset_x", 0)
+	name_lbl.add_theme_constant_override("shadow_offset_y", 2)
+	name_lbl.add_theme_constant_override("shadow_outline_size", 8)
+	name_lbl.position = Vector2(16, 16 + FRAME_PREVIEW_H + 12)
+	name_lbl.size = Vector2(FRAME_CARD_W - 32, 28)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(name_lbl)
+
+	var blurb := Label.new()
+	blurb.text = ButtonFrames.frame_blurb(frame_id)
+	blurb.add_theme_font_size_override("font_size", 14)
+	blurb.add_theme_color_override("font_color", Color(0.80, 0.82, 0.95, 0.78))
+	blurb.position = Vector2(16, name_lbl.position.y + 30)
+	blurb.size = Vector2(FRAME_CARD_W - 32, 20)
+	blurb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	blurb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(blurb)
+
+	var btn := Button.new()
+	btn.size = Vector2(FRAME_CARD_W - 32, 48)
+	btn.position = Vector2(16, FRAME_CARD_H - 48 - 14)
+	btn.add_theme_font_size_override("font_size", 19)
+	btn.focus_mode = Control.FOCUS_NONE
+	# PASS, like the theme cards: a drag that starts on the button still scrolls the
+	# grid instead of being swallowed by it.
+	btn.mouse_filter = Control.MOUSE_FILTER_PASS
+	root.add_child(btn)
+	# The price block sits inside the button, same as every other shop card. These
+	# are all priced at 0, so an unowned card literally reads "coin 0".
+	var price := _make_price_content(CoinsManager.frame_price(frame_id), 12.0, 20, 48.0)
+	btn.add_child(price["box"])
+	btn.pressed.connect(func() -> void: _on_frame_action(frame_id))
+	return {
+		"root": root, "btn": btn, "price_box": price["box"],
+		"price_label": price["label"], "accent": accent, "preview": preview,
+	}
+
+func _refresh_frame_cards() -> void:
+	for frame_id in _frames_by_id:
+		_apply_frame_card_state(frame_id, _frames_by_id[frame_id])
+
+func _apply_frame_card_state(frame_id: String, c: Dictionary) -> void:
+	var owned := CoinsManager.owns_frame(frame_id)
+	var equipped := CoinsManager.selected_frame == frame_id
+	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
+		_card_state(owned, equipped, CoinsManager.can_afford_frame(frame_id)), owned)
+
+func _on_frame_action(frame_id: String) -> void:
+	if CoinsManager.owns_frame(frame_id):
+		CoinsManager.select_frame(frame_id)
+		return
+	# The same confirm-then-buy gate the themes use, so the shop has one flow. At 0
+	# coins the dialog is simply confirming a free unlock — it still shows the price.
+	_confirm_purchase(
+		ButtonFrames.frame_name(frame_id),
+		CoinsManager.frame_price(frame_id),
+		func() -> void:
+			if CoinsManager.purchase_frame(frame_id):
+				# Auto-equip what was just unlocked, so the five buttons change the
+				# moment the player leaves the shop.
+				CoinsManager.select_frame(frame_id)
+	)
+
 
 # SPECIAL SKINS panel — one tall card per complete skin (currently only Inferno).
 # Each card hosts a live SimonWheel preview with the skin's bespoke palette and
@@ -1340,7 +1433,7 @@ func _build_skins_coming_soon() -> void:
 	card.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "New wheel skins are on the way."
+	sub.text = "New special skins are on the way."
 	sub.add_theme_font_size_override("font_size", 17)
 	sub.add_theme_color_override("font_color", Color(0.80, 0.82, 0.95, 0.80))
 	sub.position = Vector2(24, 178)
@@ -1411,6 +1504,13 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	# SubViewportContainer sizing + Camera3D.look_at both need an in-tree node. The
 	# SIMON tab preview works precisely because it configures its wheel in-tree.
 
+	# A skin that brings its own button frame says so, on the preview rather than in
+	# the copy: one small chip in the skin's own colour, tucked into the corner of the
+	# inset. The card already carries a title, a blurb and a price — anything larger
+	# than this and the grid starts to read as a spec sheet.
+	if not ButtonFrames.frame_for_skin(skin_id).is_empty():
+		clip.add_child(_skin_frame_chip(primary, clip.size))
+
 	# Name + blurb, below the preview.
 	var name_lbl := Label.new()
 	name_lbl.text = String(def["label"])
@@ -1457,6 +1557,32 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 		"root": root, "btn": btn, "price_box": price["box"],
 		"price_label": price["label"], "accent": primary, "preview": wheel,
 	}
+
+# The "this skin dresses your buttons too" chip. Sits inside the preview inset,
+# bottom-right, so it reads as a label ON the thing it describes.
+func _skin_frame_chip(accent: Color, area: Vector2) -> Panel:
+	var chip := Panel.new()
+	var w := 152.0
+	var h := 24.0
+	chip.size = Vector2(w, h)
+	chip.position = Vector2(area.x - w - 10.0, area.y - h - 10.0)
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.04, 0.05, 0.12, 0.82)
+	st.set_corner_radius_all(int(h * 0.5))
+	st.border_color = Color(accent.r, accent.g, accent.b, 0.75)
+	st.set_border_width_all(1)
+	chip.add_theme_stylebox_override("panel", st)
+	var l := Label.new()
+	l.text = "EXCLUSIVE FRAME"
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color", accent.lightened(0.35))
+	l.size = Vector2(w, h)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.add_child(l)
+	return chip
 
 # The [primary border, secondary glow] frame colours for a skin's shop card, or the
 # shared pink fallback for any skin without a bespoke pair. See SKIN_FRAME_COLORS.
@@ -1521,317 +1647,6 @@ func _on_skin_action(skin_id: String) -> void:
 		return
 	# Auto-equip a freshly bought skin so the choice takes effect at once.
 	CoinsManager.equip_skin(skin_id)
-
-func _make_simon_tile(category: String, label: String, pos: Vector2) -> Button:
-	var root := Button.new()
-	root.position = pos
-	root.size = Vector2(SIMON_TILE_W, SIMON_TILE_H)
-	root.focus_mode = Control.FOCUS_NONE
-	var cs := StyleBoxFlat.new()
-	cs.bg_color = Color(0.06, 0.08, 0.20, 0.92)
-	cs.set_corner_radius_all(18)
-	cs.border_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.7)
-	cs.set_border_width_all(2)
-	cs.shadow_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.30)
-	cs.shadow_size = 12
-	root.add_theme_stylebox_override("normal", cs)
-	var ch := cs.duplicate() as StyleBoxFlat
-	ch.bg_color = Color(0.09, 0.11, 0.26, 0.95)
-	root.add_theme_stylebox_override("hover", ch)
-	var cp := cs.duplicate() as StyleBoxFlat
-	cp.bg_color = Color(0.05, 0.06, 0.16, 0.95)
-	root.add_theme_stylebox_override("pressed", cp)
-
-	# Schematic of the wheel with THIS part highlighted, so the tile clearly
-	# shows which piece of the Simon it customises (not just a colour blob).
-	var swatch := SimonPartIcon.new()
-	swatch.size = Vector2(SIMON_SWATCH, SIMON_SWATCH)
-	swatch.position = Vector2((SIMON_TILE_W - SIMON_SWATCH) * 0.5, 18)
-	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(swatch)
-
-	# Only the category name — the equipped colour/style name is intentionally not
-	# shown here (the icon itself conveys the look).
-	var name_lbl := Label.new()
-	name_lbl.text = label
-	name_lbl.add_theme_font_size_override("font_size", 18)
-	name_lbl.add_theme_color_override("font_color", Color.WHITE)
-	name_lbl.position = Vector2(8, 18 + SIMON_SWATCH + 20)
-	name_lbl.size = Vector2(SIMON_TILE_W - 16, 28)
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(name_lbl)
-
-	root.pressed.connect(func() -> void: _open_color_popup(category))
-	_simon_tiles[category] = {"swatch": swatch}
-	return root
-
-func _style_swatch(swatch: SimonPartIcon, category: String, color_id: String) -> void:
-	# Level number is a font package; ring/hub are flat colours. Default reads as
-	# the "stock" look (graphite/white) — pass null so the icon draws its fallback.
-	if category == "level_number":
-		swatch.setup(category, null, CoinsManager.simon_number_font(color_id))
-		return
-	swatch.setup(category, CoinsManager.simon_part_style(category, color_id))
-
-func _refresh_simon_panel() -> void:
-	if _simon_root == null:
-		return
-	# tile swatches (the equipped look is shown by the icon itself). In SKIN mode
-	# the per-part slots read as "nothing equipped", so the tiles show the stock
-	# look rather than whatever manual colour is still stored underneath.
-	var manual := CoinsManager.is_simon_manual()
-	for cat in _simon_tiles:
-		var t: Dictionary = _simon_tiles[cat]
-		var id: String = CoinsManager.equipped_simon_color(cat) if manual else CoinsManager.simon_default_id(cat)
-		_style_swatch(t["swatch"], cat, id)
-	# Live preview mirrors what the wheel actually wears right now.
-	_refresh_simon_preview()
-
-# Re-tint the preview wheel to match what is actually equipped. In skin mode a
-# complete skin overrides the per-part colours, so the preview should show that
-# skin (otherwise switching between tabs makes the wheel "lose" its fire/etc.).
-func _refresh_simon_preview() -> void:
-	if _simon_preview == null:
-		return
-	var skin_id := CoinsManager.selected_skin if not CoinsManager.is_simon_manual() else ""
-	_simon_preview.apply_skin(
-		_simon_tint("outer_circle"),
-		_simon_tint("inner_circle"),
-		_simon_number_pack(),
-		skin_id)
-
-# The equipped level-number font package for the live preview, or null for stock.
-func _simon_number_pack() -> Variant:
-	if not CoinsManager.is_simon_manual():
-		return null
-	var id := CoinsManager.equipped_simon_color("level_number")
-	if id == CoinsManager.SIMON_DEFAULT_FONT:
-		return null
-	return CoinsManager.simon_number_font(id)
-
-# The look a part wears right now (Color / pattern-motif Dictionary / null) —
-# mirrors game.gd._resolved_simon_tint so the preview matches the in-game wheel.
-func _simon_tint(category: String) -> Variant:
-	if not CoinsManager.is_simon_manual():
-		return null
-	return CoinsManager.simon_part_style(category, CoinsManager.equipped_simon_color(category))
-
-# ---------------- colour popup ----------------
-
-const POPUP_W := 640.0
-const POPUP_H := 520.0
-const SWATCH_CARD_W := 168.0
-const SWATCH_CARD_H := 168.0
-const SWATCH_GAP := 22.0
-const SWATCH_COLS := 3
-
-func _open_color_popup(category: String) -> void:
-	_close_color_popup()
-	_popup_category = category
-	_popup_cards.clear()
-	var sz := get_viewport_rect().size
-
-	var overlay := Control.new()
-	overlay.name = "ColorPopup"
-	overlay.position = Vector2.ZERO
-	overlay.size = sz
-	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(overlay)
-	_color_popup = overlay
-
-	# Dim backdrop — tapping it closes the popup.
-	var dim := Button.new()
-	dim.flat = true
-	dim.position = Vector2.ZERO
-	dim.size = sz
-	var empty := StyleBoxEmpty.new()
-	for st in ["normal", "hover", "pressed", "focus"]:
-		dim.add_theme_stylebox_override(st, empty)
-	var dim_rect := ColorRect.new()
-	dim_rect.color = Color(0.0, 0.01, 0.04, 0.66)
-	dim_rect.position = Vector2.ZERO
-	dim_rect.size = sz
-	dim_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.add_child(dim_rect)
-	dim.pressed.connect(_close_color_popup)
-	overlay.add_child(dim)
-
-	var panel := Panel.new()
-	panel.position = (sz - Vector2(POPUP_W, POPUP_H)) * 0.5
-	panel.size = Vector2(POPUP_W, POPUP_H)
-	panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.05, 0.06, 0.16, 0.99)
-	st.set_corner_radius_all(22)
-	st.border_color = Color(SIMON_ACCENT.r, SIMON_ACCENT.g, SIMON_ACCENT.b, 0.7)
-	st.set_border_width_all(2)
-	st.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
-	st.shadow_size = 22
-	panel.add_theme_stylebox_override("panel", st)
-	overlay.add_child(panel)
-
-	var pretty := "PART"
-	for d in SIMON_TILES:
-		if d["cat"] == category:
-			pretty = d["label"]
-			break
-	var title := Label.new()
-	title.text = pretty
-	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", Color.WHITE)
-	title.position = Vector2(24, 18)
-	title.size = Vector2(POPUP_W - 48, 38)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(title)
-
-	var close := Button.new()
-	close.text = "✕"
-	close.size = Vector2(40, 40)
-	close.position = Vector2(POPUP_W - 50, 12)
-	close.focus_mode = Control.FOCUS_NONE
-	close.add_theme_font_size_override("font_size", 20)
-	var clo := StyleBoxFlat.new()
-	clo.bg_color = Color(0.10, 0.12, 0.26, 0.9)
-	clo.set_corner_radius_all(20)
-	close.add_theme_stylebox_override("normal", clo)
-	close.add_theme_color_override("font_color", Color(0.85, 0.88, 1.0))
-	close.pressed.connect(_close_color_popup)
-	panel.add_child(close)
-
-	# Scroll the cards so extra rows never spill past the popup. The region runs
-	# from below the title to just above the bottom edge; its width leaves room
-	# for the scrollbar so the grid itself stays centred.
-	const SCROLLBAR_W := 14.0
-	var grid_w := SWATCH_COLS * SWATCH_CARD_W + (SWATCH_COLS - 1) * SWATCH_GAP
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size = Vector2(grid_w + SCROLLBAR_W, POPUP_H - 68 - 20)
-	scroll.position = Vector2((POPUP_W - (grid_w + SCROLLBAR_W)) * 0.5, 68)
-	panel.add_child(scroll)
-
-	var grid := GridContainer.new()
-	grid.columns = SWATCH_COLS
-	grid.add_theme_constant_override("h_separation", int(SWATCH_GAP))
-	grid.add_theme_constant_override("v_separation", int(SWATCH_GAP))
-	scroll.add_child(grid)
-	for color_id in CoinsManager.simon_catalog(category).keys():
-		var card := _make_color_card(category, color_id)
-		grid.add_child(card["root"])
-		_popup_cards[color_id] = card
-	_refresh_color_cards()
-
-	# Gentle entrance.
-	panel.pivot_offset = panel.size * 0.5
-	panel.scale = Vector2(0.93, 0.93)
-	overlay.modulate.a = 0.0
-	var tw := create_tween().set_parallel(true)
-	tw.tween_property(overlay, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(panel, "scale", Vector2.ONE, 0.26).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-
-func _make_color_card(category: String, color_id: String) -> Dictionary:
-	var meta: Dictionary = CoinsManager.simon_catalog(category).get(color_id, {})
-	var pretty: String = meta.get("name", color_id.capitalize())
-
-	var root := Panel.new()
-	root.custom_minimum_size = Vector2(SWATCH_CARD_W, SWATCH_CARD_H)
-	root.size = Vector2(SWATCH_CARD_W, SWATCH_CARD_H)
-	# PASS (not the Panel default STOP) so a drag that starts on a card body still
-	# reaches the enclosing ScrollContainer — otherwise the popup only scrolls when
-	# the drag begins in the gaps between cards. The BUY/EQUIP button is also PASS
-	# (see below) so a drag starting on the button itself still scrolls.
-	root.mouse_filter = Control.MOUSE_FILTER_PASS
-	var cs := StyleBoxFlat.new()
-	cs.bg_color = Color(0.07, 0.09, 0.22, 0.92)
-	cs.set_corner_radius_all(16)
-	cs.border_color = Color(1, 1, 1, 0.10)
-	cs.set_border_width_all(1)
-	root.add_theme_stylebox_override("panel", cs)
-
-	# Part sketch tinted by this candidate colour, so the user previews the actual
-	# wheel piece in that colour rather than picking from anonymous blobs.
-	var sw := 64.0
-	var swatch := SimonPartIcon.new()
-	swatch.size = Vector2(sw, sw)
-	swatch.position = Vector2((SWATCH_CARD_W - sw) * 0.5, 12)
-	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if category == "level_number":
-		swatch.setup(category, null, CoinsManager.simon_number_font(color_id))
-	else:
-		swatch.setup(category, CoinsManager.simon_part_style(category, color_id))
-	root.add_child(swatch)
-
-	var name_lbl := Label.new()
-	name_lbl.text = pretty
-	name_lbl.add_theme_font_size_override("font_size", 16)
-	name_lbl.add_theme_color_override("font_color", Color.WHITE)
-	name_lbl.position = Vector2(6, 12 + sw + 4)
-	name_lbl.size = Vector2(SWATCH_CARD_W - 12, 22)
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(name_lbl)
-
-	var btn := Button.new()
-	btn.size = Vector2(SWATCH_CARD_W - 20, 36)
-	btn.position = Vector2(10, SWATCH_CARD_H - 36 - 10)
-	btn.add_theme_font_size_override("font_size", 16)
-	btn.focus_mode = Control.FOCUS_NONE
-	# PASS so a press-and-drag that starts on the button still reaches the
-	# ScrollContainer; a plain tap still registers as a click.
-	btn.mouse_filter = Control.MOUSE_FILTER_PASS
-	root.add_child(btn)
-
-	# Price block inside the button (coin + number); hidden once the colour is owned.
-	var price := _make_price_content(
-		CoinsManager.simon_item_price(category, color_id), 9.0, 16, 36.0)
-	btn.add_child(price["box"])
-
-	btn.pressed.connect(func() -> void: _on_color_action(category, color_id))
-
-	return {
-		"root": root, "btn": btn, "price_box": price["box"],
-		"price_label": price["label"], "accent": SIMON_ACCENT,
-	}
-
-func _refresh_color_cards() -> void:
-	if _popup_category.is_empty():
-		return
-	for color_id in _popup_cards:
-		_apply_color_card_state(_popup_category, color_id, _popup_cards[color_id])
-
-func _apply_color_card_state(category: String, color_id: String, c: Dictionary) -> void:
-	var owned := CoinsManager.owns_simon_color(category, color_id)
-	# Only the MANUAL mode actually wears these per-part colours; in SKIN mode the
-	# complete skin overrides them, so nothing should advertise itself as equipped.
-	var equipped := CoinsManager.is_simon_manual() \
-		and CoinsManager.equipped_simon_color(category) == color_id
-	var affordable := CoinsManager.can_afford_simon_item(category, color_id)
-	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 12,
-		_card_state(owned, equipped, affordable), owned)
-
-func _on_color_action(category: String, color_id: String) -> void:
-	if CoinsManager.owns_simon_color(category, color_id):
-		CoinsManager.equip_simon_color(category, color_id)
-		return
-	if not CoinsManager.can_afford_simon_item(category, color_id):
-		return
-	var meta: Dictionary = CoinsManager.simon_catalog(category).get(color_id, {})
-	_confirm_purchase(
-		String(meta.get("name", color_id.capitalize())),
-		CoinsManager.simon_item_price(category, color_id),
-		func() -> void:
-			if CoinsManager.purchase_simon_color(category, color_id):
-				# Auto-equip a freshly bought colour so the choice takes effect at once.
-				CoinsManager.equip_simon_color(category, color_id)
-	)
-
-func _close_color_popup() -> void:
-	if _color_popup and is_instance_valid(_color_popup):
-		_color_popup.queue_free()
-	_color_popup = null
-	_popup_category = ""
-	_popup_cards.clear()
 
 # ---------------- loading overlay ----------------
 
@@ -1959,8 +1774,13 @@ func _layout() -> void:
 		_grid_scroll.size = Vector2(scroll_w,
 			maxf(0.0, sz.y - content_y - GRID_BOTTOM_MARGIN))
 		_update_preview_visibility()
-	if _simon_root:
-		_simon_root.position = Vector2(cx - SIMON_PANEL_W * 0.5, content_y)
+	if _frames_root:
+		# Reserve the scrollbar's width so the cards themselves stay visually centred,
+		# exactly as the THEMES grid does.
+		var fscroll_w := FRAMES_PANEL_W + GRID_SCROLLBAR_W
+		_frames_root.position = Vector2(cx - fscroll_w * 0.5, content_y)
+		_frames_root.size = Vector2(fscroll_w,
+			maxf(0.0, sz.y - content_y - GRID_BOTTOM_MARGIN))
 	if _skins_root:
 		var sgrid_w := SKIN_GRID_COLS * SKIN_CARD_W + (SKIN_GRID_COLS - 1) * SKIN_CARD_GAP
 		# Reserve scrollbar width + the frame-glow padding (both sides) so the cards stay

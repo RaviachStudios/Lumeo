@@ -6,8 +6,9 @@ extends Node2D
 #   • draped medieval BANNERS that gently wave,
 #   • flickering wall TORCHES with rising gold EMBERS,
 #   • a low drift of ground SMOKE / dust,
-#   • the centrepiece: a stone PLATFORM crowned with a big winged-Simon CHAMPIONSHIP
-#     SHIELD, plus small golden winged SIMONS that flap across the screen now and then.
+#   • the centrepiece: a stone PLATFORM crowned with a big winged CHAMPIONSHIP
+#     SHIELD bearing one of the board's BUTTONS, plus small winged BUTTONS that flap
+#     across the screen now and then.
 #   • once every 10–15s the crowd cheers and the wall torches flare, all settling
 #     back within a second.
 #
@@ -22,10 +23,12 @@ extends Node2D
 const SimonFlyer := preload("res://simon_flyer.gd")
 
 const GOLD  := Color(1.0, 0.82, 0.30)
-# Four Simon-disc colours (gold / red / green / blue) for the championship emblem.
-const SIMON_COLS := [
-	Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
-	Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
+# The championship emblem is one of the board's BUTTONS, and it lights up in the
+# board's own order — Crimson, Amber, Jade, Cyan, Violet — so the crest is playing a
+# slow round of Simon on the dais. Colours come from SimonFlyer so the crest and the
+# flyers are unmistakably the same prop at two sizes.
+const EMBLEM_COLS: Array = SimonFlyer.BUTTON_COLS
+const EMBLEM_HOLD := 2.2       # seconds one colour holds before the next lights
 const TORCH := Color(1.0, 0.55, 0.18)
 const EMBER := Color(1.0, 0.70, 0.30)
 const SMOKE := Color(0.62, 0.60, 0.74)
@@ -704,14 +707,19 @@ func _build_spotlights() -> void:
 	_spot.material = m
 	add_child(_spot)
 
-# --- little golden winged Simons that flap across the arena now and then ---
+# --- little winged BUTTONS that flap across the arena now and then ---
 func _build_flyers() -> void:
 	# Two crossers on staggered timers so the arena always has a bit of life above
 	# the platform without ever feeling busy (each waits 15–28s between passes).
+	# Each wears a different cap colour, picked from the board's five, so the pair
+	# never reads as the same prop crossing twice.
+	var cols: Array = SimonFlyer.BUTTON_COLS.duplicate()
+	cols.shuffle()
 	for i in 2:
 		var f := SimonFlyer.new()
 		add_child(f)
-		f.setup(_sz, {"mode": "cross", "scale": 0.58})
+		f.setup(_sz, {"mode": "cross", "scale": 0.58,
+			"art": "button", "button_color": cols[i % cols.size()]})
 		_flyers.append(f)
 
 func _fade_ramp(peak: Color) -> Gradient:
@@ -774,8 +782,8 @@ func _draw_dais() -> void:
 		_dais.draw_circle(rp, 2.6, Color(GOLD.r, GOLD.g, GOLD.b, 0.75))
 		_dais.draw_circle(rp + Vector2(-0.8, -0.8), 0.9, Color(1.0, 0.97, 0.85, 0.8))
 
-# The centrepiece trophy: a gold-rimmed heraldic shield bearing the four-colour Simon
-# disc, flanked by outstretched golden wings and topped with a small crown — a
+# The centrepiece trophy: a gold-rimmed heraldic shield bearing one of the board's
+# buttons, flanked by outstretched golden wings and topped with a small crown — a
 # "championship shield" that stands on the dais where the duelling knights used to be.
 func _draw_champion_shield() -> void:
 	var puls := 0.5 + 0.5 * sin(_t * 2.0)
@@ -803,8 +811,8 @@ func _draw_champion_shield() -> void:
 	rim.append(rim[0])
 	_duel.draw_polyline(rim, GOLD, 2.0, true)                                # gold border
 
-	# the Simon disc, seated on the shield face
-	_draw_simon_disc(sc + Vector2(0, -3.0 * breathe), 12.0 * breathe, puls)
+	# the button, seated on the shield face
+	_draw_button_emblem(sc + Vector2(0, -3.0 * breathe), 12.0 * breathe, puls)
 
 	# a small three-point crown resting on the shield's top edge
 	_draw_crown(sc + Vector2(0, top_y - 1.0), 12.0 * breathe)
@@ -853,28 +861,43 @@ func _shield_path(c: Vector2, w: float, top_y: float, bot_y: float) -> PackedVec
 		pts.append(c + lp0.lerp(lctrl, tt).lerp(lctrl.lerp(lp1, tt), tt))
 	return pts
 
-# The four-colour Simon disc: gold rim, four quadrant arcs, a dark hub and gloss.
-func _draw_simon_disc(c: Vector2, r: float, puls: float) -> void:
-	_duel.draw_circle(c, r + 1.5, Color(GOLD.r, GOLD.g, GOLD.b, 0.10 + puls * 0.10))  # glow
-	_duel.draw_circle(c, r, GOLD.darkened(0.12))                 # gold rim
-	_duel.draw_circle(c, r * 0.88, Color(0.05, 0.04, 0.09))      # dark gap ring
-	var r_out := r * 0.84
-	var r_in := r * 0.40
-	var gap := deg_to_rad(11.0)
-	for q in 4:
-		var a0 := -PI * 0.75 + q * PI * 0.5 + gap * 0.5
-		var a1 := -PI * 0.75 + (q + 1) * PI * 0.5 - gap * 0.5
-		var poly := PackedVector2Array()
-		for i in 9:
-			var a := lerpf(a0, a1, i / 8.0)
-			poly.append(c + Vector2(cos(a), sin(a)) * r_out)
-		for i in 9:
-			var a := lerpf(a1, a0, i / 8.0)
-			poly.append(c + Vector2(cos(a), sin(a)) * r_in)
-		_duel.draw_colored_polygon(poly, SIMON_COLS[q])
-	_duel.draw_circle(c, r_in * 0.95, Color(0.10, 0.08, 0.15))   # hub
-	_duel.draw_circle(c, r_in * 0.5, GOLD.lightened(0.1))        # gold centre
-	_duel.draw_circle(c + Vector2(-r * 0.28, -r * 0.28), r * 0.16, Color(1, 1, 1, 0.20))  # gloss
+# The championship button: gold bezel, the dark bore gap under its lip, then a domed
+# cap that lights through the board's five colours in turn. Each change lands as a
+# flash that decays over the first third of its hold — the cap reads as a button being
+# PRESSED rather than a colour wheel spinning — and the last fifth cross-fades into the
+# next colour so nothing ever snaps.
+func _emblem_cap() -> Dictionary:
+	var span := _t / EMBLEM_HOLD
+	var i := int(span)
+	var f := fposmod(span, 1.0)                       # 0→1 through this colour's hold
+	var col: Color = EMBLEM_COLS[i % EMBLEM_COLS.size()]
+	var nxt: Color = EMBLEM_COLS[(i + 1) % EMBLEM_COLS.size()]
+	return {
+		"col": col.lerp(nxt, clampf((f - 0.8) / 0.2, 0.0, 1.0)),
+		"lit": clampf(1.0 - f * 3.0, 0.0, 1.0),       # press flash, gone by a third in
+	}
+
+func _draw_button_emblem(c: Vector2, r: float, puls: float) -> void:
+	var cap: Dictionary = _emblem_cap()
+	var col: Color = cap["col"]
+	var lit: float = cap["lit"]
+	# gold aura on the shield face, plus the colour the lit cap throws past the bezel
+	_duel.draw_circle(c, r + 3.0 + puls * 1.5, Color(GOLD.r, GOLD.g, GOLD.b, 0.09 + puls * 0.07))
+	_duel.draw_circle(c, r + 1.5 + lit * 2.5, Color(col.r, col.g, col.b, 0.08 + lit * 0.18))
+	# The button itself, in the order the model stacks it: a gold outer edge, the dark
+	# bezel wall, the bright light channel, then the flat cap. Plain stacked circles —
+	# the bands stay crisp at the size the crest actually draws at.
+	_duel.draw_circle(c, r, GOLD.darkened(0.15))
+	_duel.draw_circle(c, r * 0.93, Color(0.10, 0.10, 0.13))
+	_duel.draw_circle(c, r * 0.80, col.lerp(Color(1, 1, 1), 0.72 + lit * 0.20))
+	var cr := r * 0.72
+	_duel.draw_circle(c, cr, col.darkened(0.12).lerp(col.lightened(0.24), lit))
+	# a wide, shallow lift toward the top of the cap where the key light lands. It has
+	# to stay wide: a small bright circle inside a darker one turns the flat cap into a
+	# ball, which is exactly what the modelled button is not.
+	_duel.draw_circle(c + Vector2(0.0, -cr * 0.10), cr * 0.86, col.lightened(0.04 + lit * 0.26))
+	_duel.draw_circle(c + Vector2(-cr * 0.34, -cr * 0.36), cr * 0.22,
+		Color(1, 1, 1, 0.12 + lit * 0.12))
 
 # A small three-point crown sitting on the shield's crest, `w` = its half-width.
 func _draw_crown(c: Vector2, w: float) -> void:

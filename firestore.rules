@@ -209,6 +209,19 @@ service cloud.firestore {
         && (!('owned_levels' in request.resource.data)
             || (request.resource.data.owned_levels is map
                 && request.resource.data.owned_levels.size() <= 16))
+        // Button-frame cosmetics (the modelled Medium + Hard boards share ONE
+        // global selection). One equipped id + a map of owned ids, same shape and
+        // bounds as the theme pair above. The catalog is 15 cosmetics plus a
+        // permanently-owned "default" that is never stored, so 64 is generous;
+        // the longest id ("obsidian_chrome") is 15 characters. Which ids are legal
+        // is a client-side question — ButtonFrames.has_frame() drops anything it
+        // does not know on load, so an unknown id can never end up equipped.
+        && (!('selected_frame' in request.resource.data)
+            || (request.resource.data.selected_frame is string
+                && request.resource.data.selected_frame.size() <= 32))
+        && (!('owned_frames' in request.resource.data)
+            || (request.resource.data.owned_frames is map
+                && request.resource.data.owned_frames.size() <= 64))
         // Lifetime coins earned via gameplay + daily claims (excludes IAP).
         // Same upper bound as `coins` so a bad write can't claim absurd totals.
         && (!('earned_coins' in request.resource.data)

@@ -3,6 +3,7 @@ extends Node
 # Single source of truth for the user's wallet:
 #   - coin balance
 #   - owned + currently equipped theme (shop background)
+#   - owned + currently equipped button-frame cosmetic (Medium board bezels)
 #   - display name (mirrored from FirebaseManager so we can propagate renames
 #     to the leaderboards even when offline reads aren't available)
 #   - login streak: streak_days + first_login_at (timestamp of the streak's
@@ -17,6 +18,9 @@ extends Node
 signal balance_changed(new_balance: int)
 signal themes_changed
 signal simon_changed
+# The equipped button-FRAME cosmetic changed (bought or equipped). Drives the
+# Medium board's live re-skin and the shop's frame cards.
+signal frames_changed
 signal levels_changed
 signal daily_claim_changed
 signal remove_ads_changed
@@ -82,6 +86,14 @@ const THEMES := {
 # here. Purchases persist on /users/{uid} as a map (owned_levels:
 # {moderate: true}) — same storage shape as owned_themes.
 const LEVEL_PRICES := {}
+
+# Button-FRAME cosmetics for the modelled boards (ButtonFrames.FRAMES is the
+# catalog: ids, display names, prices, card colours and the Blender meshes behind
+# them; this manager only owns the wallet side). ONE frame is equipped at a time
+# and it dresses every button of whichever board is in play — Medium's five and
+# Hard's six. There is deliberately no per-colour slot and no per-difficulty
+# inventory: the selection is a single global id.
+const DEFAULT_FRAME := ButtonFrames.DEFAULT_ID
 
 # Simon-wheel customization. Three independently-coloured parts of the wheel
 # (the metallic rim rings, the centre hub, and the level numeral), each able to
@@ -327,6 +339,11 @@ var raw_user_doc: Dictionary = {}
 var owned_themes: Array[String] = [DEFAULT_THEME]
 var selected_theme: String = DEFAULT_THEME
 var owned_levels: Array[String] = []     # purchased difficulties; "easy" is implicit
+
+# Button-frame cosmetics. "default" is always owned and is what an empty/legacy
+# wallet equips, so the stock black bezel is the fallback in every direction.
+var owned_frames: Array[String] = [DEFAULT_FRAME]
+var selected_frame: String = DEFAULT_FRAME
 # Simon-wheel customization (see SIMON_* constants):
 var simon_mode: String = SIMON_MODE_MANUAL          # manual | skin — set implicitly by what you equip
 var equipped_simon: Dictionary = _default_equipped_simon()   # category -> color_id
@@ -738,6 +755,69 @@ func select_theme(theme_id: String) -> bool:
 	_save_partial(fields)
 	return true
 
+# --- button-frame API ---
+#
+# The equipped frame is global: one id, worn by every button of whichever modelled
+# board is in play (Medium's five, Hard's six). Ownership
+# and selection persist on the same /users/{uid} doc as everything else — there is
+# no second save system. See ButtonFrames for the catalog and the materials.
+
+func owns_frame(frame_id: String) -> bool:
+	return owned_frames.has(frame_id)
+
+func frame_price(frame_id: String) -> int:
+	return ButtonFrames.frame_price(frame_id)
+
+func can_afford_frame(frame_id: String) -> bool:
+	return balance >= frame_price(frame_id)
+
+# Buy a frame. All fifteen cosmetics are priced at 0, so this normally costs
+# nothing and never touches the balance — but the deduction path is kept intact so
+# a frame can be re-priced by editing ButtonFrames.FRAMES alone.
+func purchase_frame(frame_id: String) -> bool:
+	if not FirebaseManager.is_signed_in(): return false
+	if not ButtonFrames.has_frame(frame_id): return false
+	# The three skin frames are not merchandise: they arrive with their Special Skin
+	# and leave with it, so they are never bought and never enter owned_frames.
+	if ButtonFrames.is_skin_frame(frame_id): return false
+	if owns_frame(frame_id): return false
+	var price := frame_price(frame_id)
+	if balance < price: return false
+	owned_frames.append(frame_id)
+	var fields := {"owned_frames": _owned_frames_map_for_save()}
+	if price > 0:
+		balance -= price
+		fields["coins"] = balance
+		balance_changed.emit(balance)
+	frames_changed.emit()
+	_save_partial(fields)
+	return true
+
+# Equip an owned frame. Returns true if the selection actually changed.
+func select_frame(frame_id: String) -> bool:
+	if not owns_frame(frame_id): return false
+	if selected_frame == frame_id: return false
+	selected_frame = frame_id
+	frames_changed.emit()
+	_save_partial({"selected_frame": selected_frame})
+	return true
+
+# A frame id a wallet is allowed to claim ownership of: in the catalog, and not one
+# of the skin-bound frames (those are resolved from the active skin at wear time and
+# are never stored — a doc naming one is treated as naming nothing).
+func _frame_ownable(frame_id: String) -> bool:
+	return ButtonFrames.has_frame(frame_id) and not ButtonFrames.is_skin_frame(frame_id)
+
+# Stored as a Firestore MAP ({frame_id: true}), never a list — see
+# _owned_themes_map_for_save for why lists break the Android Firestore SDK.
+# "default" is omitted; _apply_doc re-adds it.
+func _owned_frames_map_for_save() -> Dictionary:
+	var out := {}
+	for f in owned_frames:
+		if f != DEFAULT_FRAME:
+			out[f] = true
+	return out
+
 # --- simon-customization API ---
 
 func _default_equipped_simon() -> Dictionary:
@@ -937,6 +1017,8 @@ func _on_signed_out() -> void:
 	owned_themes = [DEFAULT_THEME]
 	selected_theme = DEFAULT_THEME
 	owned_levels = []
+	owned_frames = [DEFAULT_FRAME]
+	selected_frame = DEFAULT_FRAME
 	simon_mode = SIMON_MODE_MANUAL
 	equipped_simon = _default_equipped_simon()
 	owned_simon = _default_owned_simon()
@@ -957,6 +1039,7 @@ func _on_signed_out() -> void:
 	balance_changed.emit(balance)
 	themes_changed.emit()
 	simon_changed.emit()
+	frames_changed.emit()
 	levels_changed.emit()
 	daily_claim_changed.emit()
 	remove_ads_changed.emit()
@@ -1006,6 +1089,7 @@ func _emit_all() -> void:
 	balance_changed.emit(balance)
 	themes_changed.emit()
 	simon_changed.emit()
+	frames_changed.emit()
 	levels_changed.emit()
 	daily_claim_changed.emit()
 	remove_ads_changed.emit()
@@ -1047,6 +1131,25 @@ func _apply_doc(doc: Dictionary) -> void:
 			var s := String(t)
 			if LEVEL_PRICES.has(s) and not owned_levels.has(s):
 				owned_levels.append(s)
+	# Button-frame cosmetics — same map-not-list storage as owned_themes, and the
+	# same tolerance for a hand-edited Array. Unknown ids (a cosmetic pulled from
+	# the catalog) are dropped on load, and an equipped frame the player doesn't
+	# own falls back to the stock black bezel.
+	owned_frames = [DEFAULT_FRAME]
+	var raw_fr: Variant = doc.get("owned_frames", {})
+	if raw_fr is Dictionary:
+		for k in raw_fr.keys():
+			var fid := String(k)
+			if _frame_ownable(fid) and not owned_frames.has(fid):
+				owned_frames.append(fid)
+	elif raw_fr is Array:
+		for t in raw_fr:
+			var fid := String(t)
+			if _frame_ownable(fid) and not owned_frames.has(fid):
+				owned_frames.append(fid)
+	selected_frame = String(doc.get("selected_frame", DEFAULT_FRAME))
+	if not owned_frames.has(selected_frame):
+		selected_frame = DEFAULT_FRAME
 	_apply_simon_doc(doc)
 	last_claim_date = String(doc.get("last_claim_date", ""))
 	streak_days = int(doc.get("streak_days", 0))

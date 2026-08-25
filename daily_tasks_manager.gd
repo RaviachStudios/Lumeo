@@ -74,13 +74,13 @@ const C_GIFT := Color(0.98, 0.86, 0.35)     # the daily ritual + coin earnings
 const TASKS: Array[Dictionary] = [
 	# ── Play volume ─────────────────────────────────────────────────────────
 	{"id": "play_1",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 1,   "reward": 5,
-		"name": "Warm-Up",          "desc": "Play one game",                    "art": "controller", "accent": C_PLAY},
+		"name": "Warm-Up",          "desc": "Play one memory challenge",       "art": "btn_check",  "accent": C_PLAY},
 	{"id": "play_3",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 3,   "reward": 8,
-		"name": "Triple Play",      "desc": "Play three games",                 "art": "controller", "accent": C_PLAY},
+		"name": "Triple Play",      "desc": "Play three memory challenges",    "art": "controller", "accent": C_PLAY},
 	{"id": "play_5",    "group": "play",   "counter": "games",       "kind": COUNT, "target": 5,   "reward": 12,
-		"name": "Marathon",         "desc": "Play five games",                  "art": "rocket",     "accent": C_PLAY},
+		"name": "Marathon",         "desc": "Play five memory challenges",     "art": "rocket",     "accent": C_PLAY},
 	{"id": "play_10",   "group": "play",   "counter": "games",       "kind": COUNT, "target": 10,  "reward": 15,
-		"name": "Unstoppable",      "desc": "Play ten games",                   "art": "flame",      "accent": C_PLAY},
+		"name": "Unstoppable",      "desc": "Play ten memory challenges",      "art": "flame",      "accent": C_PLAY},
 
 	# ── Breadth: rounds cleared and difficulties touched ────────────────────
 	{"id": "rounds_25", "group": "rounds", "counter": "rounds",      "kind": COUNT, "target": 25,  "reward": 8,
@@ -98,19 +98,19 @@ const TASKS: Array[Dictionary] = [
 	{"id": "reach_15",  "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 15,  "reward": 12,
 		"name": "Sharp Today",      "desc": "Reach round 15",                   "art": "num", "num": 15, "accent": C_SKILL},
 	{"id": "reach_20",  "group": "best",   "counter": "best_any",    "kind": BEST,  "target": 20,  "reward": 15,
-		"name": "Peak Form",        "desc": "Reach round 20",                   "art": "brain",      "accent": C_SKILL},
+		"name": "Peak Form",        "desc": "Reach round 20",                   "art": "btn_ring",   "accent": C_SKILL},
 
 	# ── Per difficulty ──────────────────────────────────────────────────────
 	{"id": "easy_12",   "group": "easy",   "counter": "best_easy",   "kind": BEST,  "target": 12,  "reward": 6,
-		"name": "Easy Does It",     "desc": "Reach round 12 on Easy",           "art": "leaf",       "accent": C_EASY},
+		"name": "Easy Does It",     "desc": "Reach round 12 on Easy",           "art": "btn",        "accent": C_EASY},
 	{"id": "mod_8",     "group": "mod",    "counter": "best_moderate","kind": BEST, "target": 8,   "reward": 8,
-		"name": "Middle Ground",    "desc": "Reach round 8 on Moderate",        "art": "spark",      "accent": C_MOD},
+		"name": "Middle Ground",    "desc": "Reach round 8 on Moderate",        "art": "btn_seq",    "accent": C_MOD},
 	{"id": "mod_14",    "group": "mod",    "counter": "best_moderate","kind": BEST, "target": 14,  "reward": 12,
-		"name": "Moderate Master",  "desc": "Reach round 14 on Moderate",       "art": "spark",      "accent": C_MOD},
+		"name": "Moderate Master",  "desc": "Reach round 14 on Moderate",       "art": "btn_seq",    "accent": C_MOD},
 	{"id": "hard_7",    "group": "hard",   "counter": "best_hard",   "kind": BEST,  "target": 7,   "reward": 10,
-		"name": "Hard Mode",        "desc": "Reach round 7 on Hard",            "art": "bolt",       "accent": C_HARD},
+		"name": "Hard Mode",        "desc": "Reach round 7 on Hard",            "art": "btn_bolt",   "accent": C_HARD},
 	{"id": "hard_12",   "group": "hard",   "counter": "best_hard",   "kind": BEST,  "target": 12,  "reward": 12,
-		"name": "Iron Memory",      "desc": "Reach round 12 on Hard",           "art": "bolt",       "accent": C_HARD},
+		"name": "Iron Memory",      "desc": "Reach round 12 on Hard",           "art": "btn_bolt",   "accent": C_HARD},
 
 	# ── Arena ───────────────────────────────────────────────────────────────
 	{"id": "arena_1",     "group": "arena",  "counter": "arena",        "kind": COUNT, "target": 1, "reward": 8,

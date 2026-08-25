@@ -29,7 +29,7 @@ const CARD_PAD := 20.0
 # Four instructional steps: number, accent color, title, description.
 const STEPS := [
 	{"n": "1", "accent": Color(0.23, 0.51, 0.96), "title": "Watch",
-		"desc": "Simon lights up a sequence of colored buttons. Watch the order closely."},
+		"desc": "The board lights up a sequence of coloured buttons. Watch the order closely."},
 	{"n": "2", "accent": Color(0.18, 0.78, 0.39), "title": "Repeat",
 		"desc": "Tap the buttons in the exact same order. One wrong press ends the run."},
 	{"n": "3", "accent": Color(0.55, 0.36, 0.96), "title": "Level Up",

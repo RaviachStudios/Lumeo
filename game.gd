@@ -27,11 +27,17 @@ var flash_time: float
 var flash_gap: float
 var speed_inc: float
 
-# The play device. Deliberately untyped: "moderate" plays on the modelled
-# five-button MemoryGameUI panel, easy/hard on the procedural SimonWheel. Both
-# expose the same API (configure / apply_skin / set_lit / set_press /
-# segment_at_point / set_level / the skin flourishes), so everything below drives
-# either one.
+# The play device. Every difficulty now plays on a modelled physical board: easy
+# on the three-button EasyGameUI triangle, moderate on the five-button MemoryGameUI
+# pentagon, hard on the six-button HardGameUI hexagon — the latter two being
+# MemoryGameUI subclasses, so all three are the same class with a different board
+# spec. The procedural four-colour SimonWheel is no longer a play device on any
+# difficulty (it still backs the shop's preview wheels).
+#
+# Still deliberately untyped: everything below only ever calls the shared API
+# (configure / apply_skin / set_lit / set_press / segment_at_point / set_level /
+# the skin flourishes), and the name is kept so the ~40 call sites below did not
+# have to churn.
 var _wheel
 var _state: String = "idle"  # idle, showing, input, gameover
 var _last_input_frame: int = -1
@@ -79,18 +85,22 @@ func _ready() -> void:
 	speed_inc = GameState.speed_increase
 	# The 3D play device (rendered via SubViewport). Added before the HUD so it
 	# sits behind the labels/buttons; it ignores mouse input - taps are handled
-	# here. Moderate plays on the modelled five-button memory-game panel; easy
-	# and hard keep the procedural 4/6-segment wheel.
-	if GameState.difficulty == "moderate":
-		var panel := MemoryGameUI.new()
-		# The panel can hit-test and react to its own taps, but a press is only
-		# legal during the player's turn and never behind the quit dialog. That
-		# policy lives in _input below, so its own handler stays off and there is
-		# no second, ungated path into _player_pressed.
-		panel.input_enabled = false
-		_wheel = panel
-	else:
-		_wheel = SimonWheel.new()
+	# here. One modelled board per difficulty: three buttons on easy, five on
+	# moderate, six on hard.
+	var board: MemoryGameUI
+	match GameState.difficulty:
+		"hard":
+			board = HardGameUI.new()
+		"moderate":
+			board = MemoryGameUI.new()
+		_:
+			board = EasyGameUI.new()
+	# The board can hit-test and react to its own taps, but a press is only
+	# legal during the player's turn and never behind the quit dialog. That
+	# policy lives in _input below, so its own handler stays off and there is
+	# no second, ungated path into _player_pressed.
+	board.input_enabled = false
+	_wheel = board
 	add_child(_wheel)
 	_layout_wheel()
 	_wheel.configure(num_buttons, BUTTON_COLORS)
@@ -157,27 +167,20 @@ func _draw() -> void:
 	for y in range(0, int(sz.y), 80):
 		draw_line(Vector2(0,y), Vector2(sz.x,y), Color(1,1,1,0.025), 1.0)
 
-# Center the 3D wheel as a large square, leaving room for the top/bottom HUD.
+# Give the modelled board the whole viewport; it frames itself inside it.
 func _layout_wheel() -> void:
 	if _wheel == null:
 		return
 	var sz := get_viewport_rect().size
-	if GameState.difficulty == "moderate":
-		# The modelled board is a wide tabletop seen in perspective, not a disc, so
-		# it gets the WHOLE viewport instead of a centred square — a square would
-		# waste the sides and shrink the buttons for nothing. It fits its own
-		# framing to whatever rect it is given (MemoryGameUI._fit_camera), and the
-		# open front of the pentagon leaves the bottom centre free for the status
-		# pill.
-		_wheel.size = sz
-		_wheel.position = Vector2.ZERO
-		_layout_countdown(sz)
-		return
-	var s: float = minf(sz.x, sz.y) * 0.92
-	_wheel.size = Vector2(s, s)
-	# Raise the wheel a little now that the coins HUD has moved out of the top
-	# centre — fills the space the balance pill used to occupy.
-	_wheel.position = Vector2((sz.x - s) * 0.5, (sz.y - s) * 0.5 - sz.y * 0.07)
+	# A modelled board is a wide tabletop seen in perspective, not a disc, so it
+	# gets the WHOLE viewport instead of the centred square the old wheel took — a
+	# square would waste the sides and shrink the buttons for nothing. Each board
+	# fits its own framing to whatever rect it is given (MemoryGameUI._fit_camera),
+	# and all three leave the bottom centre clear for the status pill (the pentagon
+	# through its open front, the hexagon and the triangle through their fitted
+	# vertical bands).
+	_wheel.size = sz
+	_wheel.position = Vector2.ZERO
 	_layout_countdown(sz)
 
 # Position the big 3-2-1 side countdown on the right edge, vertically centred.
@@ -187,8 +190,8 @@ func _layout_countdown(sz: Vector2) -> void:
 	_countdown_lbl.size = Vector2(140, 140)
 	_countdown_lbl.position = Vector2(sz.x - 160.0, sz.y * 0.5 - 70.0)
 
-# Apply the player's equipped Simon customization (shop "SIMON" tab or SPECIAL
-# SKINS tab) to the wheel. CoinsManager is already loaded by the time a game
+# Apply the player's equipped board customization (the retired per-part colours, or
+# the SPECIAL SKINS tab) to the play device. CoinsManager is already loaded by the time a game
 # starts (the home screen waits on CoinsManager.loaded), so the equipped look
 # is available immediately. In skin mode the active skin overrides every per-part
 # colour with its own bespoke palette + overlay (e.g. inferno's ring of flames).
@@ -253,11 +256,12 @@ func _build_hud() -> void:
 	# drawn by watch_ad_button.gd; it also sizes itself to the text with generous
 	# padding in _ready.
 	#
-	# It lives in the top-LEFT corner, the point furthest from the wheel: the wheel
-	# is centred and inscribed in a square of 0.92 × the short side, so its rim
-	# never reaches this corner at any viewport aspect. Taps during a round land on
-	# the wheel and nowhere near here, which is the whole point — an ad control must
-	# not sit inside the area a player is repeatedly hitting.
+	# It lives in the top-LEFT corner, the point furthest from the play device: every
+	# board is fitted into a band that leaves the top corners clear at any viewport
+	# aspect (the acceptance harnesses check exactly that, per button, per board).
+	# Taps during a round land on a button and nowhere near here, which is the whole
+	# point — an ad control must not sit inside the area a player is repeatedly
+	# hitting.
 	_watch_ad_btn = (load("res://watch_ad_button.gd") as GDScript).new()
 	_watch_ad_btn.text = "Watch a video to replay"
 	_watch_ad_btn.position = Vector2(20, 20)
@@ -540,16 +544,16 @@ func _next_round() -> void:
 	_update_hud()
 	# Level-8 signature moments (each fires once, on the two special skins that have one).
 	# The round FREEZES on the banner — it's awaited before the sequence starts, so
-	# gameplay is paused for the ~3s show, then Simon continues.
+	# gameplay is paused for the ~3s show, then the round continues.
 	#   • Volcano: the sky cracks into a thunderstorm behind a "YOU ARE ON FIRE!" banner.
 	#   • Arcade: the hall goes dark, every cabinet screen catches fire, and a big
-	#     "SIMON KING" banner lights up.
+	#     "LUMEO KING" banner lights up.
 	if level == 8 and _is_volcano_skin():
 		BackgroundManager.volcano_thunderstorm()   # storm runs concurrently with the banner
 		await _show_fire_text()
 	elif level == 8 and _is_arcade_skin():
 		BackgroundManager.arcade_king()            # dark room + fire screens, concurrent
-		await _show_simon_king_text()
+		await _show_king_text()
 	_set_status("Watch carefully...")
 	_state = "showing"
 	await get_tree().create_timer(0.6).timeout
@@ -576,7 +580,7 @@ func _is_lunapark_skin() -> bool:
 	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "lunapark"
 
 # True when the equipped look is the Arcade ("arcade") special skin — used for the
-# level-8 "SIMON KING" blackout (its cabinet hall is the live background, so the shader
+# level-8 "LUMEO KING" blackout (its cabinet hall is the live background, so the shader
 # effect lands on it). A manual per-part look never counts.
 func _is_arcade_skin() -> bool:
 	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "arcade"
@@ -652,11 +656,11 @@ func _fire_label(txt: String, fs: int) -> Label:
 	lbl.add_theme_font_size_override("font_size", fs)
 	return lbl
 
-# Big "SIMON KING" banner for the Arcade skin's level-8 blackout — regal gold letters
+# Big "LUMEO KING" banner for the Arcade skin's level-8 blackout — regal gold letters
 # ringed by an electric neon glow (cyan→magenta), so it reads like a lit marquee sign
 # over the darkened hall. Pops in, holds with a gentle breath, fades out — ~3.3s total.
 # Awaited by _next_round so the round stays frozen until it clears.
-func _show_simon_king_text() -> void:
+func _show_king_text() -> void:
 	var holder := Control.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.modulate.a = 0.0
@@ -667,7 +671,7 @@ func _show_simon_king_text() -> void:
 	add_child(holder)
 
 	var fs := int(clampf(screen.x * 0.155, 70.0, 164.0))
-	var txt := "SIMON KING"
+	var txt := "LUMEO KING"
 
 	# Layer 1 — wide neon halo (electric blue), a thick soft outline with no fill punch.
 	var glow := _fire_label(txt, fs)

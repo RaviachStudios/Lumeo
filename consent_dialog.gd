@@ -14,9 +14,9 @@ signal answered(granted: bool)
 # Same URL as home_screen.gd and the Play Store listing.
 const PRIVACY_POLICY_URL := "https://raviachstudios.github.io/Raviach-policy/"
 
-const TITLE_TEXT := "Ads in Simon"
+const TITLE_TEXT := "Ads in LUMEO"
 
-const BODY_TEXT := """Simon is free to play, and ads pay for it.
+const BODY_TEXT := """LUMEO is free to play, and ads pay for it.
 
 We can show you ads chosen for you, which means sharing your device's advertising ID with our ad partner, Unity Ads, so it can pick more relevant ones. This earns more, so it keeps the game free.
 

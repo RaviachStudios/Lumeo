@@ -9,7 +9,15 @@ extends Node
 var contest_context: Dictionary = {}
 
 var difficulty: String = "easy"
-var num_colors: int = 4
+# How many buttons the play device has on this difficulty, and therefore how many
+# distinct values the sequence can take. It is the button count of the modelled
+# board each difficulty plays on: easy's three-button triangle, moderate's
+# five-button pentagon, hard's six-button hexagon. Easy was 4 while it played on
+# the four-segment SimonWheel; the wheel is gone and the board it was replaced
+# with has three physical buttons, so the sequence draws from three. Nothing else
+# about easy moved — the flash timing, the gap, the ramp, the scoring and the
+# win/loss rules below are all exactly what they were.
+var num_colors: int = 3
 var flash_time: float = 0.7
 var flash_gap: float = 0.25
 var speed_increase: float = 0.008
@@ -41,7 +49,7 @@ func set_difficulty(diff: String) -> void:
 	difficulty = diff
 	match diff:
 		"easy":
-			num_colors = 4
+			num_colors = 3
 			flash_time = 0.7
 			flash_gap = 0.25
 			speed_increase = 0.008

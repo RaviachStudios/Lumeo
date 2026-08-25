@@ -114,7 +114,14 @@ static func _emblem(c: CanvasItem, art: String, ce: Vector2, r: float, ink: Colo
 		"palette":     _palette(c, ce, r, ink)
 		"gem":         _gem(c, ce, r, ink, acc)
 		"diamond":     _gem(c, ce, r, ink, acc)
-		"wheel":       _wheel(c, ce, r, ink, acc)
+		"btn":         _em_btn(c, ce, r, acc)
+		"btn_seq":     _em_btn_seq(c, ce, r, acc)
+		"btn_ring":    _em_btn_ring(c, ce, r, acc)
+		"btn_check":   _em_btn_check(c, ce, r, acc)
+		"btn_bolt":    _em_btn_bolt(c, ce, r, acc)
+		"btn_crown":   _em_btn_crown(c, ce, r, acc)
+		"btn_star":    _em_btn_star(c, ce, r, acc)
+		"btn_frame":   _em_btn_frame(c, ce, r, acc)
 		"key":         _key(c, ce, r, ink)
 		"shield":      _shield(c, ce, r, ink, acc)
 		"gift":        _gift(c, ce, r, ink, acc)
@@ -123,6 +130,169 @@ static func _emblem(c: CanvasItem, art: String, ce: Vector2, r: float, ink: Colo
 		"controller":  _controller(c, ce, r, ink)
 		"rocket":      _rocket(c, ce, r, ink, acc)
 		_:             _fill_star(c, ce, r, ink, 5)
+
+# ─── the BUTTON family ───────────────────────────────────────────────────────
+#
+# Every achievement that is about PLAYING is drawn out of one part: a LUMEO button,
+# seen head-on. A dark metal bezel, the lit channel ringing it, a domed coloured cap
+# with a gloss in the upper left. It is the same object the game is played on, and
+# drawing every one of these emblems from the single `_btn` primitive is what makes
+# the gallery read as one designed collection rather than as a pile of clip-art.
+#
+# This replaced the four-colour wheel emblem (and the bare numeral rings), which
+# were the last Simon-shaped things in the badge art.
+#
+# `lit` is 0..1 — how brightly the button is switched on. An unlit button is not
+# black: it is the cap in its own colour, just without the halo, the hot channel or
+# the crown highlight. That difference is what a "sequence" emblem is made of.
+
+# The board's own cap colours, in the order the emblems below step through them.
+const BTN_CAPS := [
+	Color(0.30, 0.82, 0.92),   # cyan
+	Color(0.62, 0.44, 1.00),   # violet
+	Color(0.98, 0.34, 0.72),   # magenta
+	Color(1.00, 0.74, 0.24),   # amber
+	Color(0.18, 0.84, 0.56),   # jade
+	Color(0.32, 0.52, 1.00),   # blue
+]
+
+# The key light every emblem in the set is lit from, so the whole page agrees.
+const BTN_LIGHT := Vector2(-0.55, -0.62)
+
+# One button. `r` is the bezel's outer radius.
+static func _btn(c: CanvasItem, ce: Vector2, r: float, cap: Color, lit: float) -> void:
+	# the light it throws when it is on — drawn first, so it sits behind the metal
+	if lit > 0.01:
+		for i in 4:
+			var t := float(i) / 3.0
+			c.draw_circle(ce, r * (1.02 + 0.38 * t),
+				Color(cap.r, cap.g, cap.b, 0.19 * lit * (1.0 - t)))
+	# the seat it stands in
+	c.draw_circle(ce + Vector2(0.0, r * 0.10), r * 1.02, Color(0.0, 0.0, 0.0, 0.38))
+	# the bezel: near-black metal with a lit shoulder up-left and a turned shadow
+	# down-right, which is the whole reason it reads as a machined ring
+	c.draw_circle(ce, r, Color(0.11, 0.12, 0.17))
+	c.draw_arc(ce, r * 0.90, PI * 0.94, PI * 1.64, 22, Color(0.56, 0.60, 0.74, 0.90), r * 0.17, true)
+	c.draw_arc(ce, r * 0.90, -PI * 0.06, PI * 0.56, 22, Color(0.02, 0.02, 0.05, 0.60), r * 0.17, true)
+	# the channel: the lit gap between the bezel and the cap
+	c.draw_circle(ce, r * 0.80, Color(0.04, 0.04, 0.08))
+	var chan := cap.lerp(Color(1, 1, 1), 0.30 + 0.50 * lit)
+	c.draw_arc(ce, r * 0.755, 0, TAU, 40, Color(chan.r, chan.g, chan.b, 0.50 + 0.50 * lit), r * 0.085)
+	# the cap: a dome, ramped from a lit crown to a deep shoulder
+	_btn_cap(c, ce, r * 0.70, cap, lit)
+
+# The cap on its own — a vertical ramp built as a coloured polygon so it is a real
+# gradient, plus the broad sheen a moulded plastic dome always has up-left.
+static func _btn_cap(c: CanvasItem, ce: Vector2, r: float, cap: Color, lit: float) -> void:
+	var top := cap.lightened(0.22 + 0.40 * lit)
+	var bot := cap.darkened(0.46 - 0.24 * lit)
+	var pts := PackedVector2Array()
+	var cols := PackedColorArray()
+	var n := 40
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		var p := Vector2(cos(a), sin(a)) * r
+		pts.append(ce + p)
+		cols.append(top.lerp(bot, smoothstep(0.0, 1.0, (p.y + r) / (2.0 * r))))
+	c.draw_polygon(pts, cols)
+	c.draw_circle(ce + Vector2(-r * 0.30, -r * 0.34), r * 0.34, Color(1, 1, 1, 0.20 + 0.16 * lit))
+	c.draw_arc(ce, r * 0.94, 0, TAU, 32, Color(0.0, 0.0, 0.0, 0.22), r * 0.12)
+
+# ONE button, switched on. The simplest member of the set and the one everything
+# else is a variation of.
+static func _em_btn(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	_btn(c, ce, r * 0.86, _cap_for(acc, 0), 1.0)
+
+# A three-button SEQUENCE, reading left to right: lit, lit, waiting. The whole game
+# in one emblem — an order, and a next step.
+static func _em_btn_seq(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	var br := r * 0.40
+	var lits := [1.0, 0.72, 0.0]
+	for i in 3:
+		var x := (float(i) - 1.0) * r * 0.72
+		var y := -r * 0.10 + absf(float(i) - 1.0) * r * 0.06
+		_btn(c, ce + Vector2(x, y), br, _cap_for(acc, i), lits[i])
+	# the order marks under the row: two filled, one hollow
+	for i in 3:
+		var p := ce + Vector2((float(i) - 1.0) * r * 0.72, r * 0.74)
+		if i < 2:
+			c.draw_circle(p, r * 0.075, Color(1, 1, 1, 0.80))
+		else:
+			c.draw_arc(p, r * 0.075, 0, TAU, 14, Color(1, 1, 1, 0.42), r * 0.032)
+
+# SIX buttons in a ring with three of them lit: a pattern held in memory. The ring
+# is deliberately six INDIVIDUAL buttons with air between them — never a divided disc.
+static func _em_btn_ring(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	var br := r * 0.31
+	var ring := r * 0.66
+	var on := [true, false, true, false, false, true]
+	for i in 6:
+		var a := -PI * 0.5 + TAU * float(i) / 6.0
+		_btn(c, ce + Vector2(cos(a), sin(a)) * ring, br, _cap_for(acc, i), 1.0 if on[i] else 0.0)
+
+# A button with a CHECK struck over it: a sequence returned correctly.
+static func _em_btn_check(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	_btn(c, ce, r * 0.90, _cap_for(acc, 3), 0.85)
+	var w := r * 0.17
+	var a := ce + Vector2(-r * 0.34, r * 0.00)
+	var b := ce + Vector2(-r * 0.08, r * 0.30)
+	var d := ce + Vector2(r * 0.40, -r * 0.34)
+	for pass_i in 2:                                  # a dark under-stroke, then white
+		var col := Color(0.02, 0.03, 0.08, 0.55) if pass_i == 0 else Color(1, 1, 1, 1)
+		var k: float = 1.34 if pass_i == 0 else 1.0
+		c.draw_line(a, b, col, w * k)
+		c.draw_line(b, d, col, w * k)
+		c.draw_circle(a, w * k * 0.5, col)
+		c.draw_circle(b, w * k * 0.5, col)
+		c.draw_circle(d, w * k * 0.5, col)
+
+# A BOLT struck across a button: speed, and the hard difficulties.
+static func _em_btn_bolt(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	_btn(c, ce, r * 0.82, _cap_for(acc, 3), 0.9)
+	var s := r * 0.86
+	var tri := PackedVector2Array([
+		ce + Vector2(0.16, -1.06) * s, ce + Vector2(-0.44, 0.10) * s,
+		ce + Vector2(0.02, 0.10) * s, ce + Vector2(-0.14, 1.06) * s,
+		ce + Vector2(0.48, -0.08) * s, ce + Vector2(0.02, -0.08) * s])
+	var halo := PackedVector2Array()
+	for p in tri:
+		halo.append(ce + (p - ce) * 1.16)
+	c.draw_colored_polygon(halo, Color(0.02, 0.03, 0.08, 0.50))
+	c.draw_colored_polygon(tri, Color(1.0, 0.94, 0.62))
+	c.draw_colored_polygon(PackedVector2Array([tri[0], tri[1], tri[2]]), Color(1, 1, 1, 0.75))
+
+# A CROWN riding on top of a button.
+static func _em_btn_crown(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	_btn(c, ce + Vector2(0.0, r * 0.22), r * 0.74, _cap_for(acc, 1), 1.0)
+	_crown(c, ce + Vector2(0.0, -r * 0.66), r * 0.52, Color(1, 1, 1))
+
+# A STAR bursting behind a button.
+static func _em_btn_star(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	var gold := Color(1.0, 0.86, 0.34)
+	_poly(c, _star_pts(ce, r * 1.04, r * 0.44, 5), Color(gold.r, gold.g, gold.b, 0.55))
+	_poly(c, _star_pts(ce, r * 0.92, r * 0.38, 5), gold)
+	_btn(c, ce, r * 0.58, _cap_for(acc, 0), 1.0)
+
+# A button wearing a cosmetic FRAME: the stock bezel with a second, decorative ring
+# fitted over it, which is exactly what a Button Frame is.
+static func _em_btn_frame(c: CanvasItem, ce: Vector2, r: float, acc: Color) -> void:
+	# the cosmetic ring, in the badge's own accent, seated proud of the button
+	for i in 4:
+		var t := float(i) / 3.0
+		c.draw_arc(ce, r * (1.00 + 0.10 * t), 0, TAU, 40,
+			Color(acc.r, acc.g, acc.b, 0.18 * (1.0 - t)), r * 0.16)
+	c.draw_arc(ce, r * 0.98, 0, TAU, 44, Color(0.10, 0.11, 0.16), r * 0.26)
+	c.draw_arc(ce, r * 0.98, 0, TAU, 44, acc.lightened(0.46), r * 0.15)
+	c.draw_arc(ce, r * 1.04, 0, TAU, 44, Color(0.05, 0.05, 0.09, 0.70), r * 0.05)
+	c.draw_arc(ce, r * 0.98, PI * 0.96, PI * 1.62, 22, Color(1, 1, 1, 0.72), r * 0.07)
+	_btn(c, ce, r * 0.80, _cap_for(acc, 1), 0.55)
+
+# The cap colour emblem `i` uses. Anchored to the badge's own accent when the accent
+# is a real colour, so a locked (slate) badge greys out with everything else.
+static func _cap_for(acc: Color, i: int) -> Color:
+	if acc.s < 0.32:                                  # locked/slate: no colour to keep
+		return acc.lightened(0.10 + 0.06 * float(i % 3))
+	return BTN_CAPS[i % BTN_CAPS.size()]
 
 # ─── primitives ──────────────────────────────────────────────────────────────
 
@@ -142,14 +312,21 @@ static func _fill_star(c: CanvasItem, ce: Vector2, r: float, ink: Color, points:
 	c.draw_circle(ce, r * 0.16, ink.lightened(0.3))
 
 static func _num(c: CanvasItem, ce: Vector2, r: float, ink: Color, acc: Color, num: int) -> void:
-	# Target ring with the milestone number inside.
-	c.draw_arc(ce, r, 0, TAU, 40, acc.lightened(0.2), r * 0.16)
-	c.draw_arc(ce, r * 0.66, 0, TAU, 32, ink, r * 0.10)
+	# The milestone number moulded into the CAP of a lit button — the same part every
+	# other gameplay emblem is built from, so a "reach round 20" badge belongs to the
+	# same set as the sequence and pattern ones. It used to be a bare target ring.
+	_btn(c, ce, r * 0.98, _cap_for(acc, 0), 0.80)
+	var cap_r := r * 0.98 * 0.70
 	var f := ThemeDB.fallback_font
-	var fs := int(r * (1.15 if num < 10 else (0.9 if num < 100 else 0.72)))
+	var fs := int(cap_r * (1.52 if num < 10 else (1.16 if num < 100 else 0.90)))
 	var s := str(num)
 	var w := f.get_string_size(s, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
-	c.draw_string(f, ce - Vector2(w.x * 0.5, -w.y * 0.32), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
+	var at := ce - Vector2(w.x * 0.5, -w.y * 0.32)
+	# a soft drop under the numeral: a lit cap is bright enough that plain white ink
+	# on it loses its edges
+	c.draw_string(f, at + Vector2(0.0, r * 0.05), s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+		Color(0.02, 0.03, 0.10, 0.50))
+	c.draw_string(f, at, s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1))
 
 static func _coin(c: CanvasItem, ce: Vector2, r: float, ink: Color, acc: Color) -> void:
 	c.draw_circle(ce, r, Color(0.95, 0.78, 0.20))
@@ -309,20 +486,6 @@ static func _gem(c: CanvasItem, ce: Vector2, r: float, ink: Color, acc: Color) -
 		ce + Vector2(0, r * 0.95)]), acc.lightened(0.45))
 	c.draw_colored_polygon(PackedVector2Array([ce + Vector2(-r * 0.7, top), ce + Vector2(r * 0.7, top),
 		ce + Vector2(r * 0.42, -r * 0.75), ce + Vector2(-r * 0.42, -r * 0.75)]), acc.lightened(0.1))
-
-static func _wheel(c: CanvasItem, ce: Vector2, r: float, ink: Color, acc: Color) -> void:
-	var segs := [Color(0.85, 0.2, 0.2), Color(0.2, 0.65, 0.3), Color(0.2, 0.35, 0.85), Color(0.95, 0.75, 0.2), Color(0.9, 0.45, 0.15)]
-	for i in 5:
-		var a0 := TAU * float(i) / 5.0 - PI / 2
-		var a1 := TAU * float(i + 1) / 5.0 - PI / 2
-		var pts := PackedVector2Array([ce])
-		var steps := 6
-		for s in steps + 1:
-			var a: float = lerp(a0, a1, float(s) / float(steps))
-			pts.append(ce + Vector2(cos(a), sin(a)) * r)
-		c.draw_colored_polygon(pts, segs[i])
-	c.draw_circle(ce, r * 0.32, Color(0.10, 0.10, 0.14))
-	c.draw_circle(ce, r * 0.22, ink)
 
 static func _key(c: CanvasItem, ce: Vector2, r: float, ink: Color) -> void:
 	var gold := Color(1.0, 0.82, 0.30)

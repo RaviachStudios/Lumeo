@@ -23,7 +23,7 @@ extends Node
 #
 # EARN GESTURE: earning a badge emits `badge_earned(id)`; badge_toast.gd (spawned
 # once here) shows a muted card sliding in from the LEFT so it never covers the
-# centred Simon wheel nor competes with the Simon tones during a game.
+# centred play device nor competes with the button tones during a game.
 # ─────────────────────────────────────────────────────────────────────────────
 
 const BITS := 256
@@ -46,7 +46,7 @@ const CAT_COLORS := {
 # Keep ids stable; append new badges with the next free bit.
 const BADGES: Array[Dictionary] = [
 	# ── Onboarding ──────────────────────────────────────────────────────────
-	{"id": "first_game",  "bit": 0,  "cat": "onboarding", "art": "sprout",   "name": "First Steps",      "desc": "Play your very first game."},
+	{"id": "first_game",  "bit": 0,  "cat": "onboarding", "art": "btn_check","name": "First Steps",      "desc": "Play your very first game."},
 	{"id": "signed_in",   "bit": 1,  "cat": "onboarding", "art": "handshake","name": "Welcome Aboard",   "desc": "Sign in to your account."},
 	{"id": "named",       "bit": 2,  "cat": "onboarding", "art": "tag",      "name": "Who Am I",         "desc": "Choose your player name."},
 	{"id": "tutorial",    "bit": 3,  "cat": "onboarding", "art": "book",     "name": "Quick Study",      "desc": "Finish the How To Play guide."},
@@ -60,14 +60,14 @@ const BADGES: Array[Dictionary] = [
 	{"id": "score_25",  "bit": 9,  "cat": "score", "art": "num", "num": 25, "name": "Mastermind",     "desc": "Reach round 25."},
 	{"id": "score_30",  "bit": 10, "cat": "score", "art": "num", "num": 30, "name": "Photographic",   "desc": "Reach round 30."},
 	{"id": "score_40",  "bit": 11, "cat": "score", "art": "num", "num": 40, "name": "Superhuman",     "desc": "Reach round 40."},
-	{"id": "score_50",  "bit": 12, "cat": "score", "art": "brain",          "name": "The Impossible", "desc": "Reach round 50."},
+	{"id": "score_50",  "bit": 12, "cat": "score", "art": "btn_ring",       "name": "The Impossible", "desc": "Reach round 50."},
 
 	# ── Difficulty-specific ─────────────────────────────────────────────────
-	{"id": "easy_20",     "bit": 13, "cat": "score", "art": "leaf",   "name": "Easy Rider",      "desc": "Reach round 20 on Easy."},
-	{"id": "mod_15",      "bit": 14, "cat": "score", "art": "spark",  "name": "Middle Ground",   "desc": "Reach round 15 on Moderate."},
-	{"id": "mod_25",      "bit": 15, "cat": "score", "art": "spark",  "name": "Moderate Master", "desc": "Reach round 25 on Moderate."},
-	{"id": "hard_10",     "bit": 16, "cat": "score", "art": "bolt",   "name": "Hardcore",        "desc": "Reach round 10 on Hard."},
-	{"id": "hard_20",     "bit": 17, "cat": "score", "art": "bolt",   "name": "Iron Memory",     "desc": "Reach round 20 on Hard."},
+	{"id": "easy_20",     "bit": 13, "cat": "score", "art": "btn",       "name": "Easy Rider",      "desc": "Reach round 20 on Easy."},
+	{"id": "mod_15",      "bit": 14, "cat": "score", "art": "btn_seq",   "name": "Middle Ground",   "desc": "Reach round 15 on Moderate."},
+	{"id": "mod_25",      "bit": 15, "cat": "score", "art": "btn_seq",   "name": "Moderate Master", "desc": "Reach round 25 on Moderate."},
+	{"id": "hard_10",     "bit": 16, "cat": "score", "art": "btn_bolt",  "name": "Hardcore",        "desc": "Reach round 10 on Hard."},
+	{"id": "hard_20",     "bit": 17, "cat": "score", "art": "btn_bolt",  "name": "Iron Memory",     "desc": "Reach round 20 on Hard."},
 	{"id": "all_diffs",   "bit": 18, "cat": "score", "art": "triangle","name": "Triple Threat",  "desc": "Play Easy, Moderate and Hard."},
 
 	# ── Global / daily leaderboard ──────────────────────────────────────────
@@ -75,7 +75,7 @@ const BADGES: Array[Dictionary] = [
 	{"id": "lb_top50",    "bit": 20, "cat": "leaderboard", "art": "chart",  "name": "Rising Star",      "desc": "Reach the global Top 50."},
 	{"id": "lb_top10",    "bit": 21, "cat": "leaderboard", "art": "medal",  "name": "Elite Ten",        "desc": "Reach the global Top 10."},
 	{"id": "lb_top3",     "bit": 22, "cat": "leaderboard", "art": "trophy", "name": "Podium Finish",    "desc": "Reach the global Top 3."},
-	{"id": "lb_first",    "bit": 23, "cat": "leaderboard", "art": "crown",  "name": "World Champion",   "desc": "Claim the #1 global spot."},
+	{"id": "lb_first",    "bit": 23, "cat": "leaderboard", "art": "btn_crown", "name": "World Champion",   "desc": "Claim the #1 global spot."},
 	{"id": "daily_top10", "bit": 24, "cat": "leaderboard", "art": "sun",    "name": "Daily Grind",      "desc": "Reach the daily Top 10."},
 	{"id": "daily_first", "bit": 25, "cat": "leaderboard", "art": "star",   "name": "Player Of The Day","desc": "Top the daily leaderboard."},
 
@@ -91,7 +91,7 @@ const BADGES: Array[Dictionary] = [
 	{"id": "first_theme",  "bit": 32, "cat": "shop", "art": "palette", "name": "Fresh Look",     "desc": "Buy your first theme."},
 	{"id": "themes_5",     "bit": 33, "cat": "shop", "art": "palette", "name": "Collector",      "desc": "Own 5 themes."},
 	{"id": "themes_all",   "bit": 34, "cat": "shop", "art": "gem",     "name": "Completionist",  "desc": "Own every theme."},
-	{"id": "first_skin",   "bit": 35, "cat": "shop", "art": "wheel",   "name": "Skinned",        "desc": "Buy a Special Skin."},
+	{"id": "first_skin",   "bit": 35, "cat": "shop", "art": "btn_frame","name": "Skinned",        "desc": "Buy a Special Skin and its button frame."},
 	{"id": "skins_all",    "bit": 36, "cat": "shop", "art": "diamond", "name": "Skin Deep",      "desc": "Own every Special Skin."},
 	{"id": "unlock_diff",  "bit": 37, "cat": "score", "art": "key",    "name": "Level Up",       "desc": "Play a harder difficulty."},
 
@@ -124,7 +124,7 @@ const BADGES: Array[Dictionary] = [
 	# ── Fun / secret ────────────────────────────────────────────────────────
 	{"id": "night_owl",    "bit": 53, "cat": "fun", "art": "moon",  "name": "Night Owl",       "desc": "Play between midnight and 4 AM."},
 	{"id": "early_bird",   "bit": 54, "cat": "fun", "art": "sun",   "name": "Early Bird",      "desc": "Play between 4 and 6 AM."},
-	{"id": "badge_master", "bit": 55, "cat": "fun", "art": "star",  "name": "Simon Says Master","desc": "Earn 40 badges."},
+	{"id": "badge_master", "bit": 55, "cat": "fun", "art": "btn_star", "name": "Memory Master",  "desc": "Earn 40 badges."},
 ]
 
 signal badge_earned(id: String)

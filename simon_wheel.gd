@@ -971,7 +971,7 @@ func _metal_mat(col: Color, metal: float, rough: float) -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 
-# ---------------- customization (shop "SIMON" colours + SPECIAL SKINS) ----------------
+# ---------------- customization (per-part colours + SPECIAL SKINS) ----------------
 
 # Equip the player's chosen look. `outer`/`inner` are a Color or null (= stock
 # graphite). `number` is a font-package Dictionary or null (= stock white numeral).
@@ -1557,7 +1557,7 @@ void fragment() {
 }
 "
 
-# Shared style shader for the shop "SIMON" patterns/motifs. Object-space VERTEX
+# Shared style shader for the per-part patterns/motifs. Object-space VERTEX
 # (like the coal shader) keeps a pattern continuous across the wheel's separate
 # ring meshes. `pat` selects the look: 1-10 are angular/radial RIM patterns, 20-29
 # are centred HUB motifs (SDF-ish masks). Same int table as CoinsManager +

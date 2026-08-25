@@ -1,9 +1,19 @@
 extends Node2D
 
-# SimonFlyer — a small golden winged Simon that flaps and flies. Its three flap
-# poses are BAKED ONCE to shared ImageTextures (static cache), so every screen that
-# shows a flyer reuses the same textures: no per-frame rasterisation, nothing to
-# make it laggy. Flight is just a Sprite2D moving + swapping frames + a soft bloom.
+# SimonFlyer — a small winged flyer that flaps and flies. Its three flap poses are
+# BAKED ONCE to shared ImageTextures (static cache), so every screen that shows a
+# flyer reuses the same textures: no per-frame rasterisation, nothing to make it
+# laggy. Flight is just a Sprite2D moving + swapping frames + a soft bloom.
+#
+# The body it carries is ONE of the modelled board's coloured buttons: gold bezel,
+# the lit channel, a domed cap lit from the upper left. Pass the cap colour as cfg
+# "button_color" (see BUTTON_COLS); the bake cache is keyed by that colour, so N
+# differently-coloured flyers cost N bakes, once each, and callers that pass nothing
+# get DEFAULT_CAP.
+#
+# It used to carry a four-colour Simon disc instead, and that was the default body.
+# The disc is gone with the rest of the Simon identity — the mascot is one of the
+# game's own buttons now, which is also what the Arena's flyers already wore.
 #
 # One node = one flyer. Pick a mode in setup():
 #   "cross"  — crosses the screen edge-to-edge on a gentle wave, infrequently.
@@ -12,13 +22,20 @@ extends Node2D
 #   "rise"   — rises bottom→top on a horizontal wave, looping. `anchor_x`/`side`
 #              place & mirror it; two risers started together read as a synced pair.
 
-const SIMON_COLS := [
-	Color(0.97, 0.78, 0.22), Color(0.88, 0.22, 0.24),
-	Color(0.20, 0.70, 0.34), Color(0.24, 0.50, 0.95)]
+# The five caps of the modelled board (Crimson / Amber / Jade / Cyan / Violet),
+# lifted off their measured renders and pushed up in saturation so a 20px button
+# still reads as that button against a dark screen.
+const BUTTON_COLS := [
+	Color(0.86, 0.13, 0.30), Color(0.95, 0.68, 0.28), Color(0.10, 0.66, 0.48),
+	Color(0.32, 0.74, 0.78), Color(0.52, 0.48, 0.95)]
 const GOLD := Color(1.0, 0.82, 0.30)
+# The cap a caller gets when it names no colour — the board's violet, which is
+# LUMEO's own accent.
+const DEFAULT_CAP := Color(0.52, 0.48, 0.95)
 const FLAP_SEQ := [0, 1, 2, 1]
 
-static var _frames_cache: Array[Texture2D] = []
+# key ("button:<rrggbb>") → the three baked flap poses for that cap colour.
+static var _frames_cache: Dictionary = {}
 static var _radial_cache: Texture2D
 
 var _mode := "cross"
@@ -42,6 +59,7 @@ var _osc := 0.0                # continuous sway phase (never resets → no jump
 var _sprite: Sprite2D
 var _bloom: Sprite2D
 var _flap_t := 0.0
+var _art := ""                # bake-cache key: "button:<rrggbb>"; set in setup()
 
 # flight state
 var _phase := "idle"          # idle | fly | in | wait | out
@@ -64,9 +82,15 @@ func setup(size: Vector2, cfg: Dictionary = {}) -> void:
 	_rise_dur = float(cfg.get("dur", 3.8))
 	_top_pad = float(cfg.get("top_pad", 0.0))
 
+	# The flyer keys its bake on the cap colour and tints its bloom with it, so the
+	# halo around it is the light its own cap throws.
+	var cap: Color = cfg.get("button_color", DEFAULT_CAP)
+	_art = art_key(cap)
+	var halo := GOLD.lerp(cap.lightened(0.25), 0.6)
+
 	_bloom = Sprite2D.new()
 	_bloom.texture = _radial()
-	_bloom.modulate = Color(GOLD.r, GOLD.g, GOLD.b, 0.5)
+	_bloom.modulate = Color(halo.r, halo.g, halo.b, 0.5)
 	var bm := CanvasItemMaterial.new()
 	bm.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	_bloom.material = bm
@@ -74,7 +98,7 @@ func setup(size: Vector2, cfg: Dictionary = {}) -> void:
 	add_child(_bloom)
 
 	_sprite = Sprite2D.new()
-	_sprite.texture = _frames()[0]
+	_sprite.texture = _frames(_art)[0]
 	_sprite.scale = Vector2.ONE * _scale
 	_bloom.scale = Vector2.ONE * _scale * 1.4
 	_sprite.visible = false
@@ -274,7 +298,7 @@ func _place(pos: Vector2, rot: float, alpha: float) -> void:
 
 func _advance_flap(dt: float, speed: float) -> void:
 	_flap_t += dt * speed
-	_sprite.texture = _frames()[FLAP_SEQ[int(_flap_t) % FLAP_SEQ.size()]]
+	_sprite.texture = _frames(_art)[FLAP_SEQ[int(_flap_t) % FLAP_SEQ.size()]]
 
 func _show() -> void:
 	_sprite.visible = true
@@ -287,17 +311,26 @@ func _hide() -> void:
 
 # ===================== baked art (shared static cache) =====================
 
-static func frames() -> Array[Texture2D]:
-	return _frames()
+# The bake-cache key for one cap colour. The only shape a body key ever takes.
+static func art_key(cap: Color) -> String:
+	return "button:%s" % cap.to_html(false)
+
+static func frames(cap: Color = DEFAULT_CAP) -> Array[Texture2D]:
+	return _frames(art_key(cap))
 
 static func radial() -> Texture2D:
 	return _radial()
 
-static func _frames() -> Array[Texture2D]:
-	if _frames_cache.is_empty():
+# The three flap poses for one cap colour, baked on first use and kept for the
+# process. `art` is a key from art_key(); an unparseable one falls back to DEFAULT_CAP.
+static func _frames(art: String) -> Array[Texture2D]:
+	if not _frames_cache.has(art):
+		var cap := Color.from_string(art.trim_prefix("button:"), DEFAULT_CAP)
+		var set: Array[Texture2D] = []
 		for flap in [-0.85, 0.0, 0.85]:
-			_frames_cache.append(_bake_simon(flap))
-	return _frames_cache
+			set.append(_bake_button(flap, cap))
+		_frames_cache[art] = set
+	return _frames_cache[art]
 
 static func _radial() -> Texture2D:
 	if _radial_cache == null:
@@ -311,50 +344,72 @@ static func _radial() -> Texture2D:
 		_radial_cache = ImageTexture.create_from_image(img)
 	return _radial_cache
 
-# One golden winged Simon frame. Wings painted first (behind), then the four-colour
-# Simon disc over them, into a single RGBA image → one Sprite2D texture.
-static func _bake_simon(flap: float) -> Texture2D:
+# The gold wing pair at pixel `p`, composited over `dst`. Independent of the body, so
+# every flyer beats exactly the same wings whatever colour it carries.
+const WING_L := 34.0
+const WING_W := 12.0
+
+static func _paint_wings(dst: Color, p: Vector2, flap: float) -> Color:
+	var out := dst
+	for s in [-1.0, 1.0]:
+		var sh := Vector2(s * 11.0, -2.0)
+		var wdir := Vector2(s, -0.18 - 0.60 * flap).normalized()
+		var wc := sh + wdir * (WING_L * 0.5)
+		var loc := p - wc
+		var u := loc.dot(wdir)
+		var v := loc.dot(Vector2(-wdir.y, wdir.x))
+		var e := (u / (WING_L * 0.5)) * (u / (WING_L * 0.5)) + (v / (WING_W * 0.5)) * (v / (WING_W * 0.5))
+		var wa := clampf((1.0 - e) / 0.14, 0.0, 1.0)
+		if wa > 0.0:
+			var tip := clampf((u / (WING_L * 0.5)) * 0.5 + 0.5, 0.0, 1.0)
+			var wcol := GOLD.lerp(Color(0.75, 0.52, 0.12), tip)
+			out = _over(out, Color(wcol.r, wcol.g, wcol.b, wa))
+	return out
+
+# One winged BUTTON frame: the gold wings carrying one of the modelled board's
+# buttons. Painted to match the real thing (see the shop's
+# ButtonFramePreview, which renders the GLB button itself): a dark metal bezel, the
+# bright light-channel RING just inside it, and a flat coloured cap. The only liberty
+# is a thin gold edge on the bezel's outer wall — pure black would dissolve into the
+# arena's night sky at 20px across, and it ties the flyer to the gold wings.
+static func _bake_button(flap: float, cap: Color) -> Texture2D:
 	var px := 104
 	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
 	var c := Vector2(px, px) * 0.5
-	var body_r := 20.0
-	var gap := deg_to_rad(15.0)
-	var wing_l := 34.0
-	var wing_w := 12.0
+	var body_r := 20.0        # bezel outer edge
+	var edge_r := 18.4        # inside of the gold edge
+	var ring_out := 17.0      # the lit channel between bezel and cap
+	var ring_in := 15.0       # cap radius
+	var lit := Vector2(-0.55, -0.62).normalized()                 # key light, upper left
+	var ring_col := cap.lerp(Color(1, 1, 1), 0.62)
+	var cap_lo := cap.darkened(0.26)
+	var cap_hi := cap.lightened(0.14)
 	for y in px:
 		for x in px:
 			var p := Vector2(x, y) + Vector2(0.5, 0.5) - c
-			var out := Color(0, 0, 0, 0)
-			for s in [-1.0, 1.0]:
-				var sh := Vector2(s * 11.0, -2.0)
-				var wdir := Vector2(s, -0.18 - 0.60 * flap).normalized()
-				var wc := sh + wdir * (wing_l * 0.5)
-				var loc := p - wc
-				var u := loc.dot(wdir)
-				var v := loc.dot(Vector2(-wdir.y, wdir.x))
-				var e := (u / (wing_l * 0.5)) * (u / (wing_l * 0.5)) + (v / (wing_w * 0.5)) * (v / (wing_w * 0.5))
-				var wa := clampf((1.0 - e) / 0.14, 0.0, 1.0)
-				if wa > 0.0:
-					var tip := clampf((u / (wing_l * 0.5)) * 0.5 + 0.5, 0.0, 1.0)
-					var wcol := GOLD.lerp(Color(0.75, 0.52, 0.12), tip)
-					out = _over(out, Color(wcol.r, wcol.g, wcol.b, wa))
+			var out := _paint_wings(Color(0, 0, 0, 0), p, flap)
 			var r := p.length()
 			if r <= body_r + 1.0:
 				var ba := clampf((body_r - r) / 1.5, 0.0, 1.0)
-				var disc := Color(0.20, 0.16, 0.09)
-				if r >= 9.0 and r <= 17.0:
-					var ang := atan2(p.y, p.x)
-					var seg := int(floor((ang + PI * 0.75) / (PI * 0.5)))
-					var a0 := -PI * 0.75 + seg * PI * 0.5 + gap * 0.5
-					var a1 := -PI * 0.75 + (seg + 1) * PI * 0.5 - gap * 0.5
-					var na := wrapf(ang, -PI, PI)
-					if na >= a0 and na <= a1:
-						disc = SIMON_COLS[((seg % 4) + 4) % 4]
-				if r >= body_r - 2.5:
-					disc = GOLD.lightened(0.1)
-				if p.distance_to(Vector2(-5, -5)) < 4.0:
-					disc = disc.lerp(Color(1, 1, 1), 0.35)
-				out = _over(out, Color(disc.r, disc.g, disc.b, ba))
+				var lam := clampf(p.normalized().dot(lit), 0.0, 1.0)
+				var surf := Color(0, 0, 0)
+				if r >= edge_r:
+					surf = GOLD.darkened(0.30).lerp(GOLD.lightened(0.25), lam * lam)
+				elif r >= ring_out:
+					# bezel wall: near-black metal that catches the key light on one side
+					surf = Color(0.10, 0.10, 0.13).lerp(Color(0.34, 0.35, 0.41), lam * lam)
+				elif r >= ring_in:
+					surf = ring_col.lerp(Color(1, 1, 1), lam * 0.35)
+				else:
+					# flat cap, a touch lighter toward the top, with a soft broad sheen
+					# in the upper left rather than a gem-like specular point
+					var t := clampf(-p.y / ring_in * 0.5 + 0.5, 0.0, 1.0)
+					surf = cap_lo.lerp(cap_hi, t)
+					var sheen := clampf(1.0 - p.distance_to(Vector2(-4.5, -5.5)) / 8.5, 0.0, 1.0)
+					surf = surf.lerp(Color(1, 1, 1), sheen * sheen * 0.22)
+					if r > ring_in * 0.90:
+						surf = surf.darkened((r / ring_in - 0.90) * 0.9)
+				out = _over(out, Color(surf.r, surf.g, surf.b, ba))
 			img.set_pixel(x, y, out)
 	return ImageTexture.create_from_image(img)
 

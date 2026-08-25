@@ -517,16 +517,18 @@ func _render_lobby() -> void:
 		hint.size = Vector2(plaque_w, 22)
 		_content.add_child(hint)
 
-	# Two golden Simons rising up the far LEFT and RIGHT edge lanes.
-	var lanes := [{"side": -1.0, "x": w * 0.05, "delay": 0.5},
-		{"side": 1.0, "x": w * 0.95, "delay": 4.0}]
+	# Two winged buttons rising up the far LEFT and RIGHT edge lanes, one cap colour
+	# each so the pair never reads as the same prop twice.
+	var lanes := [{"side": -1.0, "x": w * 0.05, "delay": 0.5, "cap": SimonFlyer.BUTTON_COLS[3]},
+		{"side": 1.0, "x": w * 0.95, "delay": 4.0, "cap": SimonFlyer.BUTTON_COLS[4]}]
 	for lane in lanes:
 		var flyer := SimonFlyer.new()
 		_content.add_child(flyer)
 		flyer.setup(_content.size, {
 			"mode": "rise", "scale": 0.5, "side": lane["side"],
 			"anchor_x": lane["x"], "dur": 6.6, "delay": lane["delay"],
-			"amp": 22.0, "top_pad": _content.position.y + 40.0})
+			"amp": 22.0, "top_pad": _content.position.y + 40.0,
+			"button_color": lane["cap"]})
 
 	# Primary actions at the bottom. Start Race is the clear hero — larger, richly lit,
 	# with a soft green bloom — while Cancel Room is a quiet ghost button that stays
@@ -598,10 +600,11 @@ func _render_results() -> void:
 	var is_creator := String(_room.get("creator_uid", "")) == FirebaseManager.uid
 	var members := _active_players()
 
-	# An occasional golden Simon drifting across the floor.
+	# An occasional winged button drifting across the floor.
 	var flyer := SimonFlyer.new()
 	_content.add_child(flyer)
-	flyer.setup(_content.size, {"mode": "wander", "scale": 0.6})
+	flyer.setup(_content.size, {"mode": "wander", "scale": 0.6,
+		"button_color": SimonFlyer.BUTTON_COLS[1]})
 
 	# Split: finished (ranked by score) then still racing.
 	var done: Array = []
@@ -899,7 +902,8 @@ func _render_finished() -> void:
 		var flyer := SimonFlyer.new()
 		_content.add_child(flyer)
 		flyer.setup(_content.size, {"mode": "wander", "scale": 0.58,
-			"top_pad": _content.position.y + 40.0})
+			"top_pad": _content.position.y + 40.0,
+			"button_color": SimonFlyer.BUTTON_COLS[i % SimonFlyer.BUTTON_COLS.size()]})
 
 	var champ := Label.new()
 	champ.text = "Final Results"
@@ -950,7 +954,7 @@ func _render_finished() -> void:
 		vb.add_child(_make_empty_row(tw, res_row_h))
 
 func _add_finish_confetti() -> void:
-	var cols: Array = SimonFlyer.SIMON_COLS.duplicate()
+	var cols: Array = SimonFlyer.BUTTON_COLS.duplicate()
 	cols.append(ArenaUI.GOLD)
 	var flake := _confetti_flake()
 	for col: Color in cols:
@@ -977,7 +981,7 @@ func _add_finish_confetti() -> void:
 		_content.add_child(p)
 
 func _add_finish_flashes() -> void:
-	var cols: Array = SimonFlyer.SIMON_COLS.duplicate()
+	var cols: Array = SimonFlyer.BUTTON_COLS.duplicate()
 	cols.append(ArenaUI.GOLD)
 	var n := 7
 	for i in n:

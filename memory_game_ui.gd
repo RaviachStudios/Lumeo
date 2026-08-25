@@ -27,6 +27,9 @@ class_name MemoryGameUI
 #   set_press(idx, amount)        -> Press_* clip + PRESSED emission
 #   segment_at_point(local_pos)   -> button index under a tap, or -1
 #   set_level(n)                  -> stage-number readout
+#   apply_button_frame(frame_id)  -> wear a frame cosmetic on every bezel
+#                                    (resolved through _refresh_frame, so an active
+#                                     Special Skin's own frame outranks the equipped one)
 #   erupt() / electric_pulse() / roulette_spin() / luna_light_chase() /
 #   luna_celebrate() / roulette_celebrate()
 #                                 -> no-ops (skin flourishes belong to the wheel)
@@ -40,6 +43,19 @@ class_name MemoryGameUI
 # own World3D. The viewport only redraws while something is moving (see
 # _update_render_activity), which is what keeps the mobile GL driver from leaking
 # on long sessions.
+#
+# ---------------------------------------------------------------------------
+# One device, three boards
+# ---------------------------------------------------------------------------
+# Everything below is board-agnostic: which GLB, which colour keys, how far the
+# buttons are pushed apart, where the camera sits and where the round number goes
+# are read from the "board spec" vars further down, whose DEFAULTS are the Medium
+# board and are what this class is on its own. HARD subclasses it
+# (hard_game_ui.gd) for the six-button hexagon and EASY subclasses it
+# (easy_game_ui.gd) for the three-button triangle; each overrides only that
+# handful of values. The spacing, the emission state machine, the press clips, the
+# hit-testing, the camera fitting, the round pill and the frame cosmetics are the
+# same code, unchanged, for all three.
 
 const MODEL: PackedScene = preload("res://models/MemoryGame_UI_Medium.glb")
 
@@ -69,6 +85,11 @@ const FAR_KEY := "Cyan"
 # Pushing the button PARENTS out by 15% (radius 1.83 -> 2.10) opens that to 0.47
 # without touching a single vertex: the buttons keep their authored size, shape,
 # proportions and orientation, and only their distance from the middle changes.
+#
+# This is the MEDIUM default and it is a board-spec value (`_spacing`): Hard's
+# hexagon is authored at the same crowded 2.15 and takes the same push, but Easy's
+# triangle is already authored 2.45 apart — the gap the other two only reach after
+# being pushed — so it overrides this to 1.0 and is used exactly as authored.
 const SPACING_SCALE := 1.15
 
 # ---------------------------------------------------------------------------
@@ -193,9 +214,10 @@ shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
 
 // Button centres on the board plane, and each one's pool colour premultiplied by
-// its current intensity. Five entries, in the device's own button order.
-uniform vec2 centers[5];
-uniform vec3 tints[5];
+// its current intensity. One entry per button, in the device's own button order
+// (the array length is patched in at build time from the board spec's count).
+uniform vec2 centers[%d];
+uniform vec3 tints[%d];
 uniform float r_in;
 uniform float r_peak;
 uniform float falloff;
@@ -212,7 +234,7 @@ void vertex() {
 
 void fragment() {
 	vec3 acc = vec3(0.0);
-	for (int i = 0; i < 5; i++) {
+	for (int i = 0; i < %d; i++) {
 		float r = distance(board, centers[i]);
 		float s = r < r_peak
 			? smoothstep(r_in, r_peak, r)
@@ -289,6 +311,33 @@ void fragment() {
 }
 """
 
+# ---------------------------------------------------------------------------
+# Round pill (the round number, when the board carries no plate)
+# ---------------------------------------------------------------------------
+# The alternative to the stage plate above, selected by `_stage_in_board = false`.
+# Medium can lie its round number on the board because a pentagon has a flat back
+# edge and dead space behind it. Hard's hexagon and Easy's triangle have neither:
+# a plate back there is off to one side of nothing, and paying for it in the
+# camera fit costs ~15% of every button's on-screen size.
+#
+# So those boards get separate 2D UI instead, drawn over the board in the
+# bottom-LEFT corner — outside every button at every viewport aspect (both
+# silhouettes leave the bottom corners empty), clear of game.gd's status pill in
+# the bottom centre, and clear of the watch-ad button, Quit and the coins pill
+# along the top. Nothing is ever placed in the empty middle: the old centre
+# button is not coming back in any form.
+const PILL_MARGIN := Vector2(20.0, 84.0)         # from the left/bottom edges
+const PILL_PAD := Vector2(18.0, 8.0)
+const PILL_GAP := 10.0                           # between "ROUND" and the numeral
+const PILL_CAPTION_SIZE := 15
+const PILL_NUMBER_SIZE := 30
+const PILL_HEIGHT := 52.0
+const PILL_BG := Color(0.04, 0.05, 0.13, 0.80)
+const PILL_BORDER := Color(0.45, 0.55, 1.0, 0.35)
+const PILL_SHADOW := Color(0.15, 0.25, 0.7, 0.30)
+const PILL_CAPTION_COLOR := Color(0.62, 0.70, 0.90)
+const PILL_NUMBER_COLOR := Color(0.93, 0.95, 1.0)
+
 # Emitted when a button is tapped, if this device is handling its own input
 # (see input_enabled). game.gd drives input itself, so it turns that off — these
 # exist for anything that wants the panel to be self-contained.
@@ -300,6 +349,33 @@ signal color_pressed(color_name: String)
 # player's turn, never behind the quit dialog), so it queries segment_at_point
 # instead and there must not be a second, ungated handler.
 var input_enabled := true
+
+# ---------------------------------------------------------------------------
+# Board spec
+# ---------------------------------------------------------------------------
+# The whole of "which board is this". Every value here defaults to the Medium
+# board, so this class on its own is exactly what it always was; hard_game_ui.gd
+# overrides them in its _init() and inherits the rest of the file untouched.
+# Nothing below this block ever reads the MODEL / COLOR_KEYS / CAM_* / STAGE_POS
+# constants directly — they are the DEFAULTS, and these vars are the truth.
+var _model: PackedScene = MODEL
+var _keys: Array = COLOR_KEYS
+var _count: int = NUM_BUTTONS
+var _spacing: float = SPACING_SCALE
+var _jade_dim: float = JADE_DIM
+var _cam_fov: float = CAM_FOV
+var _cam_elev: float = CAM_ELEV_DEG
+var _cam_target: Vector3 = CAM_TARGET
+var _cam_dist_start: float = CAM_DIST_START
+var _fit_fill_x: float = FIT_FILL_X
+var _fit_fill_y: float = FIT_FILL_Y
+var _fit_centre_y: float = FIT_CENTRE_Y
+var _stage_pos: Vector3 = STAGE_POS
+# Whether the round number is the modelled plate lying on the board (Medium's
+# pentagon has a flat back edge for it to sit behind) or is left to the subclass
+# to present some other way. Hard's hexagon has no such edge, so it turns this off
+# and puts the readout in a 2D HUD pill instead — see hard_game_ui.gd.
+var _stage_in_board := true
 
 var _vpc: SubViewportContainer
 var _vp: SubViewport
@@ -335,7 +411,10 @@ var _anim_frame := -1
 # into both a MouseButton and a ScreenTouch event.
 var _tap_frame := -1
 
-var _readout: Label3D
+var _readout: Label3D              # the round numeral, when _stage_in_board
+var _pill: Panel                   # ...and the 2D pill it uses when not
+var _pill_caption: Label
+var _pill_number: Label
 var _num_pack: Variant = null
 var _glow_mat: ShaderMaterial
 var _fit_points: PackedVector3Array = PackedVector3Array()
@@ -350,6 +429,10 @@ func _ready() -> void:
 	if _vpc == null:
 		_build_shell()
 	resized.connect(_on_resized)
+	# Equipping a frame in the shop re-skins a live board immediately — the device
+	# owns this rather than game.gd because the cosmetic is purely presentational
+	# and has nothing to do with the round in progress.
+	CoinsManager.frames_changed.connect(_on_frames_changed)
 
 # ---------------- build ----------------
 
@@ -387,29 +470,36 @@ func _build_shell() -> void:
 	_build_camera()
 	_build_lights()
 
-	_board = MODEL.instantiate() as Node3D
+	_board = _model.instantiate() as Node3D
 	_vp.add_child(_board)
 	_ap = _board.find_child("AnimationPlayer", true, false) as AnimationPlayer
 
 	_space_buttons()
 	_recolour_jade()
 	_build_buttons()
+	_refresh_frame()
 	_build_ground_glow()
-	_build_stage_plate()
+	if _stage_in_board:
+		_build_stage_plate()
+	else:
+		_build_round_pill()
 	_collect_fit_points()
 	_fit_camera()
 
-# Push the five button PARENTS outward from the middle. Only the parent nodes'
+# Push the button PARENTS outward from the middle. Only the parent nodes'
 # translations change: the meshes under them keep their authored transforms, so
 # every button keeps its size, its proportions and its orientation relative to the
-# board, and the pentagon keeps its exact equal-angle arrangement.
+# board, and the polygon keeps its exact equal-angle arrangement. A board authored
+# at the right spacing already (`_spacing == 1.0`, which is Easy) is left alone.
 func _space_buttons() -> void:
-	for key: String in COLOR_KEYS:
+	if is_equal_approx(_spacing, 1.0):
+		return
+	for key: String in _keys:
 		var holder := _board.find_child("Button_%s" % key, true, false) as Node3D
 		if holder == null:
 			continue
 		var p := holder.position
-		holder.position = Vector3(p.x * SPACING_SCALE, p.y, p.z * SPACING_SCALE)
+		holder.position = Vector3(p.x * _spacing, p.y, p.z * _spacing)
 
 # Darken Jade to the deep-emerald target so it cannot be confused with Cyan.
 # See the JADE_* note: this is a brightness change along the authored hue, applied
@@ -424,7 +514,7 @@ func _recolour_jade() -> void:
 	if src == null:
 		return
 	var target := JADE_TARGET.srgb_to_linear()
-	var dim := JADE_DIM
+	var dim := _jade_dim
 
 	var face := _own_material(surf, 0)
 	if face != null:
@@ -488,19 +578,19 @@ func _build_camera() -> void:
 	_cam = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_cam.keep_aspect = Camera3D.KEEP_WIDTH
-	_cam.fov = CAM_FOV
+	_cam.fov = _cam_fov
 	_cam.near = 0.15
 	_cam.far = 80.0
 	_vp.add_child(_cam)
-	_place_camera(CAM_DIST_START, Vector3.ZERO)
+	_place_camera(_cam_dist_start, Vector3.ZERO)
 
 # Put the camera `dist` back along the fitted elevation, looking at the board, and
 # optionally slide the whole rig sideways/up to re-centre the composition. The
 # slide moves camera AND target together, so it translates the framing without
 # changing the viewing angle — the board keeps exactly the tilt it was fitted for.
 func _place_camera(dist: float, slide: Vector3) -> void:
-	var e := deg_to_rad(CAM_ELEV_DEG)
-	var target := CAM_TARGET + slide
+	var e := deg_to_rad(_cam_elev)
+	var target := _cam_target + slide
 	var pos := target + Vector3(0.0, sin(e), cos(e)) * dist
 	# look_at_from_position works off-tree too.
 	_cam.look_at_from_position(pos, target, Vector3.UP)
@@ -539,8 +629,8 @@ func _build_buttons() -> void:
 		arr.clear()
 	_areas.clear()
 
-	for idx in NUM_BUTTONS:
-		var key: String = COLOR_KEYS[idx]
+	for idx in _count:
+		var key: String = _keys[idx]
 		var holder := _board.find_child("Button_%s" % key, true, false) as Node3D
 		var surf := _board.find_child("Button_%s_Surface" % key, true, false) as MeshInstance3D
 		var frame := _board.find_child("Button_%s_Frame" % key, true, false) as MeshInstance3D
@@ -639,8 +729,9 @@ func _read_states(surf: MeshInstance3D) -> Array[Dictionary]:
 #
 # The shape is a plain disc-shaped cylinder standing on the board, which is the
 # button's own axis, sized a little past the visible frame so taps are forgiving.
-# The buttons sit 2.47 apart centre-to-centre after spacing, so at this radius
-# five discs still cannot overlap.
+# Both boards space their buttons 2.47 apart centre-to-centre (Medium's pentagon
+# and Hard's hexagon are authored at 2.15 and scaled alike), so at this radius the
+# discs still cannot overlap on either.
 func _add_button_area(holder: Node3D, idx: int) -> void:
 	if holder == null:
 		return
@@ -652,7 +743,7 @@ func _add_button_area(holder: Node3D, idx: int) -> void:
 	# would register as a press of the back button.
 	shape.height = 0.62
 	var area := Area3D.new()
-	area.name = "Hit_%s" % COLOR_KEYS[idx]
+	area.name = "Hit_%s" % _keys[idx]
 	area.monitoring = false        # we only ever query it with a ray
 	area.monitorable = false
 	area.input_ray_pickable = true
@@ -669,7 +760,9 @@ func _build_ground_glow() -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(GLOW_PLANE_SIZE, GLOW_PLANE_SIZE)
 	var sh := Shader.new()
-	sh.code = GLOW_SHADER
+	# The uniform array lengths and the loop bound have to be literals in GLSL, so
+	# the button count is substituted into the source rather than passed in.
+	sh.code = GLOW_SHADER % [_count, _count, _count]
 	_glow_mat = ShaderMaterial.new()
 	_glow_mat.shader = sh
 	_glow_mat.render_priority = GLOW_PRIORITY
@@ -698,7 +791,7 @@ func _push_glow() -> void:
 	if _glow_mat == null:
 		return
 	var tints := PackedVector3Array()
-	for idx in NUM_BUTTONS:
+	for idx in _count:
 		tints.append(_pool_tint[idx] * (GLOW_PEAK * _ring_cur[idx]))
 	_glow_mat.set_shader_parameter("tints", tints)
 
@@ -726,7 +819,7 @@ func _build_stage_plate() -> void:
 	plate.name = "StagePlate"
 	plate.mesh = plane
 	plate.material_override = mat
-	plate.position = STAGE_POS
+	plate.position = _stage_pos
 	plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_vp.add_child(plate)
 
@@ -750,7 +843,7 @@ func _build_stage_plate() -> void:
 	# normal along +Y and its top toward -Z (the far edge, which is up on screen),
 	# so it reads the right way round under this camera.
 	l.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
-	l.position = STAGE_POS + Vector3(0.0, 0.004, 0.0)
+	l.position = _stage_pos + Vector3(0.0, 0.004, 0.0)
 	_vp.add_child(l)
 	_readout = l
 	_fit_readout()
@@ -771,7 +864,7 @@ func _fit_readout() -> void:
 	# Label3D centres the line box, but digits have no descender, so their ink sits
 	# above that centre. Push it back down by the measured bias. On the flat plate
 	# "down" on screen is +Z.
-	_readout.position.z = STAGE_POS.z + STAGE_BASELINE_BIAS * float(STAGE_FONT_SIZE) * ps
+	_readout.position.z = _stage_pos.z + STAGE_BASELINE_BIAS * float(STAGE_FONT_SIZE) * ps
 
 func _stage_font(base: Font = null) -> Font:
 	var src: Font = base
@@ -786,6 +879,70 @@ func _stage_font(base: Font = null) -> Font:
 	fv.variation_embolden = STAGE_EMBOLDEN
 	return fv
 
+# ---------------- round pill ----------------
+
+# The round pill: dark glass, the same language as game.gd's status pill so the
+# two read as one HUD. It is a sibling of the SubViewportContainer and therefore
+# draws over the board, but it ignores mouse input, so a tap that lands on it
+# still reaches game.gd and is hit-tested against the board underneath.
+func _build_round_pill() -> void:
+	_pill = Panel.new()
+	_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = PILL_BG
+	st.set_corner_radius_all(int(PILL_HEIGHT * 0.5))
+	st.border_color = PILL_BORDER
+	st.set_border_width_all(1)
+	st.shadow_color = PILL_SHADOW
+	st.shadow_size = 14
+	_pill.add_theme_stylebox_override("panel", st)
+	add_child(_pill)
+
+	_pill_caption = _pill_label(PILL_CAPTION_SIZE, PILL_CAPTION_COLOR)
+	_pill_caption.text = "ROUND"
+	_pill.add_child(_pill_caption)
+
+	_pill_number = _pill_label(PILL_NUMBER_SIZE, PILL_NUMBER_COLOR)
+	_pill_number.text = "1"
+	_pill.add_child(_pill_number)
+
+	_apply_num_pack()
+	_layout_round_pill()
+
+func _pill_label(font_size: int, color: Color) -> Label:
+	var l := Label.new()
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0.02, 0.08, 0.6))
+	l.add_theme_constant_override("shadow_offset_x", 0)
+	l.add_theme_constant_override("shadow_offset_y", 2)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+# Size the pill to its contents and seat it in the bottom-left corner. Called
+# whenever the text or the Control's own size changes, so the pill tracks a
+# rotation or a resize the same way the rest of the HUD does.
+func _layout_round_pill() -> void:
+	if _pill == null:
+		return
+	var cw := _text_width(_pill_caption, PILL_CAPTION_SIZE)
+	var nw := _text_width(_pill_number, PILL_NUMBER_SIZE)
+	var w := PILL_PAD.x * 2.0 + cw + PILL_GAP + nw
+	_pill.size = Vector2(w, PILL_HEIGHT)
+	_pill.position = Vector2(PILL_MARGIN.x, maxf(0.0, size.y - PILL_MARGIN.y - PILL_HEIGHT))
+	_pill_caption.position = Vector2(PILL_PAD.x, 0.0)
+	_pill_caption.size = Vector2(cw, PILL_HEIGHT)
+	_pill_number.position = Vector2(PILL_PAD.x + cw + PILL_GAP, 0.0)
+	_pill_number.size = Vector2(nw, PILL_HEIGHT)
+
+func _text_width(l: Label, font_size: int) -> float:
+	var f: Font = l.get_theme_font("font")
+	if f == null:
+		f = ThemeDB.fallback_font
+	return f.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+
 # ---------------- camera fitting ----------------
 
 # Every point the framing must not crop: each button's frame rim and the top edge
@@ -793,7 +950,7 @@ func _stage_font(base: Font = null) -> Font:
 # of it moves (the press animation only sinks a surface).
 func _collect_fit_points() -> void:
 	_fit_points = PackedVector3Array()
-	for idx in NUM_BUTTONS:
+	for idx in _count:
 		var c: Vector2 = _centres[idx]
 		for i in 16:
 			var a := TAU * float(i) / 16.0
@@ -801,10 +958,12 @@ func _collect_fit_points() -> void:
 			var sa := sin(a)
 			_fit_points.append(Vector3(c.x + ca * 1.0, 0.0, c.y + sa * 1.0))
 			_fit_points.append(Vector3(c.x + ca * 0.745, 0.525, c.y + sa * 0.745))
+	if not _stage_in_board:
+		return
 	var hs := STAGE_SIZE * 0.5
 	for sx: float in [-1.0, 1.0]:
 		for sz: float in [-1.0, 1.0]:
-			_fit_points.append(STAGE_POS + Vector3(hs.x * sx, 0.0, hs.y * sz))
+			_fit_points.append(_stage_pos + Vector3(hs.x * sx, 0.0, hs.y * sz))
 
 # Frame the board: pull the camera back until everything fits the viewport with a
 # margin, then slide the rig so the composition sits centred. Both steps iterate,
@@ -817,7 +976,7 @@ func _fit_camera() -> void:
 	if vp.x < 8.0 or vp.y < 8.0:
 		return
 	_fitted_size = _vp.size
-	var dist := CAM_DIST_START
+	var dist := _cam_dist_start
 	var slide := Vector3.ZERO
 	for _pass in 3:
 		_place_camera(dist, slide)
@@ -830,7 +989,7 @@ func _fit_camera() -> void:
 		var span := mx - mn
 		if span.x <= 0.0 or span.y <= 0.0:
 			return
-		var k := maxf(span.x / (vp.x * FIT_FILL_X), span.y / (vp.y * FIT_FILL_Y))
+		var k := maxf(span.x / (vp.x * _fit_fill_x), span.y / (vp.y * _fit_fill_y))
 		dist = clampf(dist * k, CAM_DIST_MIN, CAM_DIST_MAX)
 		# Re-centre. Pixels -> world at the target's depth, then slide the rig along
 		# its own right/up axes so the framing translates without tilting.
@@ -842,7 +1001,7 @@ func _fit_camera() -> void:
 			mn = mn.min(s)
 			mx = mx.max(s)
 		var centre := (mn + mx) * 0.5
-		var want := Vector2(vp.x * 0.5, vp.y * FIT_CENTRE_Y)
+		var want := Vector2(vp.x * 0.5, vp.y * _fit_centre_y)
 		var per_world := (vp.y * 0.5) / (tan(deg_to_rad(_cam_fov_y()) * 0.5) * dist)
 		var delta := (want - centre) / maxf(per_world, 0.0001)
 		var b := _cam.global_transform.basis
@@ -903,20 +1062,20 @@ func _apply_emission(idx: int) -> void:
 
 # ---------------- press animation ----------------
 
-# Play exactly one Press_* clip. Each clip carries all five buttons — the pressed
-# one sinking, the other four pinned at their rest pose — so only the named button
-# ever moves, and a clip cannot leave a previous button stuck down. The frames are
+# Play exactly one Press_* clip. Each clip only ever animates its own button's
+# surface, so only the named button moves and a clip cannot leave a previous button
+# stuck down. The frames are
 # in no clip at all, so they never move: the surface sinks INTO its stationary
 # frame, which is the whole point of the animation.
 func _trigger_press(idx: int) -> void:
-	if _ap == null or idx < 0 or idx >= NUM_BUTTONS:
+	if _ap == null or idx < 0 or idx >= _count:
 		return
 	var frame := Engine.get_process_frames()
 	if _anim_idx == idx and _anim_frame == frame:
 		return   # same press arriving twice in one frame (set_press + set_lit)
 	_anim_idx = idx
 	_anim_frame = frame
-	var clip := "Press_%s" % COLOR_KEYS[idx]
+	var clip := "Press_%s" % _keys[idx]
 	if not _ap.has_animation(clip):
 		return
 	if _ap.current_animation == clip and _ap.is_playing():
@@ -929,25 +1088,35 @@ func _trigger_press(idx: int) -> void:
 # ---------------- public API (SimonWheel compatible) ----------------
 
 # `count` and `colors` come from game.gd's difficulty setup. This is a fixed
-# five-button board with its own authored palette, so both are accepted and
-# ignored — the signature exists so game.gd can drive either device.
+# board with its own authored palette and its own button count, so both are
+# accepted and ignored — the signature exists so game.gd can drive either device.
 func configure(_count: int, _colors: Array) -> void:
 	if _vpc == null:
 		_build_shell()
 	_kick_render()
 
 # Only the level-number font package applies to this device; the modelled board
-# colours and the special skins belong to SimonWheel. The frames are deliberately
-# left alone — they are the cosmetic slot, and swapping them is
-# set_frame_material's job.
-func apply_skin(_outer: Variant, _inner: Variant, number: Variant, _skin_id: String = "") -> void:
+# colours belong to SimonWheel. What a Special Skin DOES reach here is the bezel:
+# Arcade, Jackpot and Luna Park each bring a frame of their own, which outranks the
+# equipped cosmetic for as long as that skin is the active look (see
+# ButtonFrames.effective_frame). Everything else about the board is untouched.
+func apply_skin(_outer: Variant, _inner: Variant, number: Variant, skin_id: String = "") -> void:
 	_num_pack = number
 	_apply_num_pack()
+	if _skin_id != skin_id:
+		_skin_id = skin_id
+		_refresh_frame()
+
+# Wear whatever the current skin + equipped-cosmetic pair resolves to. Every path
+# that can change either of them comes through here rather than calling
+# apply_button_frame with a raw id, so the priority is decided in exactly one place.
+func _refresh_frame() -> void:
+	apply_button_frame(ButtonFrames.effective_frame(CoinsManager.selected_frame, _skin_id))
 
 # Sequence playback: light the button, don't sink it. game.gd's _flash calls this
 # with `true` for flash_time and then `false`.
 func set_lit(idx: int, on: bool) -> void:
-	if idx < 0 or idx >= NUM_BUTTONS or _lit.is_empty():
+	if idx < 0 or idx >= _count or _lit.is_empty():
 		return
 	_lit[idx] = on
 	_retarget(idx)
@@ -956,7 +1125,7 @@ func set_lit(idx: int, on: bool) -> void:
 # 0.18s later with 0.0. The GLB's clip sinks AND raises on its own, so the release
 # only has to clear the brightening.
 func set_press(idx: int, amount: float) -> void:
-	if idx < 0 or idx >= NUM_BUTTONS or _pressing.is_empty():
+	if idx < 0 or idx >= _count or _pressing.is_empty():
 		return
 	var down := amount > 0.0
 	_pressing[idx] = down
@@ -1014,7 +1183,7 @@ func set_preview_paused(_paused: bool) -> void: pass
 # ---------------- public API (colour-named) ----------------
 
 func index_of(color_name: String) -> int:
-	return COLOR_KEYS.find(color_name.capitalize())
+	return _keys.find(color_name.capitalize())
 
 # Sequence playback for one colour: brighten the top, push the glow up, hold for
 # `duration`, then ease back to idle. Timing lives here and nowhere else.
@@ -1042,43 +1211,122 @@ func set_color_enabled(color_name: String, on: bool) -> void:
 	set_button_enabled(index_of(color_name), on)
 
 func set_button_enabled(idx: int, on: bool) -> void:
-	if idx < 0 or idx >= NUM_BUTTONS or _enabled.is_empty():
+	if idx < 0 or idx >= _count or _enabled.is_empty():
 		return
 	_enabled[idx] = on
 	_retarget(idx)
 
 func set_all_enabled(on: bool) -> void:
-	for i in NUM_BUTTONS:
+	for i in _count:
 		set_button_enabled(i, on)
 
-# The round number on the stage plate. Nothing about the five buttons changes.
+# The round number, on whichever readout this board carries — the plate lying on
+# the board, or the 2D pill in the bottom-left corner. Nothing about the buttons
+# changes either way.
 func set_round_number(value: int) -> void:
+	if _pill_number != null:
+		_pill_number.text = str(value)
+		_layout_round_pill()
+		return
 	if _readout == null:
 		return
 	_readout.text = str(value)
 	_fit_readout()
 	_kick_render()
 
-# The frames are the reserved cosmetic slot, one material per button so they can
-# be re-skinned independently later. This swaps one without touching that button's
-# top, rim or under-glow.
-func set_frame_material(color_name: String, mat: Material) -> void:
-	var mi := frame_mesh(color_name)
-	if mi != null:
-		mi.set_surface_override_material(0, mat)
-		_kick_render()
-
 func frame_mesh(color_name: String) -> MeshInstance3D:
 	var idx := index_of(color_name)
 	if idx < 0 or _board == null:
 		return null
-	return _board.find_child("Button_%s_Frame" % COLOR_KEYS[idx], true, false) as MeshInstance3D
+	return _board.find_child("Button_%s_Frame" % _keys[idx], true, false) as MeshInstance3D
 
 func surface_mesh(color_name: String) -> MeshInstance3D:
 	var idx := index_of(color_name)
 	if idx < 0 or _board == null:
 		return null
-	return _board.find_child("Button_%s_Surface" % COLOR_KEYS[idx], true, false) as MeshInstance3D
+	return _board.find_child("Button_%s_Surface" % _keys[idx], true, false) as MeshInstance3D
+
+# ---------------- button-frame cosmetics ----------------
+#
+# The shop's equipped frame cosmetic, worn by ALL of this board's buttons at once —
+# the player picks one frame, not one per colour, and the same global selection
+# dresses the Medium board's five and the Hard board's six. There is no per-board
+# and no per-difficulty inventory anywhere.
+#
+# A cosmetic is a real Blender MESH (see ButtonFrames), so wearing one means
+# swapping which solid is drawn, not which material is on it:
+#
+#   * a shared `Cosmetic_Frame` MeshInstance3D goes under `Button_<Colour>` at the
+#     identity transform. Both GLBs author the stock bezel at identity under that
+#     same parent and the library authors every cosmetic at the origin with
+#     transforms applied, so the two land on top of each other exactly — on five
+#     buttons or on six, with no measuring and no scaling.
+#   * the stock bezel's surface 0 (the metal) is covered with an invisible
+#     material. Its surface 1 is this button's UNDER-GLOW, which the emission state
+#     machine drives every frame and which sits at r <= 0.698 — inside the
+#     cosmetic's r >= 0.766 opening, so it goes on showing through the new bezel.
+#     Hiding the whole MeshInstance3D would have taken the glow with it.
+#
+# Untouched by all of it: the coloured top and its rim (surfaces 0 and 1 of the
+# SURFACE mesh), the under-glow, the ground pools, the hit-testing, the camera and
+# the press clips — which animate the surface mesh's transform only, so a cosmetic
+# is stationary through a press by construction rather than by being told to be.
+#
+# "default" (and any id not in the catalog) frees the cosmetic node and clears the
+# override, handing the button straight back to the GLB's own Mat_<Colour>_Frame —
+# the stock black bezel, byte for byte, with nothing left behind.
+#
+# One Mesh and one set of three ShaderMaterials are shared by every button on the
+# board, so an equip allocates N nodes and nothing else.
+func apply_button_frame(frame_id: String) -> void:
+	if _board == null:
+		return
+	var wear := ButtonFrames.is_cosmetic(frame_id)
+	for key: String in _keys:
+		var stock := _board.find_child("Button_%s_Frame" % key, true, false) as MeshInstance3D
+		if stock == null:
+			continue
+		var holder := stock.get_parent()
+		var worn := holder.get_node_or_null(ButtonFrames.INSTANCE_NAME) as MeshInstance3D
+		if not wear:
+			stock.set_surface_override_material(0, null)
+			if worn != null:
+				holder.remove_child(worn)
+				worn.queue_free()
+			continue
+		if worn == null:
+			worn = ButtonFrames.make_frame_instance(frame_id)
+			if worn == null:
+				# The library failed to load. Leave the stock bezel showing rather
+				# than a button with no frame at all.
+				stock.set_surface_override_material(0, null)
+				continue
+			holder.add_child(worn)
+		else:
+			var entry := ButtonFrames.build(frame_id)
+			if not entry.is_empty():
+				worn.mesh = entry["mesh"]
+				var mats: Array = entry["mats"]
+				for i in mats.size():
+					worn.set_surface_override_material(i, mats[i])
+		stock.set_surface_override_material(0, ButtonFrames.hidden_material())
+	# Everything the player is not wearing goes back to the loader. During play this
+	# leaves exactly one cosmetic's mesh and textures resident.
+	ButtonFrames.trim_cache([frame_id])
+	_frame_idle = ButtonFrames.animates(frame_id)
+	_frame_idle_accum = 0.0
+	_kick_render()
+
+# The cosmetic currently worn by one button, or null. Exposed for the acceptance
+# tests, which check placement and press-stationarity against the real board.
+func cosmetic_frame(color_name: String) -> MeshInstance3D:
+	var mi := frame_mesh(color_name)
+	if mi == null:
+		return null
+	return mi.get_parent().get_node_or_null(ButtonFrames.INSTANCE_NAME) as MeshInstance3D
+
+func _on_frames_changed() -> void:
+	_refresh_frame()
 
 # ---------------- input ----------------
 
@@ -1108,9 +1356,9 @@ func _input(event: InputEvent) -> void:
 	var idx := segment_at_point(tap - global_position)
 	if idx < 0 or not _enabled[idx]:
 		return
-	press_color(COLOR_KEYS[idx])
+	press_color(_keys[idx])
 	button_pressed.emit(idx)
-	color_pressed.emit(COLOR_KEYS[idx].to_lower())
+	color_pressed.emit(String(_keys[idx]).to_lower())
 	get_viewport().set_input_as_handled()
 
 # ---------------- layout / per-frame ----------------
@@ -1119,11 +1367,13 @@ func _input(event: InputEvent) -> void:
 # SubViewport's size, so a resize only has to re-fit the framing.
 func _on_resized() -> void:
 	_fit_camera()
+	_layout_round_pill()
 	_kick_render()
 
 func _process(dt: float) -> void:
 	if _vp != null and _vp.size != _fitted_size:
 		_fit_camera()
+	_tick_frame_idle(dt)
 	var animating := _ap != null and _ap.is_playing()
 	var glow_dirty := false
 	var k := clampf(dt * EMIT_LERP, 0.0, 1.0)
@@ -1151,6 +1401,38 @@ func _process(dt: float) -> void:
 		_push_glow()
 	_update_render_activity(animating)
 
+# The equipped cosmetic's idle breathing runs on TIME inside its shader, so it only
+# advances when this SubViewport actually draws — and this board deliberately does
+# not draw while nothing is moving. Rather than pin it to UPDATE_ALWAYS (which is
+# what leaked the mobile GL driver's heap; see _update_render_activity), an idle
+# board wearing an animated frame is nudged to redraw at FRAME_IDLE_HZ.
+#
+# 12 Hz is chosen against what the effect actually is: a 6-second cosine and a UV
+# offset that advances one pattern period per loop. At 12 Hz the breath is sampled
+# 72 times per cycle and the drift moves ~0.7% of a period per step, neither of
+# which is resolvable. It costs a fifth of the redraws a continuous animation would
+# and it stops entirely the moment a press or a flash takes over — those set
+# UPDATE_ALWAYS on their own and the accumulator simply stops mattering.
+const FRAME_IDLE_HZ := 12.0
+
+# The active Special Skin ("" = none), pushed in by apply_skin. It is held because
+# it is half of what decides which frame the board wears — the other half being the
+# equipped cosmetic — and either can change without the other.
+var _skin_id := ""
+var _frame_idle := false            # is an ANIMATED cosmetic equipped?
+var _frame_idle_accum := 0.0
+
+func _tick_frame_idle(dt: float) -> void:
+	if not _frame_idle or _vp == null:
+		return
+	if _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
+		return                       # something else is already driving the redraw
+	_frame_idle_accum += dt
+	if _frame_idle_accum < 1.0 / FRAME_IDLE_HZ:
+		return
+	_frame_idle_accum = 0.0
+	_kick_render()
+
 # Redraw only while something moves. Once the press clip has ended and the flash
 # has settled we render one final frame (UPDATE_ONCE self-disables) and stop —
 # continuously re-rendering static 3D content is what leaked the mobile GL
@@ -1171,14 +1453,29 @@ func _kick_render() -> void:
 	if _vp.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
-# Apply the equipped level-number font package (shop "SIMON" tab). Only the
+# Apply the equipped level-number font package (CoinsManager.SIMON_NUMBER_FONTS,
+# whose storefront is retired). Only the
 # typeface and tint carry over — the numeral is part of a modelled plate here, so
 # it keeps the plate's own brightness rather than the hub-sized glow/outline
 # treatment SimonWheel gives it.
 func _apply_num_pack() -> void:
+	var pack: Dictionary = _num_pack if (_num_pack is Dictionary) else {}
+	# The pill numeral takes the equipped typeface and tint too; the "ROUND"
+	# caption stays the HUD's own face so the pill keeps reading as interface.
+	if _pill_number != null:
+		var pfp := String(pack.get("font", ""))
+		if pfp != "" and ResourceLoader.exists(pfp):
+			var pf := load(pfp)
+			if pf is Font:
+				_pill_number.add_theme_font_override("font", pf)
+		else:
+			_pill_number.remove_theme_font_override("font")
+		var ptint: Color = pack.get("color", PILL_NUMBER_COLOR)
+		_pill_number.add_theme_color_override("font_color", ptint)
+		_layout_round_pill()
+		return
 	if _readout == null:
 		return
-	var pack: Dictionary = _num_pack if (_num_pack is Dictionary) else {}
 
 	var font: Font = null
 	var fp := String(pack.get("font", ""))
