@@ -2,7 +2,7 @@ extends Node
 
 # Arena rooms. A player CREATES a room (a name + difficulty + public/private),
 # shares its short ID (or lists it publicly), friends JOIN, everyone sits in a
-# LIVE lobby, the creator presses PLAY, and then ALL players race the SAME Simon
+# LIVE lobby, the creator presses PLAY, and then ALL players race the SAME
 # sequence at once (one attempt each). As players finish they land on a live
 # "who's still playing / who finished" screen; once everyone is done the frozen
 # final leaderboard is shown.
@@ -701,7 +701,7 @@ func kick_member(cid: String, target_uid: String) -> Dictionary:
 # =====================================================================
 
 # Flips the room to "playing" and stamps a shared RNG seed so every client
-# generates the identical Simon sequence. Returns {ok, seed} or {ok:false,error}.
+# generates the identical colour sequence. Returns {ok, seed} or {ok:false,error}.
 func start_room(cid: String) -> Dictionary:
 	var room := await _load_room(cid)
 	if room.is_empty():

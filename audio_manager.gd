@@ -3,10 +3,10 @@ extends Node
 const SR := 22050
 const BUTTON_FREQS: Array[float] = [415.30, 493.88, 329.63, 261.63, 440.00, 587.33]
 
-# Background music is the bundled Simon WAV. We restart it on `finished`
+# Background music is the bundled Lumeo WAV. We restart it on `finished`
 # rather than relying on the WAV's import-side loop_mode, because the import is
 # QOA-compressed and loop points aren't reliable across re-imports.
-const BG_MUSIC_PATH := "res://Simon WAV.wav"
+const BG_MUSIC_PATH := "res://Lumeo WAV.wav"
 
 var _music_player: AudioStreamPlayer
 var _music_on := false

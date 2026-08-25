@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://5i8vg7kxbftl"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "898aec886df67c0174c69b87f103bf16"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_14_ArcticGlow_Accent.png-687da8f138ac9e925515b9066926468d.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

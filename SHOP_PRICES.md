@@ -31,7 +31,7 @@ Ordered by price, as shown in the shop.
 
 ### Modelled backgrounds (3D)
 
-The nine below are a different kind of item behind the same shop card. Everything
+The eight below are a different kind of item behind the same shop card. Everything
 above is a full-screen 2D shader painted behind the UI; these are 3D floors built
 into the board's own viewport, with the buttons standing on them (`background_scenes.gd`,
 imported from `Themes/Themes1.blend`). Ownership, purchase, equip and persistence
@@ -41,23 +41,26 @@ The ids carry a `bg_` prefix because `deepspace` and `aurora` are already taken 
 two of the shader themes above, and these ids are what saved wallets contain.
 "Deep Void" is named apart from the existing "Deep Space" for the same reason.
 
+Priced 100 – 800, cheapest first, which is also the shop's display order
+(`BackgroundScenes.ORDER`). The ladder runs from the bare floors to the fully dressed
+rooms, because that is the order a player reads them in as "more".
+
 | Item | Id | Price |
 |---|---|---|
-| Neon Grid | `bg_neongrid` | 0 |
-| Hexagon Floor | `bg_hexfloor` | 0 |
-| Circuit Board | `bg_circuit` | 0 |
-| Dark Metal | `bg_darkmetal` | 0 |
-| Deep Void | `bg_deepspace` | 0 |
-| Volcanic | `bg_volcanic` | 0 |
-| Arcade Room | `bg_arcade` | 0 |
-| Crystal Cave | `bg_crystal` | 0 |
-| Aurora | `bg_aurora` | 0 |
+| Dark Metal | `bg_darkmetal` | 100 |
+| Hexagon Floor | `bg_hexfloor` | 200 |
+| Neon Grid | `bg_neongrid` | 300 |
+| Circuit Board | `bg_circuit` | 400 |
+| Deep Void | `bg_deepspace` | 500 |
+| Volcanic | `bg_volcanic` | 600 |
+| Crystal Cave | `bg_crystal` | 700 |
+| Arcade Room | `bg_arcade` | 800 |
 
-All nine ship at 0 coins deliberately, exactly as the button-frame cosmetics do.
-`CoinsManager.purchase_theme` still runs the full deduct-and-save path for them, so
-re-pricing any of them is a one-line edit to `CoinsManager.THEMES` and nothing else
-has to change. They are not pre-owned: the player still taps Buy once, which is what
-writes the id into `owned_themes` and makes the equip persist.
+Re-pricing any of them is a one-line edit to `CoinsManager.THEMES` — but re-sort
+`BackgroundScenes.ORDER` and the shop's `CATEGORIES["items"]` to match, or the tab
+stops reading cheapest-first (`tools/bg_verify.tscn` fails on it). They are not
+pre-owned: the player still taps Buy once, which is what writes the id into
+`owned_themes` and makes the equip persist.
 
 No existing price changed.
 
@@ -83,28 +86,35 @@ below); the catalog and the loader live in
 `button_frames.gd`, and ownership + selection persist on `/users/{uid}` as
 `owned_frames` (a map) / `selected_frame`.
 
+Priced 100 – 800 in four tiers — flat neon, patterned hide, polished metal, then the
+five patterned looks whose light actually travels. The table below is the shop's
+display order (`ButtonFrames.ORDER`), cheapest first.
+
 | Item | Id | Price |
 |---|---|---|
 | Default (stock black metal) | `default` | Free — always owned |
-| Purple Neon | `purple_neon` | 0 |
-| Cyan Neon | `cyan_neon` | 0 |
-| Magenta Neon | `magenta_neon` | 0 |
-| Electric Blue | `electric_blue` | 0 |
-| Emerald Neon | `emerald_neon` | 0 |
-| Golden Chrome | `golden_chrome` | 0 |
-| Rose Gold | `rose_gold` | 0 |
-| Obsidian Chrome | `obsidian_chrome` | 0 |
-| Zebra Glow | `zebra_glow` | 0 |
-| Tiger Glow | `tiger_glow` | 0 |
-| Aurora | `aurora` | 0 |
-| Circuit | `circuit` | 0 |
-| Holographic | `holographic` | 0 |
-| Arctic Glow | `arctic_glow` | 0 |
-| Volcanic Glow | `volcanic_glow` | 0 |
+| Purple Neon | `purple_neon` | 100 |
+| Cyan Neon | `cyan_neon` | 100 |
+| Magenta Neon | `magenta_neon` | 100 |
+| Electric Blue | `electric_blue` | 150 |
+| Emerald Neon | `emerald_neon` | 150 |
+| Zebra Glow | `zebra_glow` | 250 |
+| Tiger Glow | `tiger_glow` | 250 |
+| Rose Gold | `rose_gold` | 350 |
+| Golden Chrome | `golden_chrome` | 400 |
+| Obsidian Chrome | `obsidian_chrome` | 400 |
+| Arctic Glow | `arctic_glow` | 500 |
+| Circuit | `circuit` | 550 |
+| Aurora | `aurora` | 600 |
+| Holographic | `holographic` | 700 |
+| Volcanic Glow | `volcanic_glow` | 800 |
 
-All fifteen ship at 0 coins deliberately. `CoinsManager.purchase_frame` still runs
-the full deduct-and-save path, so re-pricing any of them is a one-line edit to
-`ButtonFrames.FRAMES` — nothing else has to change.
+DEFAULT stays free and always owned — it is the only way back after equipping a
+bought frame. Re-pricing any of the fifteen is a one-line edit to
+`ButtonFrames.FRAMES`, but re-sort `ButtonFrames.ORDER` to match or the tab stops
+reading cheapest-first (`tools/frame_flow_test.tscn` fails on it). Note that `FRAMES`
+itself stays grouped by texture family, not by price: it documents the library, while
+`ORDER` drives the tab.
 
 These ids are stable and are what saved wallets contain. The three procedural
 cosmetics that preceded them (`purple_neon`, `glow_zebra`, `glow_tiger`) were
@@ -183,15 +193,15 @@ have that bit set, so they keep a badge in the slot rather than losing one.
 
 ---
 
-## Retired from the shop UI — Simon wheel parts
+## Retired from the shop UI — wheel parts
 
-The SIMON tab (per-part wheel colours, ring patterns, hub motifs and number fonts)
+The wheel-parts tab (per-part wheel colours, ring patterns, hub motifs and number fonts)
 was replaced by BUTTON FRAMES. **Nothing was deleted:** the catalogs still live in
 `coins_manager.gd`, previously-purchased items are still owned, and an equipped part
 is still applied to the wheel by `game.gd._apply_simon_skin`. There is simply no
 longer a storefront selling them, so the prices below are historical.
 
-### Simon Wheel — Flat Colors
+### Wheel — Flat Colors
 
 Shared catalog usable on both the outer ring and center hub.
 
@@ -207,7 +217,7 @@ Shared catalog usable on both the outer ring and center hub.
 | Silver | 110 |
 | Gold | 130 |
 
-### Simon Wheel — Outer Ring Patterns
+### Wheel — Outer Ring Patterns
 
 Ordered by price, as shown in the shop.
 
@@ -223,7 +233,7 @@ Ordered by price, as shown in the shop.
 | Rainbow | 300 |
 | Starry Night | 300 |
 
-### Simon Wheel — Center Hub Motifs
+### Wheel — Center Hub Motifs
 
 Ordered by price, as shown in the shop.
 
@@ -244,7 +254,7 @@ Ordered by price, as shown in the shop.
 | Diamond | 280 |
 | Rainbow | 300 |
 
-### Simon Wheel — Number Fonts
+### Wheel — Number Fonts
 
 Ordered by price, as shown in the shop.
 

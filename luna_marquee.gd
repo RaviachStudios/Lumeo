@@ -47,14 +47,14 @@ var _spawn_acc := 0.0
 # SimonWheel for the SHOP preview wheels (SIMON tab + SPECIAL SKINS cards): a preview
 # wheel's marquee must not keep breathing every frame — that's a per-frame CPU/redraw
 # cost on a screen full of previews AND read as a bug (the ring "kept going" in the
-# SIMON tab). The live gameplay wheel is never frozen, so its ring still breathes.
+# skin previews). The live gameplay wheel is never frozen, so its ring still breathes.
 var _frozen := false
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# The marquee must draw ABOVE the wheel's SubViewportContainer, but it must NOT
-	# escape an ancestor's clip_contents — the shop's SPECIAL SKINS / SIMON preview
+	# escape an ancestor's clip_contents — the shop's SPECIAL SKINS preview
 	# cards clip their wheel, and a CanvasItem with a non-zero z_index is lifted out of
 	# that clip in Godot, so its bulbs float over the whole shop instead of staying
 	# inside the card. SimonWheel adds this overlay AFTER the SubViewportContainer (see

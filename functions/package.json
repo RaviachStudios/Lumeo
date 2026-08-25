@@ -1,6 +1,6 @@
 {
-  "name": "simon-leaderboard-functions",
-  "description": "Scheduled materializer for Simon leaderboard top-N lists",
+  "name": "lumeo-leaderboard-functions",
+  "description": "Scheduled materializer for Lumeo leaderboard top-N lists",
   "version": "1.0.0",
   "private": true,
   "engines": {

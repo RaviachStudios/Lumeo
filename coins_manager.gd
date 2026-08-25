@@ -76,7 +76,7 @@ const THEMES := {
 	"aurora":   {"name": "Northern Lights",   "price": 1050, "category": "themes"},
 	"reef":     {"name": "Coral Reef",        "price": 1200, "category": "themes"},
 	"deepspace":{"name": "Deep Space",        "price": 1600, "category": "themes"},
-	# The nine modelled backgrounds. Everything above is a full-screen 2D shader
+	# The eight modelled backgrounds. Everything above is a full-screen 2D shader
 	# painted behind the UI; these are 3D floors that the buttons stand ON, built
 	# into the board's own viewport (BackgroundScenes / memory_game_ui.gd). The shop
 	# side is identical — same owned_themes, same selected_theme, same buy and equip
@@ -86,24 +86,26 @@ const THEMES := {
 	# by two of the shader themes above, and these ids are what saved wallets
 	# contain.
 	#
-	# All nine ship at 0 coins, the same way every ButtonFrames cosmetic does.
-	# purchase_theme still runs the full deduct-and-save path for them (a price of 0
-	# deducts 0), so re-pricing any of them later is a one-line edit here and
-	# nothing else has to change. They are deliberately NOT added to owned_themes by
-	# default: a player still taps Buy once, which is what puts the id in their
-	# wallet and makes the equip state persist.
-	"bg_neongrid":  {"name": "Neon Grid",     "price": 0, "category": "themes"},
-	"bg_hexfloor":  {"name": "Hexagon Floor", "price": 0, "category": "themes"},
-	"bg_circuit":   {"name": "Circuit Board", "price": 0, "category": "themes"},
-	"bg_darkmetal": {"name": "Dark Metal",    "price": 0, "category": "themes"},
-	# Named "Deep Void" rather than "Deep Space": the shader theme five lines up is
+	# Priced 100 .. 800 on one ladder, cheapest first: the bare floors (a metal plate,
+	# a hex grid) sit at the bottom and the fully dressed rooms — Crystal Cave's lit
+	# formations, the Arcade's cabinet wall — sit at the top, because that is the order
+	# a player reads them in as "more". Re-pricing any of them is a one-line edit here
+	# and nothing else has to change; keep this block and BackgroundScenes.ORDER sorted
+	# the same way, since ORDER is what the shop grid renders.
+	#
+	# They are deliberately NOT added to owned_themes by default: a player taps Buy
+	# once, which is what puts the id in their wallet and makes the equip state persist.
+	"bg_darkmetal": {"name": "Dark Metal",    "price": 100, "category": "themes"},
+	"bg_hexfloor":  {"name": "Hexagon Floor", "price": 200, "category": "themes"},
+	"bg_neongrid":  {"name": "Neon Grid",     "price": 300, "category": "themes"},
+	"bg_circuit":   {"name": "Circuit Board", "price": 400, "category": "themes"},
+	# Named "Deep Void" rather than "Deep Space": one of the shader themes above is
 	# already called that, and two cards with the same name in the same tab is not
 	# something the buy flow can disambiguate for the player.
-	"bg_deepspace": {"name": "Deep Void",     "price": 0, "category": "themes"},
-	"bg_volcanic":  {"name": "Volcanic",      "price": 0, "category": "themes"},
-	"bg_arcade":    {"name": "Arcade Room",   "price": 0, "category": "themes"},
-	"bg_crystal":   {"name": "Crystal Cave",  "price": 0, "category": "themes"},
-	"bg_aurora":    {"name": "Aurora",        "price": 0, "category": "themes"},
+	"bg_deepspace": {"name": "Deep Void",     "price": 500, "category": "themes"},
+	"bg_volcanic":  {"name": "Volcanic",      "price": 600, "category": "themes"},
+	"bg_crystal":   {"name": "Crystal Cave",  "price": 700, "category": "themes"},
+	"bg_arcade":    {"name": "Arcade Room",   "price": 800, "category": "themes"},
 }
 
 # Difficulty unlocks. Every difficulty is free to play — this is the set of
@@ -123,7 +125,7 @@ const LEVEL_PRICES := {}
 # inventory: the selection is a single global id.
 const DEFAULT_FRAME := ButtonFrames.DEFAULT_ID
 
-# Simon-wheel customization. Three independently-coloured parts of the wheel
+# Wheel customization. Three independently-coloured parts of the wheel
 # (the metallic rim rings, the centre hub, and the level numeral), each able to
 # equip exactly one colour from a shared catalog. "default" keeps the stock
 # graphite/white look and is always owned & free; SimonWheel treats it specially
@@ -846,7 +848,7 @@ func _owned_frames_map_for_save() -> Dictionary:
 			out[f] = true
 	return out
 
-# --- simon-customization API ---
+# --- wheel-customization API ---
 
 func _default_equipped_simon() -> Dictionary:
 	var d := {}
@@ -1215,7 +1217,7 @@ func _apply_doc(doc: Dictionary) -> void:
 		player_name = auth_name
 		_save_partial({"name": player_name})
 
-# Load the Simon-customization fields. Each owned set is stored as a map
+# Load the wheel-customization fields. Each owned set is stored as a map
 # ({color_id: true}); the Array branch only covers a hand-edited doc, same
 # tolerance as owned_themes / owned_levels. equipped_<category> is clamped to an
 # owned id (falling back to "default" so an equipped colour can never be one the

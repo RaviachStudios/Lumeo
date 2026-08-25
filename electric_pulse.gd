@@ -3,7 +3,7 @@ extends Control
 # Loaded via `const ElectricPulse = preload(...)` in simon_wheel.gd (same pattern as
 # volcano_cone.gd) — no `class_name`, to avoid colliding with that const's name.
 #
-# Premium "electric charge" overlay, drawn ON TOP of the Simon wheel every 3rd
+# Premium "electric charge" overlay, drawn ON TOP of the wheel every 3rd
 # completed round. SimonWheel.electric_pulse() spawns one of these, hands it the
 # screen-space hub centre plus one endpoint per white divider (already projected
 # through the wheel's tilted camera, so every bolt starts EXACTLY at the centre and

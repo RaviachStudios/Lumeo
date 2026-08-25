@@ -8,11 +8,15 @@ const ArenaUI := preload("res://arena_ui.gd")
 # screens (deep-space shader background, slowly rotating orbit of glowing orbs,
 # glass back button, glowing header with diamond-underlined subtitle, segmented
 # category tabs). Three categories, each built from data in one place:
-#   THEMES         — the background catalog (CoinsManager.THEMES), a scrolling grid
-#                    of live shader previews.
-#   BUTTON FRAMES  — the modelled boards' button-bezel cosmetics (ButtonFrames),
-#                    one row of cards, each previewing a real GLB button wearing it.
+#   THEMES         — the background catalog (CoinsManager.THEMES), a scrolling grid.
+#                    Only the modelled 3D backgrounds are on sale; the older shader
+#                    themes are detached (see CATEGORIES["items"]).
+#   BUTTON FRAMES  — the modelled boards' button-bezel cosmetics (ButtonFrames), a
+#                    scrolling 3-wide grid, each card previewing a real GLB button
+#                    wearing it.
 #   SPECIAL SKINS  — complete pre-made wheel skins (CoinsManager.SIMON_SKINS).
+#                    Currently detached: no skin is flagged `released`, so the tab
+#                    shows the "Coming soon" card instead of a grid (see SKIN_DEFS).
 # Every card in every category shows a preview, the price, and the same state-aware
 # action button (BUY → EQUIP → EQUIPPED).
 #
@@ -37,20 +41,24 @@ const CATEGORIES := [
 	{
 		"key": "themes", "label": "THEMES", "icon": "diamond",
 		"accent": Color(1.00, 0.78, 0.22),
-		# "default" is included so players can revert after equipping a paid
-		# theme; its card is always "owned" and free, so the buy/equip flow
-		# handles it without special casing. Ordered by price, ascending.
-		# The nine "bg_*" ids at the end are the modelled 3D backgrounds
-		# (BackgroundScenes). They are ordinary theme cards in every respect the shop
-		# cares about — the only difference is that their preview comes from a baked
-		# 3D render instead of a live shader, which BackgroundManager.make_preview
-		# resolves on its own.
+		# THIS LIST IS THE SHOP'S SOURCE OF DISPLAY ORDER *AND* OF WHAT IS ON SALE.
+		# Only the eight modelled 3D backgrounds (BackgroundScenes) are listed. They are
+		# ordinary theme cards in every respect the shop cares about — the only
+		# difference is that their preview comes from a baked 3D render instead of a
+		# live shader, which BackgroundManager.make_preview resolves on its own.
+		#
+		# Every older shader theme (midnight … deepspace) is DETACHED, not deleted:
+		# its CoinsManager.THEMES entry and its BackgroundManager renderer are intact,
+		# so a player who already owns and equips one keeps it working and re-listing
+		# one is a single id added back here. Nothing else needs to change.
+		#
+		# "default" stays listed on purpose. It is the only way back for a player who
+		# has a now-detached theme equipped — without a Default card they would be
+		# stuck on it. Its card is always "owned" and free, so the buy/equip flow
+		# handles it without special casing.
 		"items": ["default",
-			"midnight", "indigo", "sunset", "crimson", "slate", "skybound",
-			"forest", "desert", "clouds", "speedway", "kitty", "rainbow",
-			"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace",
-			"bg_neongrid", "bg_hexfloor", "bg_circuit", "bg_darkmetal",
-			"bg_deepspace", "bg_volcanic", "bg_arcade", "bg_crystal", "bg_aurora"],
+			"bg_darkmetal", "bg_hexfloor", "bg_neongrid", "bg_circuit",
+			"bg_deepspace", "bg_volcanic", "bg_crystal", "bg_arcade"],
 	},
 	# Button-frame cosmetics for the modelled boards. No flat `items` list — its cards
 	# come from ButtonFrames.ORDER and are built specially in _render_category /
@@ -184,7 +192,7 @@ func _ready() -> void:
 	# signals funnel into a single coalesced refresh (see _queue_refresh): a buy fires
 	# balance_changed + themes_changed (+ simon_changed when a skin drops) in the same
 	# frame, and each used to re-run the SAME handlers — restyling every card and
-	# rebuilding the hidden SIMON preview wheel's materials several times per equip.
+	# rebuilding the hidden skin preview wheels' materials several times per equip.
 	# _flush_refresh runs once per frame and only touches the panel that's actually
 	# visible; hidden panels refresh when their tab is next shown (see _render_category).
 	CoinsManager.balance_changed.connect(_on_balance_changed)
@@ -206,7 +214,7 @@ func _begin_load() -> void:
 	_show_loading()
 	_set_load_progress(LP_START)
 	# Let the loading overlay actually paint BEFORE we block the main thread building the
-	# store. Everything below (the 21-card grid + the SIMON/SKINS panels) is constructed
+	# store. Everything below (the theme-card grid + the FRAMES/SKINS panels) is constructed
 	# synchronously, so without this yield the veil only appears after that freeze — the
 	# shop button would feel unresponsive. Two frames guarantees the overlay has rendered,
 	# so the loading screen shows the instant the shop opens.
@@ -238,7 +246,7 @@ func _begin_load() -> void:
 		for d in _live_skin_defs():
 			skin_ids.append(String(d["id"]))
 		BackgroundManager.prewarm_skin_previews(skin_ids)
-	# Render the THEMES grid and build the SIMON + SKINS panels while the overlay still
+	# Render the THEMES grid and build the FRAMES + SKINS panels while the overlay still
 	# hides the construction. These are the two heaviest bursts in the shop, so both run
 	# in INCREMENTAL mode — yielding frames as they build — so the loading overlay's orbit
 	# tween keeps ticking instead of freezing the moment the shop opens.
@@ -294,7 +302,7 @@ func _begin_load() -> void:
 	BackgroundManager.prewarm_previews(theme_items)
 
 # Builds the non-default category panels ahead of time so switching to them is
-# instant. Each builder add_child()s its root; SIMON is hidden immediately, but the
+# instant. Each builder add_child()s its root; the inactive panels are hidden immediately, but the
 # SKINS panel is left VISIBLE (under the veil) so its 3D preview wheels actually render
 # — _begin_load hides + idles it once that render has happened. Yields a frame between
 # the two panels so the loading overlay's animation keeps ticking during the build.
@@ -1089,14 +1097,15 @@ func _confirm_purchase(item_name: String, price: int, on_confirmed: Callable) ->
 # BUY -> EQUIP -> EQUIPPED flow as the rest with no special casing.
 #
 # Sixteen cards (DEFAULT + the fifteen Blender cosmetics) no longer fit one row, so
-# this is a scrolling 4-wide grid built the same way the THEMES tab's is — same card
+# this is a scrolling 3-wide grid built the same way the THEMES tab's is — same card
 # footprint, same gaps, same reserved scrollbar width — rather than a second kind of
-# list to maintain.
+# list to maintain. Three across (not four) so each card is given the same breathing
+# room as a THEMES card at the same viewport width.
 const FRAME_CARD_W := 288.0
 const FRAME_CARD_H := 320.0
 const FRAME_CARD_GAP := 22.0
 const FRAME_PREVIEW_H := 152.0
-const FRAME_GRID_COLS := 4
+const FRAME_GRID_COLS := 3
 const FRAMES_PANEL_W := FRAME_GRID_COLS * FRAME_CARD_W \
 	+ (FRAME_GRID_COLS - 1) * FRAME_CARD_GAP
 
@@ -1257,7 +1266,7 @@ const SKIN_CARD_W := 360.0
 const SKIN_CARD_H := 470.0
 const SKIN_PREVIEW := 260.0
 const SKIN_PREVIEW_LOGICAL := 380.0   # render the live wheel at this logical size
-									   # then scale down (same trick as the SIMON
+									   # then scale down (same trick as the skin
 									   # tab's preview — keeps the inner numeral/hub
 									   # proportions correct at preview scale).
 const SKIN_CARD_GAP := 32.0
@@ -1272,11 +1281,11 @@ const SKIN_FRAME_PAD := 26
 
 # Most of the skin set isn't ready to ship, so the SPECIAL SKINS tab shows only the
 # skins flagged `released` below. When NONE are released the whole tab is DETACHED —
-# instead of the card grid it shows a "To be continued" placeholder (see
+# instead of the card grid it shows a "Coming soon" placeholder (see
 # _skins_coming_soon / _build_skins_coming_soon). Nothing is deleted — the full skin
 # card / preview pipeline stays intact and each skin returns the moment its entry is
 # flagged released (which also re-enables that skin's preview prewarm in _begin_load).
-# Released skins: ARCADE, JACKPOT, LUNA PARK. (VOLCANO is detached — too laggy for now.)
+# Released skins: NONE — every entry below is detached, so the tab is the placeholder.
 
 # Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
 # Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
@@ -1285,9 +1294,12 @@ const SKIN_FRAME_PAD := 26
 # `released: true` appear in the shop — the rest stay hidden until they're ready.
 # Ordered by price, ascending.
 const SKIN_DEFS := [
-	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets.", "released": true},
-	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin.", "released": true},
-	{"id": "lunapark", "label": "LUNA PARK", "blurb": "Step right up.", "released": true},
+	# All three are DETACHED for now (no `released` flag): the art, the SimonWheel skin
+	# paths and the CoinsManager catalog entries are untouched, so re-listing one is a
+	# single `"released": true` here. With none released the tab shows the coming-soon card.
+	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets."},
+	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin."},
+	{"id": "lunapark", "label": "LUNA PARK", "blurb": "Step right up."},
 	{"id": "racing", "label": "REDLINE", "blurb": "Floor it."},
 	{"id": "pirate", "label": "BUCCANEER", "blurb": "Batten the hatches."},
 	{"id": "submarine", "label": "NAUTILUS", "blurb": "Dive deep."},
@@ -1304,7 +1316,7 @@ func _live_skin_defs() -> Array:
 			out.append(d)
 	return out
 
-# The SPECIAL SKINS tab is detached (shows the "To be continued" placeholder instead
+# The SPECIAL SKINS tab is detached (shows the "Coming soon" placeholder instead
 # of the card grid) exactly when no skins are released yet.
 func _skins_coming_soon() -> bool:
 	return _live_skin_defs().is_empty()
@@ -1377,7 +1389,7 @@ func _build_skins_panel(incremental := false) -> void:
 
 # Placeholder shown while the SPECIAL SKINS tab is detached (_skins_coming_soon).
 # A single centred glass card in the shop's visual language: no live wheels, no
-# purchase flow — just a "To be continued" note. _skins_root is a plain Control here
+# purchase flow — just a "Coming soon" note. _skins_root is a plain Control here
 # (not the usual ScrollContainer), and _skins_by_id stays empty so every skin helper
 # (_refresh_skin_cards / _set_skins_preview_paused / _update_skin_preview_visibility)
 # no-ops naturally. The card is centre-anchored so it re-centres as _layout resizes
@@ -1426,7 +1438,7 @@ func _build_skins_coming_soon() -> void:
 	card.add_child(eyebrow)
 
 	var title := Label.new()
-	title.text = "To be continued…"
+	title.text = "Coming soon…"
 	title.add_theme_font_size_override("font_size", 40)
 	title.add_theme_color_override("font_color", Color.WHITE)
 	title.add_theme_color_override("font_shadow_color", Color(SKIN_ACCENT.r, SKIN_ACCENT.g, SKIN_ACCENT.b, 0.5))
@@ -1498,7 +1510,7 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 
 	# Live SimonWheel preview with this skin applied. Logical size > displayed
 	# size + uniform scale = preview reads at the same proportions as the in-game
-	# wheel (same trick as the SIMON tab uses).
+	# wheel (same trick as the frame previews use).
 	var wheel := SimonWheel.new()
 	wheel.size = Vector2(SKIN_PREVIEW_LOGICAL, SKIN_PREVIEW_LOGICAL)
 	var pscale := SKIN_PREVIEW / SKIN_PREVIEW_LOGICAL
@@ -1509,7 +1521,7 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	# card is added to the tree. Building/configuring it off-tree left the SubViewport
 	# mis-sized (2× → only the top-left quarter showed) and mis-aimed (blank), because
 	# SubViewportContainer sizing + Camera3D.look_at both need an in-tree node. The
-	# SIMON tab preview works precisely because it configures its wheel in-tree.
+	# preview works precisely because it configures its wheel in-tree.
 
 	# A skin that brings its own button frame says so, on the preview rather than in
 	# the copy: one small chip in the skin's own colour, tucked into the corner of the

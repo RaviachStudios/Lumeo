@@ -17,7 +17,7 @@ class_name BackgroundScenesData
 #   albedo    Base Color (linear). The .glb says (1,1,1,1) for every emissive one.
 #   emis      Emission Strength; the emission COLOUR is the per-vertex Glow attribute.
 #   glow      true when Emission Color is driven by the Glow vertex attribute.
-#   alpha_vc  true when Alpha is driven by Glow.Alpha (only the Aurora ribbons vary).
+#   alpha_vc  true when Alpha is driven by Glow.Alpha.
 #   blend     true for real alpha blending; the rest are opaque (Blender dithers them,
 #             which at alpha 1.0 is indistinguishable from opaque).
 const MATERIALS := {
@@ -33,14 +33,6 @@ const MATERIALS := {
 		"emis": 3.0000, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": false},
 	"BG_ArcadeRoom_M_Screen": {"albedo": Color(0.004000, 0.004000, 0.008000), "metallic": 0.0000, "roughness": 0.1800,
 		"emis": 2.2000, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": false},
-	"BG_Aurora_M_Ground": {"albedo": Color(0.003800, 0.004800, 0.008000), "metallic": 0.3500, "roughness": 0.2200,
-		"emis": 1.0000, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": false},
-	"BG_Aurora_M_Motes": {"albedo": Color(0.000000, 0.000000, 0.000000), "metallic": 0.0000, "roughness": 0.5000,
-		"emis": 3.0000, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": false},
-	"BG_Aurora_M_Ribbon": {"albedo": Color(0.000000, 0.000000, 0.000000), "metallic": 0.0000, "roughness": 0.5000,
-		"emis": 1.1500, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": true},
-	"BG_Aurora_M_Ridge": {"albedo": Color(0.002500, 0.003200, 0.005500), "metallic": 0.0000, "roughness": 0.6500,
-		"emis": 1.0000, "glow": true, "alpha_vc": true, "coat": 0.0000, "blend": false},
 	"BG_Circuit_M_Bezel": {"albedo": Color(0.015000, 0.017000, 0.026000), "metallic": 0.8500, "roughness": 0.2800,
 		"emis": 0.0000, "glow": false, "alpha_vc": false, "coat": 0.0000, "blend": false},
 	"BG_Circuit_M_Chip": {"albedo": Color(0.009000, 0.010000, 0.014000), "metallic": 0.3500, "roughness": 0.5200,
@@ -155,24 +147,6 @@ const LIGHTS := {
 			"color": Color(0.3600, 0.2000, 1.0000), "size": 7.0000, "size_y": 1.2000, "radius": 0.0000,
 			"origin": Vector3(-7.0000, 2.6000, -6.4000),
 			"basis": Basis(Vector3(-0.848048, 0.000000, 0.529919), Vector3(-0.484105, 0.406737, -0.774730), Vector3(-0.215538, -0.913545, -0.344932))},
-	],
-	"BG_Aurora": [
-		{"name": "BG_Aurora_Light_Aurora_C", "type": "AREA", "energy": 14.0000,
-			"color": Color(0.1400, 0.9000, 1.0000), "size": 8.0000, "size_y": 1.0000, "radius": 0.0000,
-			"origin": Vector3(4.5000, 1.5000, -5.0000),
-			"basis": Basis(Vector3(-0.990268, 0.000000, -0.139173), Vector3(0.118026, 0.529919, -0.839795), Vector3(0.073751, -0.848048, -0.524762))},
-		{"name": "BG_Aurora_Light_Aurora_G", "type": "AREA", "energy": 16.0000,
-			"color": Color(0.2400, 1.0000, 0.5000), "size": 8.0000, "size_y": 1.0000, "radius": 0.0000,
-			"origin": Vector3(-4.0000, 1.6000, -5.2000),
-			"basis": Basis(Vector3(-0.990268, 0.000000, 0.139173), Vector3(-0.118026, 0.529919, -0.839795), Vector3(-0.073751, -0.848048, -0.524762))},
-		{"name": "BG_Aurora_Light_Aurora_V", "type": "AREA", "energy": 9.0000,
-			"color": Color(0.4500, 0.2200, 1.0000), "size": 9.0000, "size_y": 1.0000, "radius": 0.0000,
-			"origin": Vector3(0.0000, 1.2000, -6.4000),
-			"basis": Basis(Vector3(-1.000000, 0.000000, 0.000000), Vector3(-0.000000, 0.438371, -0.898794), Vector3(-0.000000, -0.898794, -0.438371))},
-		{"name": "BG_Aurora_Light_Fill", "type": "AREA", "energy": 4.0000,
-			"color": Color(0.3000, 0.4200, 0.6200), "size": 10.0000, "size_y": 3.0000, "radius": 0.0000,
-			"origin": Vector3(0.0000, 2.8000, 5.2000),
-			"basis": Basis(Vector3(1.000000, 0.000000, 0.000000), Vector3(0.000000, 0.809017, 0.587785), Vector3(0.000000, -0.587785, 0.809017))},
 	],
 	"BG_Circuit": [
 		{"name": "BG_Circuit_Light_Cyan", "type": "AREA", "energy": 16.0000,
@@ -365,28 +339,6 @@ const OBJECTS := {
 		{"name": "BG_Stars", "slots": ["BG_DeepSpace_M_Star"],
 			"anim": "uv_parallax_drift + per-star twinkle | extremely slow"},
 	],
-	"BG_Aurora": [
-		{"name": "BG_Aurora_Ground", "slots": ["BG_Aurora_M_Ground"],
-			"anim": "emission_breathe follows ribbons | 14s"},
-		{"name": "BG_Aurora_Motes", "slots": ["BG_Aurora_M_Motes"],
-			"anim": "drift_translate | slow upward"},
-		{"name": "BG_Aurora_Ribbon_01", "slots": ["BG_Aurora_M_Ribbon"],
-			"anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"},
-		{"name": "BG_Aurora_Ribbon_02", "slots": ["BG_Aurora_M_Ribbon"],
-			"anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"},
-		{"name": "BG_Aurora_Ribbon_03", "slots": ["BG_Aurora_M_Ribbon"],
-			"anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"},
-		{"name": "BG_Aurora_Ribbon_04", "slots": ["BG_Aurora_M_Ribbon"],
-			"anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"},
-		{"name": "BG_Aurora_Ribbon_05", "slots": ["BG_Aurora_M_Ribbon"],
-			"anim": "wave_offset along X + alpha breathe | 14s, phase = index * 2.8s"},
-		{"name": "BG_Aurora_Ridge_Far", "slots": ["BG_Aurora_M_Ridge"],
-			"anim": "static"},
-		{"name": "BG_Aurora_Ridge_Mid", "slots": ["BG_Aurora_M_Ridge"],
-			"anim": "static"},
-		{"name": "BG_Aurora_Ridge_Near", "slots": ["BG_Aurora_M_Ridge"],
-			"anim": "static"},
-	],
 	"BG_Circuit": [
 		{"name": "BG_Circuit_ChipLEDs", "slots": ["BG_Circuit_M_ChipLED"],
 			"anim": "blink | 1-3s random"},
@@ -478,7 +430,6 @@ const OBJECTS := {
 const TALL_RADIUS := {
 	"BG_NeonGrid": INF,
 	"BG_DeepSpace": INF,
-	"BG_Aurora": 3.8540,   # BG_Aurora_Ribbon_03
 	"BG_Circuit": INF,
 	"BG_HexFloor": INF,
 	"BG_DarkMetal": INF,
@@ -493,8 +444,8 @@ const TALL_RADIUS := {
 #
 # 0.35 is not arbitrary. It sits above the tallest floor RELIEF in the set (the
 # volcanic crust's plates at 0.27, Crystal Cave's displaced ground at 0.30) and
-# below the shortest real standing object (an aurora ribbon at 0.38), so the two
-# separate cleanly with nothing near the boundary.
+# below the shortest real standing object in it, so the two separate cleanly with
+# nothing near the boundary.
 #
 # This is what decides whether a background is seated at all — see
 # MemoryGameUI._seat_background. A floor needs no correction: its far edge running
@@ -503,7 +454,6 @@ const TALL_RADIUS := {
 const FURNITURE_FAR_Y := {
 	"BG_NeonGrid": INF,
 	"BG_DeepSpace": INF,
-	"BG_Aurora": 5.9792,   # BG_Aurora_Ribbon_05
 	"BG_Circuit": INF,
 	"BG_HexFloor": INF,
 	"BG_DarkMetal": INF,

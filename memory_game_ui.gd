@@ -149,22 +149,27 @@ const CAM_DIST_START := 7.11                 # the reference's own distance
 const CAM_DIST_MIN := 4.0
 const CAM_DIST_MAX := 26.0
 # How much of the frame the board is fitted into, and where its centre lands.
-# The composition fills the viewport; the small vertical bias lifts it off the
-# bottom edge so game.gd's status pill has the front gap to itself.
 #
-# The band shrank from 0.89/0.485 when the round number stopped being a plate
-# lying on the board: the plate's corners were fit points, and dropping them let
-# the five buttons grow into the room it had been holding — far enough that the
-# two front buttons dipped into the status pill's row. These numbers put the
-# nearest button ~14 px clear of that pill, which is the clearance Easy and Hard
-# are already tuned to. They are very nearly Hard's own band (0.83/0.45), which
-# is the sanity check: same tabletop, same HUD above and below it, same answer.
-# The buttons still come out ~14% BIGGER than they were with the plate — the old
-# band was wider but the plate was eating the top of it. Measured, not guessed:
-# tools/tab_clear.tscn reports the clearance per board per aspect.
+# The band is 0.90 of the height centred at 0.487 — the board fills the screen
+# top to bottom and sits a touch BELOW centre, which is the seat a tabletop wants:
+# the near buttons come up to meet the player instead of the whole formation
+# floating in the upper half.
+#
+# It used to be 0.83 centred at 0.448, held back by keeping the near button's
+# black frame clear of game.gd's status pill. That clearance was the only thing
+# left costing the board size on a 16:9 screen — height binds on every aspect the
+# game ships on, so the pill's row was ~10% of every button's diameter. The pill
+# is a small opaque lozenge and the thing behind it is the frame's bottom rim, so
+# it now passes IN FRONT of that rim, and the rule the fit actually keeps is the
+# one that matters: no coloured button FACE ever goes behind the pill (75+ px
+# clear at every aspect). Buying that row back is worth ~7% on the buttons and
+# drops the whole formation ~28 px down the screen.
+#
+# Measured, not guessed: tools/tab_clear.tscn reports, per board per aspect,
+# where the board landed, the face-to-pill clearance and any real HUD collision.
 const FIT_FILL_X := 0.94
-const FIT_FILL_Y := 0.83
-const FIT_CENTRE_Y := 0.448
+const FIT_FILL_Y := 0.90
+const FIT_CENTRE_Y := 0.487
 
 # ---------------------------------------------------------------------------
 # Emission states

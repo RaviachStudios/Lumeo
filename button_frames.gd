@@ -162,94 +162,94 @@ const FRAMES := {
 	},
 	# --- 01-05 neon: a coloured chassis with a lit channel through it. ---
 	"purple_neon": {
-		"name": "Purple Neon", "price": 0, "blurb": "Violet body, lit through.",
+		"name": "Purple Neon", "price": 100, "blurb": "Violet body, lit through.",
 		"node": "Frame_01_PurpleNeon",
 		"accent": Color(0.48, 0.21, 0.86), "glow": Color(0.30, 0.11, 0.60),
 		"anim": [[0.06, 0.00, 0.00], [0.12, 0.00, 0.50], [0.06, 2.10, 0.00]],
 	},
 	"cyan_neon": {
-		"name": "Cyan Neon", "price": 0, "blurb": "Cold light in a groove.",
+		"name": "Cyan Neon", "price": 100, "blurb": "Cold light in a groove.",
 		"node": "Frame_02_CyanNeon",
 		"accent": Color(0.08, 0.73, 0.86), "glow": Color(0.05, 0.38, 0.60),
 		"anim": [[0.06, 0.83, 0.00], [0.12, 0.83, 0.50], [0.06, 2.93, 0.00]],
 	},
 	"magenta_neon": {
-		"name": "Magenta Neon", "price": 0, "blurb": "Loud, in one colour.",
+		"name": "Magenta Neon", "price": 100, "blurb": "Loud, in one colour.",
 		"node": "Frame_03_MagentaNeon",
 		"accent": Color(0.86, 0.12, 0.51), "glow": Color(0.53, 0.06, 0.36),
 		"anim": [[0.06, 1.66, 0.00], [0.12, 1.66, 0.50], [0.06, 3.76, 0.00]],
 	},
 	"electric_blue": {
-		"name": "Electric Blue", "price": 0, "blurb": "Straight off the mains.",
+		"name": "Electric Blue", "price": 150, "blurb": "Straight off the mains.",
 		"node": "Frame_04_ElectricBlue",
 		"accent": Color(0.13, 0.31, 0.86), "glow": Color(0.08, 0.16, 0.60),
 		"anim": [[0.07, 2.49, 0.00], [0.15, 2.49, 0.3333], [0.07, 4.59, 0.00]],
 	},
 	"emerald_neon": {
-		"name": "Emerald Neon", "price": 0, "blurb": "Green, and expensive.",
+		"name": "Emerald Neon", "price": 150, "blurb": "Green, and expensive.",
 		"node": "Frame_05_EmeraldNeon",
 		"accent": Color(0.08, 0.86, 0.50), "glow": Color(0.05, 0.45, 0.35),
 		"anim": [[0.05, 3.32, 0.00], [0.10, 3.32, 0.50], [0.05, 5.42, 0.00]],
 	},
 	# --- 06-08 polished metal: a highlight walking the whole ring. ---
 	"golden_chrome": {
-		"name": "Golden Chrome", "price": 0, "blurb": "Mirror-polished gold.",
+		"name": "Golden Chrome", "price": 400, "blurb": "Mirror-polished gold.",
 		"node": "Frame_06_GoldenChrome",
 		"accent": Color(0.87, 0.66, 0.17), "glow": Color(0.54, 0.35, 0.12),
 		"anim": [[0.06, 4.15, 0.50], [0.06, 4.65, 0.50], [0.06, 5.15, 0.50]],
 	},
 	"rose_gold": {
-		"name": "Rose Gold", "price": 0, "blurb": "Warm metal, quiet finish.",
+		"name": "Rose Gold", "price": 350, "blurb": "Warm metal, quiet finish.",
 		"node": "Frame_07_RoseGold",
 		"accent": Color(0.86, 0.55, 0.47), "glow": Color(0.53, 0.29, 0.33),
 		"anim": [[0.06, 4.98, 0.50], [0.06, 5.48, 0.50], [0.06, 5.98, 0.50]],
 	},
 	"obsidian_chrome": {
-		"name": "Obsidian Chrome", "price": 0, "blurb": "Black, and very shiny.",
+		"name": "Obsidian Chrome", "price": 400, "blurb": "Black, and very shiny.",
 		"node": "Frame_08_ObsidianChrome",
 		"accent": Color(0.43, 0.49, 0.59), "glow": Color(0.27, 0.25, 0.41),
 		"anim": [[0.044, 5.81, 0.3333], [0.044, 0.17, 0.3333], [0.044, 0.53, 0.00]],
 	},
 	# --- 09/10 hides: the stripes hold still, the light inside them breathes. ---
 	"zebra_glow": {
-		"name": "Zebra Glow", "price": 0, "blurb": "Silver hide, black stripes.",
+		"name": "Zebra Glow", "price": 250, "blurb": "Silver hide, black stripes.",
 		"node": "Frame_09_ZebraGlow",
 		"accent": Color(0.81, 0.83, 0.86), "glow": Color(0.50, 0.43, 0.60),
 		"anim": [[0.155, 0.36, 0.00], [0.155, 1.16, 0.00], [0.08, 2.06, 0.00]],
 	},
 	"tiger_glow": {
-		"name": "Tiger Glow", "price": 0, "blurb": "Molten stripes.",
+		"name": "Tiger Glow", "price": 250, "blurb": "Molten stripes.",
 		"node": "Frame_10_TigerGlow",
 		"accent": Color(0.86, 0.54, 0.14), "glow": Color(0.53, 0.28, 0.10),
 		"anim": [[0.155, 1.19, 0.00], [0.155, 1.99, 0.00], [0.08, 2.89, 0.00]],
 	},
 	# --- 11-15 patterned: the light travels, the pattern does not. ---
 	"aurora": {
-		"name": "Aurora", "price": 0, "blurb": "Slow colour, moving.",
+		"name": "Aurora", "price": 600, "blurb": "Slow colour, moving.",
 		"node": "Frame_11_Aurora",
 		"accent": Color(0.38, 0.55, 0.86), "glow": Color(0.24, 0.29, 0.60),
 		"anim": [[0.06, 2.02, 0.50], [0.06, 2.52, 0.50], [0.06, 3.42, 0.00]],
 	},
 	"circuit": {
-		"name": "Circuit", "price": 0, "blurb": "Pulses down the traces.",
+		"name": "Circuit", "price": 550, "blurb": "Pulses down the traces.",
 		"node": "Frame_12_Circuit",
 		"accent": Color(0.16, 0.46, 0.86), "glow": Color(0.10, 0.24, 0.60),
 		"anim": [[0.115, 2.85, 0.25], [0.115, 3.45, 0.25], [0.06, 4.75, 0.00]],
 	},
 	"holographic": {
-		"name": "Holographic", "price": 0, "blurb": "Every colour, faintly.",
+		"name": "Holographic", "price": 700, "blurb": "Every colour, faintly.",
 		"node": "Frame_13_Holographic",
 		"accent": Color(0.46, 0.40, 0.91), "glow": Color(0.28, 0.21, 0.63),
 		"anim": [[0.055, 3.68, 0.50], [0.055, 4.38, 0.50], [0.055, 5.18, 0.00]],
 	},
 	"arctic_glow": {
-		"name": "Arctic Glow", "price": 0, "blurb": "Cold shimmer on ice.",
+		"name": "Arctic Glow", "price": 500, "blurb": "Cold shimmer on ice.",
 		"node": "Frame_14_ArcticGlow",
 		"accent": Color(0.60, 0.78, 0.86), "glow": Color(0.37, 0.40, 0.60),
 		"anim": [[0.05, 4.51, 0.00], [0.095, 5.41, 0.50], [0.095, 0.14, 0.50]],
 	},
 	"volcanic_glow": {
-		"name": "Volcanic Glow", "price": 0, "blurb": "Fire under the crust.",
+		"name": "Volcanic Glow", "price": 800, "blurb": "Fire under the crust.",
 		"node": "Frame_15_VolcanicGlow",
 		"accent": Color(0.86, 0.38, 0.12), "glow": Color(0.53, 0.20, 0.09),
 		"anim": [[0.16, 5.34, 0.00], [0.16, 0.14, 0.3333], [0.08, 1.44, 0.00]],
@@ -307,13 +307,22 @@ const SKIN_FRAMES := {
 }
 
 # Display order in the shop. "default" leads so reverting is the obvious first card,
-# and the fifteen follow in the library's own numbering.
+# and the fifteen follow CHEAPEST FIRST — the same convention every other category in
+# the shop uses. That is deliberately NOT the library's own numbering, which FRAMES
+# above still groups by (neon / metal / hide / patterned): the table documents the
+# texture set, this list drives the tab. Re-sort here after any price change.
 const ORDER := [
 	"default",
-	"purple_neon", "cyan_neon", "magenta_neon", "electric_blue", "emerald_neon",
-	"golden_chrome", "rose_gold", "obsidian_chrome",
-	"zebra_glow", "tiger_glow",
-	"aurora", "circuit", "holographic", "arctic_glow", "volcanic_glow",
+	"purple_neon", "cyan_neon", "magenta_neon",          # 100
+	"electric_blue", "emerald_neon",                     # 150
+	"zebra_glow", "tiger_glow",                          # 250
+	"rose_gold",                                         # 350
+	"golden_chrome", "obsidian_chrome",                  # 400
+	"arctic_glow",                                       # 500
+	"circuit",                                           # 550
+	"aurora",                                            # 600
+	"holographic",                                       # 700
+	"volcanic_glow",                                     # 800
 ]
 
 static func has_frame(frame_id: String) -> bool:

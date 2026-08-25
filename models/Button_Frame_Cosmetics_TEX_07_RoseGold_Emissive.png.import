@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://crleobx3qcrhd"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0e511e09e28fe1d356ad0d83e81399c0"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_07_RoseGold_Emissive.png-efd9cd611fb2238cb449433d25f65e9e.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

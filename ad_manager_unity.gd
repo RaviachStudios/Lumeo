@@ -14,7 +14,7 @@ extends Node
 
 # ── Ad units ──────────────────────────────────────────────────────────────────
 #
-# REWARDED ONLY, deliberately. Simon shows exactly one kind of ad: the "watch an
+# REWARDED ONLY, deliberately. Lumeo shows exactly one kind of ad: the "watch an
 # ad to replay" button, which the player presses on purpose and is paid for.
 #
 # There used to be interstitials at solo game over, on arrival at the arena

@@ -1,6 +1,6 @@
 "use strict";
 
-// Server-side leaderboard backend for Simon. Two jobs:
+// Server-side leaderboard backend for Lumeo. Two jobs:
 //
 //  1. board_top maintenance (event-triggered). The 20-row top list is 100% of
 //     the fixed leaderboard read cost. Instead of every client running six

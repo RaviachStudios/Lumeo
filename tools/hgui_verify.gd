@@ -444,16 +444,27 @@ func _check_composition() -> void:
 		"level tab": Rect2(_dev._tab.position.x / W, _dev._tab.position.y / H,
 			_dev._tab.size.x / W, _dev._tab.size.y / H),
 	}
+	# One exception, and it is deliberate: the status pill is allowed to sit in
+	# FRONT of the near button's black frame — the boards are fitted into its row
+	# on purpose, because on a 16:9 screen that row is the last vertical space left
+	# and it is worth ~7% on every button (see memory_game_ui.gd). What it may
+	# never cover is a coloured button FACE, so the pill is checked against the
+	# raised surface ring alone while every other control is checked against the
+	# frame rim as well.
 	for name: String in hud:
 		var r: Rect2 = hud[name]
 		var px := Rect2(r.position * Vector2(W, H), r.size * Vector2(W, H))
+		var faces_only: bool = name == "status pill"
 		var hits := ""
 		for key: String in ORDER:
 			var c := _holder(key).position
 			for i in 48:
 				var a := TAU * float(i) / 48.0
-				for pt: Vector3 in [c + Vector3(cos(a), 0.0, sin(a)),
-						c + Vector3(cos(a) * 0.745, 0.525, sin(a) * 0.745)]:
+				var pts: Array = [c + Vector3(cos(a) * 0.745, 0.525, sin(a) * 0.745)]
+				if not faces_only:
+					pts.append(c + Vector3(cos(a), 0.0, sin(a)))
+				for pt: Vector3 in pts:
 					if px.has_point(_cam.unproject_position(pt)):
 						hits = key
-		_ok(hits == "", "the %s does not sit on a button" % name, "hits %s" % hits)
+		_ok(hits == "", "the %s does not sit on a button%s" % [
+			name, "'s face" if faces_only else ""], "hits %s" % hits)

@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://7fk8e4s3o7xp"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0209eeea097e6fc3d7ffa1e602b10609"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_03_MagentaNeon_Emissive.png-2038a29d44bd24ced74866f3ddd16b7d.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

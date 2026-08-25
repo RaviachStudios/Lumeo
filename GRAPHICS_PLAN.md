@@ -1,4 +1,4 @@
-# Simon — Graphics Redesign Plan
+# Lumeo — Graphics Redesign Plan
 
 Branch: `graphics`. Goal: reskin the app to match the mockups (gallery JPEGs the
 user provided ~2026-06-13) using **only Godot-native, text-authorable assets**
@@ -21,7 +21,7 @@ environments, `.gdshader` shaders, and hand-authored `.svg` icons.
   (leaf, flame, chart, trophy, eye, hand, refresh, crown, play, gear).
 - Glassmorphism blur, gradient text, bloom: all done with shaders / WorldEnvironment.
 
-## The 3D Simon wheel — approach
+## The 3D wheel — approach
 1. Geometry generated procedurally (`ArrayMesh`/`SurfaceTool`): ring of beveled
    wedge segments + center hub, count = `num_buttons`.
 2. `StandardMaterial3D` per segment: metallic/roughness (+clearcoat) for gloss,
@@ -39,7 +39,7 @@ environments, `.gdshader` shaders, and hand-authored `.svg` icons.
   Procedural 3D wheel scene + SubViewport wired into game.gd, light-up/glow
   working on screen. In parallel set up reusable kit: color palette, glow
   WorldEnvironment, reusable glass-panel scene, gradient-text shader.
-- **Phase 1: Home.** Gradient SIMON logo, elliptical orbital ring with animated
+- **Phase 1: Home.** Gradient LUMEO logo, elliptical orbital ring with animated
   glowing orbs, glass buttons + icon badges, profile/settings chips.
 - **Phase 2: Difficulty + How-to-play.** Glass cards, leaf/chart/flame +
   eye/hand/refresh icons, gradient titles.

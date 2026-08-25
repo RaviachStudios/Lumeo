@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dy66i5u0p0f0u"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "7f95f27f178e869a2a6592c66faf84cf"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_12_Circuit_BaseColor.png-a84f77b32c740abe8e5d631accd26592.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

@@ -6,7 +6,7 @@ class_name EasyGameUI
 #
 # It replaces the procedural four-colour SimonWheel, which is what easy played on
 # until now. There is no wheel on this difficulty any more: no four coloured
-# sectors, no circular Simon board, no centre hub. Easy uses the same physical
+# sectors, no circular board, no centre hub. Easy uses the same physical
 # button language as Moderate and Hard, because it is now literally the same
 # device class.
 #
@@ -110,13 +110,18 @@ const EASY_CAM_DIST_START := 7.61
 #     centre at the FRONT, right above it (the other two boards leave their bottom
 #     centre open, through the pentagon's open front and the hexagon's flat one).
 #
-# That leaves the band 9.4%..88.3%, which is 78.9% of the height; taking 75% of it
-# centred at 48.9% keeps a ~20 px margin at both ends at 1080p. Nothing is ever
-# cropped at any aspect — the fit is re-run on every resize, and the HUD rects are
-# fractions, so the clearance scales with it.
+# The bottom of that band is now spent rather than reserved: the status pill sits
+# in FRONT of the near button's black frame (see memory_game_ui.gd), so only the
+# pill's own row below 94% is off limits and no coloured face ever goes behind it
+# — 120 px clear at every aspect. The top is a hard stop, though, and it is what
+# caps this board: 0.84 centred at 52.0% puts the back rims 4 px under the watch-ad
+# pill's row, and anything bigger walks into it. Against the old 0.75/48.9% that is
+# ~9% on every button and ~22 px lower down the screen. Nothing is ever cropped at
+# any aspect — the fit is re-run on every resize, and the HUD rects are fractions,
+# so the clearance scales with it.
 const EASY_FIT_FILL_X := 0.90
-const EASY_FIT_FILL_Y := 0.75
-const EASY_FIT_CENTRE_Y := 0.489
+const EASY_FIT_FILL_Y := 0.84
+const EASY_FIT_CENTRE_Y := 0.520
 
 # The board spec. Everything not named here stays exactly as MemoryGameUI has it.
 # The Jade darkening is inherited and is simply inert: this board has no Jade

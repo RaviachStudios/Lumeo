@@ -8,6 +8,12 @@ extends Node
 # board's framing band — the two are coupled through
 # LevelTab.reserved_width() / MemoryGameUI._fit_camera.
 #
+# One overlap is deliberate and is NOT a collision: the near button's black frame
+# passes behind the bottom-centre status pill. The boards are fitted into the
+# pill's band on purpose (it is the only vertical room left on a 16:9 screen), so
+# the rule the probe enforces is the one that matters — no coloured button FACE
+# may go behind the pill. `face->pill` is that clearance in pixels.
+#
 # Note on aspects: the project stretches canvas_items from 1280x720 with
 # aspect=expand, so the logical viewport is never narrower than 1280 — a 4:3
 # device is 1280x960, not 960x720. Those are the three cases below.
@@ -61,23 +67,38 @@ func _probe(diff: String, vp: Vector2) -> void:
 	var in_tab := 0
 	var d_tab := INF
 	var hud_hits := ""
-	for p: Vector3 in game._wheel._fit_points:
-		var s := cam.unproject_position(p)
+	var d_pill := INF
+	# _collect_fit_points appends the pair (frame rim on the table, raised coloured
+	# surface) per sample, in that order — so the odd entries are the FACES. The two
+	# are held to different rules against the status pill: see below.
+	var pill := Rect2(hud["status"].position * vp, hud["status"].size * vp)
+	for i in game._wheel._fit_points.size():
+		var s := cam.unproject_position(game._wheel._fit_points[i])
+		var is_face: bool = (i % 2) == 1
 		mn = mn.min(s)
 		mx = mx.max(s)
 		if tab_r.has_point(s):
 			in_tab += 1
 		d_tab = minf(d_tab, _dist(s, tab_r))
+		if is_face:
+			d_pill = minf(d_pill, _dist(s, pill))
 		for name: String in hud:
 			var r: Rect2 = hud[name]
+			# The status pill is allowed to sit in FRONT of the near button's black
+			# frame — that is the one overlap the framing bands spend on purpose, and
+			# it is what buys the boards their size and their low seat on the screen.
+			# Nothing coloured may go behind it, and neither rim nor face may touch
+			# any other HUD control.
+			if name == "status" and not is_face:
+				continue
 			if Rect2(r.position * vp, r.size * vp).has_point(s) and not hud_hits.contains(name):
 				hud_hits += name + " "
 	for name: String in hud:
 		var r: Rect2 = hud[name]
 		if Rect2(r.position * vp, r.size * vp).intersects(tab_r):
 			hud_hits += "tab/" + name + " "
-	print("%-9s %4dx%-4d  board x[%6.1f %6.1f] y[%5.1f %5.1f]   badge %s  edge=%4.1f  nearest button=%5.1f  buttons in badge=%d  HUD collisions: %s" % [
+	print("%-9s %4dx%-4d  board x[%6.1f %6.1f] y[%5.1f %5.1f]   badge %s  edge=%4.1f  nearest button=%5.1f  buttons in badge=%d  face->pill=%5.1f  HUD collisions: %s" % [
 		diff, vp.x, vp.y, mn.x, mx.x, mn.y, mx.y, str(tab_r), tab_r.position.x,
-		d_tab, in_tab, "none" if hud_hits == "" else hud_hits])
+		d_tab, in_tab, d_pill, "none" if hud_hits == "" else hud_hits])
 	stub.queue_free()
 	await get_tree().process_frame

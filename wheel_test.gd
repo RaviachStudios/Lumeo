@@ -1,7 +1,7 @@
 extends Control
 
 # Full-screen preview of the game look: dark gradient background with a radial
-# glow + vignette, large centered 3D Simon wheel, minimal top UI (level badge +
+# glow + vignette, large centered 3D wheel, minimal top UI (level badge +
 # Quit), and a bottom message pill. Run this scene directly (F6).
 # (Segment count can be switched with keys 4/5/6 for testing - no on-screen UI.)
 

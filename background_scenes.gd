@@ -81,8 +81,6 @@ const CATALOG := {
 		"glb": "res://models/backgrounds/BG_NeonGrid.glb"},
 	"bg_deepspace": {"name": "Deep Void",     "coll": "BG_DeepSpace",
 		"glb": "res://models/backgrounds/BG_DeepSpace.glb"},
-	"bg_aurora":    {"name": "Aurora",        "coll": "BG_Aurora",
-		"glb": "res://models/backgrounds/BG_Aurora.glb"},
 	"bg_circuit":   {"name": "Circuit Board", "coll": "BG_Circuit",
 		"glb": "res://models/backgrounds/BG_Circuit.glb"},
 	"bg_hexfloor":  {"name": "Hexagon Floor", "coll": "BG_HexFloor",
@@ -97,9 +95,10 @@ const CATALOG := {
 		"glb": "res://models/backgrounds/BG_ArcadeRoom.glb"},
 }
 
-# Shop display order. Cheapest first, matching every other category's convention.
-const ORDER := ["bg_neongrid", "bg_hexfloor", "bg_circuit", "bg_darkmetal",
-	"bg_deepspace", "bg_volcanic", "bg_arcade", "bg_crystal", "bg_aurora"]
+# Shop display order. Cheapest first, matching every other category's convention —
+# keep this in step with the prices in CoinsManager.THEMES (100 .. 800).
+const ORDER := ["bg_darkmetal", "bg_hexfloor", "bg_neongrid", "bg_circuit",
+	"bg_deepspace", "bg_volcanic", "bg_crystal", "bg_arcade"]
 
 # ---------------------------------------------------------------------------
 # Exposure
@@ -447,8 +446,8 @@ const SWEEP_PERIOD := {
 }
 
 static func _dress_meshes(scene: Node3D, objects: Array, env: Vector3, sweep: float) -> void:
-	# The importer renames nodes (BG_Aurora_Ribbon_01 keeps its name, but meshes
-	# arrive as "BG_Aurora_Ribbon_01.002" etc.), so match on the node name the
+	# The importer renames nodes (BG_Volcanic_Crust keeps its name, but meshes
+	# arrive as "BG_Volcanic_Crust.002" etc.), so match on the node name the
 	# exporter wrote, which is the Blender object name.
 	for spec: Dictionary in objects:
 		var name := String(spec["name"])

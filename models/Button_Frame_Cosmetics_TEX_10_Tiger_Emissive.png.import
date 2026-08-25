@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cbywbecgh6ydu"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "03227e3d0819edc92ffb38fa9b9a7e37"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_10_Tiger_Emissive.png-67574656a2e70250e478de9d2a5deefb.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

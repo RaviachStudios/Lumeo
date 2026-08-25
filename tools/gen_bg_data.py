@@ -24,7 +24,7 @@ W('# Material name -> the Principled BSDF values as authored in Blender.')
 W('#   albedo    Base Color (linear). The .glb says (1,1,1,1) for every emissive one.')
 W('#   emis      Emission Strength; the emission COLOUR is the per-vertex Glow attribute.')
 W('#   glow      true when Emission Color is driven by the Glow vertex attribute.')
-W('#   alpha_vc  true when Alpha is driven by Glow.Alpha (only the Aurora ribbons vary).')
+W('#   alpha_vc  true when Alpha is driven by Glow.Alpha.')
 W('#   blend     true for real alpha blending; the rest are opaque (Blender dithers them,')
 W('#             which at alpha 1.0 is indistinguishable from opaque).')
 W('const MATERIALS := {')
@@ -49,7 +49,7 @@ W('''# Theme lights, per background, already converted into Godot space
 # power in watts, its full orientation — so the translation lives in one readable
 # place and can be re-tuned without regenerating this file.
 const LIGHTS := {''')
-for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Aurora","BG_Circuit","BG_HexFloor",
+for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Circuit","BG_HexFloor",
            "BG_DarkMetal","BG_CrystalCave","BG_Volcanic","BG_ArcadeRoom"]:
     W('\t"%s": [' % bg)
     for L in d["lights"][bg]:
@@ -69,7 +69,7 @@ W('''# Mesh objects per background, with the material in each slot and the
 # authoring INTENT — background_scenes.gd maps it onto one of its own motion
 # kinds; anything it does not recognise stays still, which is always safe.
 const OBJECTS := {''')
-for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Aurora","BG_Circuit","BG_HexFloor",
+for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Circuit","BG_HexFloor",
            "BG_DarkMetal","BG_CrystalCave","BG_Volcanic","BG_ArcadeRoom"]:
     W('\t"%s": [' % bg)
     for o in d["objects"][bg]:
@@ -95,7 +95,7 @@ W("""# The radius at which SOLID geometry taller than z = 0.10 first appears, pe
 # excluded — they are specks of light with no silhouette, and a button passing
 # near one reads as nothing.
 const TALL_RADIUS := {""")
-for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Aurora","BG_Circuit","BG_HexFloor",
+for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Circuit","BG_HexFloor",
            "BG_DarkMetal","BG_CrystalCave","BG_Volcanic","BG_ArcadeRoom"]:
     r = d.get("tall_radius", {}).get(bg)
     who = d.get("tall_object", {}).get(bg, "")
@@ -111,15 +111,15 @@ W("""# How far out each background's STANDING furniture reaches, in Blender y �
 #
 # 0.35 is not arbitrary. It sits above the tallest floor RELIEF in the set (the
 # volcanic crust's plates at 0.27, Crystal Cave's displaced ground at 0.30) and
-# below the shortest real standing object (an aurora ribbon at 0.38), so the two
-# separate cleanly with nothing near the boundary.
+# below the shortest real standing object in it, so the two separate cleanly with
+# nothing near the boundary.
 #
 # This is what decides whether a background is seated at all — see
 # MemoryGameUI._seat_background. A floor needs no correction: its far edge running
 # off the top of the frame is what a floor is supposed to do, and sliding it
 # forward only drags the horizon band into view. A cabinet row does need one.
 const FURNITURE_FAR_Y := {""")
-for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Aurora","BG_Circuit","BG_HexFloor",
+for bg in ["BG_NeonGrid","BG_DeepSpace","BG_Circuit","BG_HexFloor",
            "BG_DarkMetal","BG_CrystalCave","BG_Volcanic","BG_ArcadeRoom"]:
     v = d.get("furniture_far_y", {}).get(bg)
     o = d.get("furniture_object", {}).get(bg, "")

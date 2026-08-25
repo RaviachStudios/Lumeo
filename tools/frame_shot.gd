@@ -4,6 +4,8 @@ extends Node
 # ones — plus the shop's BUTTON FRAMES tab.
 # Run WITHOUT --headless:  godot --path . tools/frame_shot.tscn
 
+const ShopScreen := preload("res://shop_screen.gd")
+
 const SHOT_W := 1280
 const SHOT_H := 720
 
@@ -57,7 +59,7 @@ func _ready() -> void:
 	get_tree().quit()
 
 func _shop() -> void:
-	var shop: Control = load("res://shop_screen.gd").new()
+	var shop: Control = ShopScreen.new()
 	shop.game_manager = null
 	shop.size = Vector2(SHOT_W, SHOT_H)
 	_vp.add_child(shop)
@@ -72,16 +74,17 @@ func _shop() -> void:
 	for _i in 120:
 		await get_tree().process_frame
 	await _save("user://shop_frames.png")
-	# ...and the rows below the fold. Sixteen cards is four rows, and every one of
-	# them has to be looked at: the card art is a live 3D preview per frame, so a
-	# frame that failed to load is a black tile and nothing else says so.
+	# ...and the rows below the fold. Sixteen cards over a 3-wide grid is six rows, and
+	# every one of them has to be looked at: the card art is a live 3D preview per
+	# frame, so a frame that failed to load is a black tile and nothing else says so.
 	var scroller := shop.get("_frames_root") as ScrollContainer
-	for row in [1, 2, 3]:
-		scroller.scroll_vertical = 342 * row
+	var rows := int(ceil(float(ButtonFrames.ORDER.size()) / float(ShopScreen.FRAME_GRID_COLS)))
+	for row in range(1, rows):
+		scroller.scroll_vertical = int(ShopScreen.FRAME_CARD_H + ShopScreen.FRAME_CARD_GAP) * row
 		for _i in 30:
 			await get_tree().process_frame
 		await _save("user://shop_frames_row%d.png" % (row + 1))
-	# The confirm dialog for a free unlock — the price must read 0.
+	# The confirm dialog for a priced unlock — the price must read tiger_glow's 250.
 	shop.call("_on_frame_action", "tiger_glow")
 	for _i in 60:
 		await get_tree().process_frame

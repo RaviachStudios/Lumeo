@@ -562,7 +562,7 @@ func _next_round() -> void:
 	_set_status("Your turn!")
 	_arm_press_timer()
 
-# True when the equipped Simon look is the Volcano ("inferno") special skin — the
+# True when the equipped wheel look is the Volcano ("inferno") special skin — the
 # same resolution _apply_simon_skin uses (a manual per-part look never counts).
 func _is_volcano_skin() -> bool:
 	return not CoinsManager.is_simon_manual() and CoinsManager.selected_skin == "inferno"
@@ -714,7 +714,7 @@ func _show_king_text() -> void:
 	await tw.finished
 	holder.queue_free()
 
-# Big bold gold "JACKPOT!" banner that pops over the Simon during the Mega Jackpot
+# Big bold gold "JACKPOT!" banner that pops over the wheel during the Mega Jackpot
 # party, holds, then fades out and is freed exactly as the ~3s show ends. Built from a
 # soft gold glow layer behind a crisp bright-gold face (thick dark outline = bold and
 # clear). Centred on screen and never awaited, so it runs alongside the light show.
@@ -766,7 +766,7 @@ func _show_jackpot_text() -> void:
 	await tw.finished
 	holder.queue_free()
 
-# Big carnival "NICE RIDE!" banner that pops over the Simon during the Luna Park every-5
+# Big carnival "NICE RIDE!" banner that pops over the wheel during the Luna Park every-5
 # celebration, holds, then fades fully out and is freed exactly as the ~3s show ends
 # (synced with the background's `cele` clock — sky dims, rides blaze). Built from a soft
 # pink bloom behind a bright warm-gold face. Centred on screen; never awaited, so it runs
@@ -885,7 +885,7 @@ func _player_pressed(idx: int) -> void:
 			BackgroundManager.arcade_omg()
 			# Luna Park skin: the "NICE RIDE!" moment — the marquee ring powers on, the sky
 			# dims while the Ferris wheel + coaster blaze, fireworks/confetti fire, and a big
-			# "NICE RIDE!" banner pops over the Simon and fades fully out over ~3s. The light
+			# "NICE RIDE!" banner pops over the wheel and fades fully out over ~3s. The light
 			# show is fired concurrently, then the round FREEZES on the banner (awaited) so the
 			# next level only starts once the text is completely gone. All calls no-op off the skin.
 			_wheel.luna_celebrate()
@@ -895,7 +895,7 @@ func _player_pressed(idx: int) -> void:
 		# Jackpot skin only: every 8th completed level (8, 16, 24, …) fires a Mega
 		# Jackpot celebration — the hall washes through a rainbow, the gold JACKPOT
 		# sign powers on, the roulette ball rolls, and a big "JACKPOT!" banner pops
-		# over the Simon and fades out over ~3s. The round FREEZES here until the banner
+		# over the wheel and fades out over ~3s. The round FREEZES here until the banner
 		# has fully faded: the light show + rolling ball are fired concurrently, then we
 		# await the on-screen text so the next level only starts once it's gone.
 		# `casino_jackpot()` is a no-op on any other background.
@@ -1014,7 +1014,7 @@ func _game_over() -> void:
 		var cid := String(ctx.get("id", ""))
 		var rounds := level - 1
 		# Race games count toward engagement/score badges AND the solo leaderboards.
-		# A race is still a real Simon run at the room's difficulty, so its score
+		# A race is still a real run at the room's difficulty, so its score
 		# updates the player's personal best and the daily / all-time boards exactly
 		# like a solo game — in addition to being recorded on the room itself.
 		BadgeManager.note_game_played(GameState.difficulty)

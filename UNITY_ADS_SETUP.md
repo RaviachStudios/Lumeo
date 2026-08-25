@@ -51,7 +51,7 @@ copies `godot-lib.aar` out of the project's Android build template, and writes
 
 ## 3. Open Godot and confirm
 
-- **Project Settings → Plugins**: `GodotUnityAds` enabled, `AdMob` gone.
+- **Project Settings → Plugins**: `GodotUnityAds` enabled.
 - **Project Settings → Autoload**: `ConsentManager` listed **above** `AdManager`,
   and `AdManager` points at `res://ad_manager_unity.gd`.
 
@@ -84,18 +84,15 @@ adb logcat -s GodotUnityAds:V UnityAds:V
 
 ---
 
-## 5. Delete AdMob
+## 5. AdMob is gone
 
-Only after step 4 passes:
+Done — nothing to do here. `addons/admob/`, `ad_manager.gd`, `ad_manager.gd.uid`
+and the iOS `ios/plugins/` tree (which held nothing but the AdMob xcframeworks)
+have all been deleted, so the plugin can't come back and can no longer inject the
+banned `APPLICATION_ID` into the manifest.
 
-```
-addons/admob/          (whole folder)
-ad_manager.gd
-ad_manager.gd.uid
-```
-
-It's already disabled in `project.godot`, so it no longer injects the banned
-`APPLICATION_ID` into the manifest — but delete it so it can't come back.
+If you ever see an `admob` folder reappear under `addons/` or in the Android
+export staging area, it's stale — delete it.
 
 ---
 

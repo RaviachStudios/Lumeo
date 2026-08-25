@@ -1,7 +1,7 @@
 extends Control
 
 # First-run home-screen tour. A dim overlay with a moving "spotlight" hole that
-# highlights one home widget at a time, plus a small coach card (a winged-Simon
+# highlights one home widget at a time, plus a small coach card (a winged-wheel
 # mascot + title + body + Next) that walks the player through: coins & the
 # Shop, the START orb, the Leaderboard and the Arena. Steps whose target
 # widget doesn't exist (e.g. the coin pill / daily claim for a signed-out

@@ -11,7 +11,7 @@ extends RefCounted
 #   "lobby"  — an enclosing torch-lit staging tunnel (dark archway frame, warm).
 #   "active" — the roaring floor: brighter stands + a strong combat-floor glow.
 # Detail on the top/bottom bands only; the centre is kept clear for the widgets
-# (Simon's wheel/carousel sits there). Pure helpers — no state.
+# (the wheel/carousel sits there). Pure helpers — no state.
 
 # ---- palette (warm stone / torchlight / gold) ----
 const ACCENT := Color(0.95, 0.66, 0.28)          # torch gold (buttons, rims)

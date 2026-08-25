@@ -13,7 +13,7 @@
 extends RefCounted
 
 # Hub proportions (wheel local units; the hub's HUB_R baseline is 0.30). These are the
-# exact values simon_wheel derives for its centre cone, hoisted here as the shared spec.
+# exact values simon_wheel.gd derives for its centre cone, hoisted here as the shared spec.
 const BASE_R := 0.354         # HUB_R * 1.18  — cone foot radius
 const RIM_R := 0.186          # HUB_R * 0.62  — crater outer rim radius (cone top)
 const H := 0.30               # cone rise above the foot

@@ -628,7 +628,7 @@ vec3 placeMushroom(vec3 col, vec2 a, vec2 base, float s, float seed, float glow,
 const _HEAD := "shader_type canvas_item;\nuniform float aspect = 1.78;\n" + _NOISE_GLSL + _SHAPES_GLSL + _NATURE_GLSL
 
 # ---- MID-VALUE: detailed static scenes ----
-# Composition rule: the Simon wheel covers the vertical middle of the screen, so
+# Composition rule: the wheel covers the vertical middle of the screen, so
 # every scene keeps its hero detail in the top band (y < 0.20) and bottom band
 # (y > 0.70) and keeps the centre as open atmosphere. Edges are drawn crisp with
 # aafill/aaline (no blur) for a high-end look.
@@ -4926,7 +4926,7 @@ void fragment() {
 const _ARCADE_FUNCS := "
 // ===== Premium neon arcade hall ===================================================
 // Two SYMMETRIC rows of vintage upright cabinets recede down the left and right
-// walls toward a vanishing point behind the (centre) Simon wheel; the middle is
+// walls toward a vanishing point behind the (centre) wheel; the middle is
 // left wide open so nothing sits behind the wheel. A synthwave neon grid floor,
 // converging ceiling light strips and a hazy back wall frame the play area and pull
 // the eye inward. arcadeScene() bakes every solid form (bodies, marquees, panels,
@@ -5630,7 +5630,7 @@ void fragment() {
 # bakes the warm hall backdrop, distant blurred gaming floor, gold fluted
 # columns, red-velvet valance, crystal chandeliers and — foreground — a real
 # high-stakes poker table: deep emerald casino felt (worn + napped) ringed in
-# polished mahogany with gold trim, an ACTIVE game around the Simon machine.
+# polished mahogany with gold trim, an ACTIVE game around the wheel machine.
 # Six asymmetric player seats each get two face-up cards angled toward centre
 # plus jittered chip stacks (red/black/white/green/gold); a dealer button and a
 # central pot sit low, and five community cards fan across the centre so the
@@ -6163,7 +6163,7 @@ void fragment() {
 # synchronise) and `cele` (0..3s, the every-5 "NICE RIDE!" moment — the sky dims right
 # down while the Ferris wheel + coaster blaze, the coaster races a fast train across,
 # fireworks launch and confetti falls, then everything eases back to the idle night).
-# Everything is kept clear of the screen centre + rendered a touch soft so the Simon
+# Everything is kept clear of the screen centre + rendered a touch soft so the wheel
 # wheel (drawn on top) always stays the focal point.
 # ---------------------------------------------------------------------------
 const _LUNA_FUNCS := "

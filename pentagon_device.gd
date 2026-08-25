@@ -612,7 +612,7 @@ func _kick_render() -> void:
 	if _vp.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
 		_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
 
-# Apply the equipped level-number font package (shop "SIMON" tab). Only the
+# Apply the equipped level-number font package (CoinsManager.SIMON_NUMBER_FONTS). Only the
 # typeface and tint carry over to this device — the numeral is part of a modelled
 # display here, so it keeps the display's own emissive brightness rather than the
 # hub-sized glow/outline treatment SimonWheel gives it.

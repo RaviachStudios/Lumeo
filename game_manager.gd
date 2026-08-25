@@ -24,7 +24,7 @@ var welcome_prompt_shown := false
 # On Android our surface can be torn down and its EGL/GL context recreated
 # whenever another activity covers us (most notably the Google Sign-In dialog).
 # Doing heavy GL work on the resume frame — compiling shaders, uploading
-# textures, baking offscreen SubViewports (see BackgroundManager / simon_wheel)
+# textures, baking offscreen SubViewports (see BackgroundManager / simon_wheel.gd)
 # — can dereference an invalid render target and segfault the GL thread on
 # Adreno. We track background state here and expose await_gl_stable() so callers
 # can defer such work until the context is proven good again.

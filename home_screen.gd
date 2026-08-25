@@ -27,7 +27,7 @@ var game_manager: Node
 
 const GOLD := Color(1.0, 0.85, 0.2)
 
-# Orbit orb colors - a soft reference to the Simon colors (premium, not neon).
+# Orbit orb colors - a soft reference to the button colors (premium, not neon).
 const ORB_COLORS := [
 	Color(1.00, 0.82, 0.29),  # yellow
 	Color(0.90, 0.28, 0.30),  # red
@@ -36,7 +36,7 @@ const ORB_COLORS := [
 	Color(0.23, 0.51, 0.96),  # blue
 ]
 
-# Simon accent colors, reused to tint the scattered landmarks.
+# Button accent colors, reused to tint the scattered landmarks.
 const ICON_BLUE := Color(0.23, 0.51, 0.96)
 const ICON_GREEN := Color(0.18, 0.78, 0.39)
 const ICON_PURPLE := Color(0.55, 0.36, 0.96)
@@ -1062,7 +1062,7 @@ func _draw_arena_colosseum(c: Control) -> void:
 # ---------------- the Arena's button pad ----------------
 #
 # What stands on the arena floor is a miniature LUMEO board: six INDIVIDUAL physical
-# buttons standing on a dark hexagonal deck. It replaced a four-colour Simon wheel,
+# buttons standing on a dark hexagonal deck. It replaced a four-colour disc wheel,
 # and the whole point of the swap is that nothing here is a slice of a disc — every
 # button is its own object, with its own bezel, its own seat and its own shadow, and
 # the deck underneath is neutral dark metal so the colour only ever lives in the caps.
@@ -3247,7 +3247,7 @@ func _stop_coin_loading_anim() -> void:
 #
 # Geometry note: the panel is left-aligned with the coin pill and RIGHT-aligned
 # with the hub pill, so it reads as the whole nav cluster unfolding rather than a
-# slab floating under one button. Its right edge stops short of the SIMON logo's
+# slab floating under one button. Its right edge stops short of the LUMEO logo's
 # "S" and its height stops short of the Shop card — the dropdown never covers
 # either, nor the central START orb.
 const HUB_PILL_W := 160.0

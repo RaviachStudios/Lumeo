@@ -127,7 +127,7 @@ var _platform_c := Vector2.ZERO
 var _duel_scale := 1.0
 var _spot: Node2D
 
-# ---- winged Simons that flap across the arena ----
+# ---- winged wheels that flap across the arena ----
 var _flyers: Array = []
 
 # ---- event envelopes ----
@@ -676,7 +676,7 @@ func _build_smoke() -> void:
 	_smoke.color_ramp = _fade_ramp(Color(SMOKE.r, SMOKE.g, SMOKE.b, 0.14))
 	add_child(_smoke)
 
-# --- the centrepiece: the inlaid Simon-wheel platform, redrawn each frame ---
+# --- the centrepiece: the inlaid wheel platform, redrawn each frame ---
 func _build_platform() -> void:
 	_platform_c = stage_center(_sz)
 	_duel_scale = stage_scale(_sz)

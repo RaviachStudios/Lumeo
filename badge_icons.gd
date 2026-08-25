@@ -140,7 +140,7 @@ static func _emblem(c: CanvasItem, art: String, ce: Vector2, r: float, ink: Colo
 # the gallery read as one designed collection rather than as a pile of clip-art.
 #
 # This replaced the four-colour wheel emblem (and the bare numeral rings), which
-# were the last Simon-shaped things in the badge art.
+# were the last wheel-shaped things in the badge art.
 #
 # `lit` is 0..1 — how brightly the button is switched on. An unlit button is not
 # black: it is the cap in its own colour, just without the halo, the hot channel or

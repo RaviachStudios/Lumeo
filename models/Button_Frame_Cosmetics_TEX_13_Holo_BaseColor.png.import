@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://b6jsyp2r4mr17"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "0201537433ba3ed7901ec1cb79e01e1e"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_13_Holo_BaseColor.png-7cdae3d4fde05a0f5b695cc918f3a5b7.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

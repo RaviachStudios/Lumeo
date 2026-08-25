@@ -53,18 +53,21 @@ const HARD_CAM_TARGET := Vector3(0.0, 0.35, 0.54)
 const HARD_CAM_DIST_START := 10.04               # the reference's own distance
 
 # The hexagon is wider than it is deep on screen and it has no flat back edge to
-# hang anything off, so it takes the frame it can get: full width, and a vertical
-# band that stops short of game.gd's status pill at the bottom (which sits 84 px
-# up from the bottom edge and is 52 px tall).
-# Height is what binds here (the hexagon is much wider than it is deep on screen),
-# so these numbers are really "the vertical band the board gets": 3.5% clear of the
-# top edge down to 13.5% clear of the bottom one, which lands the near button's
-# frame comfortably above the status pill and still leaves a margin at the top for
-# a device's own furniture. Nothing is ever cropped at any aspect — the fit is
-# re-run on every resize.
+# hang anything off, so it takes the frame it can get: full width, and the tallest
+# vertical band the HUD leaves it. Height is what binds here at every shipping
+# aspect, so these numbers are really "the vertical band the board gets": 3.7%
+# clear of the top edge — enough for a device's own furniture — down to 6.3% of
+# the bottom one, seated 3.7% below screen centre so the near buttons come up to
+# the player.
+#
+# Same band as Medium's, and for the same reason (see memory_game_ui.gd): the
+# bottom of it is spent on the row game.gd's status pill occupies, which the pill
+# now shares by sitting in front of the near button's black frame. It never covers
+# a coloured face — 75+ px clear at every aspect. Nothing is ever cropped at any
+# aspect either; the fit is re-run on every resize.
 const HARD_FIT_FILL_X := 0.96
-const HARD_FIT_FILL_Y := 0.83
-const HARD_FIT_CENTRE_Y := 0.45
+const HARD_FIT_FILL_Y := 0.90
+const HARD_FIT_CENTRE_Y := 0.487
 
 # ---------------------------------------------------------------------------
 # Round readout

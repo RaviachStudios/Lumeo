@@ -11,8 +11,8 @@ node_modules/
 .firebase/
 
 # Build artifacts (too large for GitHub; keep local only)
-Simon.apk
-Simon.aab
+Lumeo.apk
+Lumeo.aab
 *.apk
 *.aab
 

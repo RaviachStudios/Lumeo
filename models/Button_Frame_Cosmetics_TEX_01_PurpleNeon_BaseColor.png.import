@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://c4ejych8gsu3x"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "eb6721e1073b57c189eaff8744f350a3"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_01_PurpleNeon_BaseColor.png-2bdae9014448788ec80edda4587a246b.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

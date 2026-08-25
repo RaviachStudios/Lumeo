@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://mvipyvrh4go7"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "35456c1834328dc2863cbeddfb0cd919"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_15_Volcanic_Accent.png-8731a5f0a05e9e4f27fb4bbdfad88358.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

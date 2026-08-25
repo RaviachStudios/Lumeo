@@ -154,7 +154,7 @@ func _build_background() -> void:
 func _spawn_confetti() -> void:
 	# A new high score recolors the whole storm to a warm gold palette so the
 	# celebration reads as different from a regular run (which keeps the
-	# rainbow Simon-colored confetti).
+	# rainbow button-colored confetti).
 	var colors: Array
 	if _is_new_high:
 		colors = [

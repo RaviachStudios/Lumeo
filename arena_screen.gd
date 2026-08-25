@@ -96,7 +96,7 @@ func _ready() -> void:
 	_bg = ArenaUI.make_bg("hub")
 	add_child(_bg)
 
-	# Ambient flourish (spotlights / confetti / winged Simon fly-by) behind the UI.
+	# Ambient flourish (spotlights / confetti / winged-wheel fly-by) behind the UI.
 	_fx = ArenaFX.new()
 	add_child(_fx)
 	_fx.setup(get_viewport_rect().size)

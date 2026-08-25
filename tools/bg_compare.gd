@@ -17,7 +17,7 @@ extends Node
 const REF_DIR := "C:/Users/sahar/OneDrive/Documents/APP IDEAS/Simon/Themes/preview/"
 const REF_FILE := {
 	"bg_neongrid": "BG_NeonGrid.png", "bg_deepspace": "BG_DeepSpace.png",
-	"bg_aurora": "BG_Aurora.png", "bg_circuit": "BG_Circuit.png",
+	"bg_circuit": "BG_Circuit.png",
 	"bg_hexfloor": "BG_HexFloor.png", "bg_darkmetal": "BG_DarkMetal.png",
 	"bg_crystal": "BG_CrystalCave.png", "bg_volcanic": "BG_Volcanic.png",
 	"bg_arcade": "BG_ArcadeRoom.png",

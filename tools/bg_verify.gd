@@ -40,20 +40,33 @@ func _ready() -> void:
 
 func _catalog() -> void:
 	print("\n--- catalog ---")
-	_check(BackgroundScenes.CATALOG.size() == 9, "9 backgrounds in CATALOG")
-	_check(BackgroundScenes.ORDER.size() == 9, "9 in ORDER")
+	_check(BackgroundScenes.CATALOG.size() == 8, "8 backgrounds in CATALOG")
+	_check(BackgroundScenes.ORDER.size() == 8, "8 in ORDER")
+	# Aurora was deleted outright (a rendering bug), not detached: no catalog entry,
+	# no data tables, no .glb. Nothing anywhere may still refer to it.
+	_check(not BackgroundScenes.CATALOG.has("bg_aurora"), "bg_aurora is gone from CATALOG")
+	_check(not CoinsManager.THEMES.has("bg_aurora"), "bg_aurora is gone from THEMES")
 	for id in BackgroundScenes.ORDER:
 		_check(BackgroundScenes.CATALOG.has(id), "ORDER id %s is in CATALOG" % id)
 		_check(CoinsManager.THEMES.has(id), "%s in CoinsManager.THEMES" % id)
-		# All nine ship free, like every button-frame cosmetic. What matters is that
-		# they are PRICED — present in the catalog with a number the buy flow can
-		# read — not that the number is above zero.
+		# All eight sit on one 100..800 ladder. The buy flow only needs a number it can
+		# read, but the ladder itself is a design decision worth pinning: nothing may
+		# drift free, and nothing may creep past the top of the band.
 		_check(CoinsManager.THEMES[id].has("price"), "%s has a price" % id)
-		_check(CoinsManager.theme_price(id) == 0, "%s is free" % id)
+		var price := CoinsManager.theme_price(id)
+		_check(price >= 100 and price <= 800, "%s is priced in 100..800 (%d)" % [id, price])
 		_check(String(CoinsManager.THEMES[id]["category"]) == "themes",
 			"%s is in the themes category" % id)
 		_check(ResourceLoader.exists(String(BackgroundScenes.CATALOG[id]["glb"])),
 			"%s glb exists" % id)
+	# ORDER is the shop grid's render order and is documented as cheapest-first, so a
+	# re-price that forgets to re-sort must fail here rather than in front of a player.
+	var prices: Array[int] = []
+	for id in BackgroundScenes.ORDER:
+		prices.append(CoinsManager.theme_price(String(id)))
+	var sorted_prices := prices.duplicate()
+	sorted_prices.sort()
+	_check(prices == sorted_prices, "ORDER is cheapest-first (%s)" % str(prices))
 	# Names must be unique across the whole tab or the buy dialog is ambiguous.
 	var names := {}
 	for tid in CoinsManager.THEMES:
@@ -64,7 +77,9 @@ func _catalog() -> void:
 	_check(CoinsManager.theme_price("deepspace") == 1600, "existing Deep Space still 1600")
 	_check(CoinsManager.theme_price("midnight") == 80, "existing Midnight still 80")
 	_check(CoinsManager.theme_price("reef") == 1200, "existing Coral Reef still 1200")
-	_check(CoinsManager.THEMES.size() == 29, "20 old themes + 9 new = 29")
+	# The old shader themes stay in the CATALOG even though the shop no longer lists
+	# them — detaching a theme must never strip it from a wallet that already owns it.
+	_check(CoinsManager.THEMES.size() == 28, "20 old themes + 8 new = 28")
 
 func _shop() -> void:
 	print("\n--- shop ---")
@@ -75,11 +90,19 @@ func _shop() -> void:
 	_check(not items.is_empty(), "themes category has items")
 	for id in BackgroundScenes.ORDER:
 		_check(items.has(id), "%s listed in the shop grid" % id)
-	# Every old id is still listed, in its old order.
-	var old := ["default", "midnight", "indigo", "sunset", "crimson", "slate",
+	# The shop now sells ONLY the modelled backgrounds. "default" leads the list and is
+	# the deliberate exception: it is the only way back for a player who still has a
+	# detached theme equipped.
+	_check(items == (["default"] as Array) + (BackgroundScenes.ORDER as Array),
+		"the grid is Default followed by the eight modelled backgrounds")
+	# Every older shader theme is DETACHED from the grid but still in the catalog, so
+	# an existing owner keeps it. Neither half of that may quietly change.
+	var detached := ["midnight", "indigo", "sunset", "crimson", "slate",
 		"skybound", "forest", "desert", "clouds", "speedway", "kitty", "rainbow",
 		"neon", "castle", "inferno", "fairies", "aurora", "reef", "deepspace"]
-	_check(items.slice(0, old.size()) == old, "the 20 existing themes are unchanged and first")
+	for id in detached:
+		_check(not items.has(id), "detached theme %s is off the grid" % id)
+		_check(CoinsManager.THEMES.has(id), "detached theme %s is still in THEMES" % id)
 	for id in items:
 		_check(CoinsManager.THEMES.has(String(id)), "shop item %s exists in THEMES" % id)
 	# BackgroundManager must claim every one of them, or gameplay draws its own
@@ -194,18 +217,25 @@ func _purchase() -> void:
 	CoinsManager._apply_doc({"coins": 0, "owned_themes": {}, "selected_theme": "default"})
 
 	var id := "bg_neongrid"
-	# Free, but still bought: the id only enters the wallet by going through
-	# purchase_theme, which is what makes ownership and the equip persist.
-	_check(not CoinsManager.owns(id), "starts unowned even though it is free")
-	_check(CoinsManager.can_afford(id), "affordable at a zero balance")
-	_check(CoinsManager.purchase_theme(id), "buy succeeds with no coins")
+	var cost := CoinsManager.theme_price(id)        # 300 on the current ladder
+	_check(cost > 0, "%s carries a real price (%d)" % [id, cost])
+	# Priced, so an empty wallet must be refused outright — and refused WITHOUT
+	# quietly entering owned_themes, which would hand it over for nothing.
+	_check(not CoinsManager.owns(id), "starts unowned")
+	_check(not CoinsManager.can_afford(id), "unaffordable at a zero balance")
+	_check(not CoinsManager.purchase_theme(id), "buy is refused with no coins")
+	_check(not CoinsManager.owns(id), "the refused buy granted nothing")
+
+	# Funded to the exact price: it buys once, charges in full, and refuses a re-buy.
+	CoinsManager.balance = cost
+	_check(CoinsManager.can_afford(id), "affordable once funded to the exact price")
+	_check(CoinsManager.purchase_theme(id), "buy succeeds when funded")
 	_check(CoinsManager.owns(id), "owned after buying")
-	_check(CoinsManager.balance == 0, "a free buy charged nothing (%d)" % CoinsManager.balance)
+	_check(CoinsManager.balance == 0, "the price was deducted in full (%d left)" % CoinsManager.balance)
 	_check(not CoinsManager.purchase_theme(id), "buying it twice is refused")
 	_check(CoinsManager.balance == 0, "the refused re-buy charged nothing")
 
-	# A priced theme must still behave exactly as it did — free items alongside it
-	# must not have made the wallet permissive.
+	# A far dearer legacy theme must still behave exactly as it did.
 	_check(not CoinsManager.can_afford("deepspace"), "a 1600-coin theme is still unaffordable at 0")
 	_check(not CoinsManager.purchase_theme("deepspace"), "and still cannot be bought")
 	CoinsManager.balance = 1600
@@ -215,7 +245,7 @@ func _purchase() -> void:
 	_check(CoinsManager.select_theme(id), "equip succeeds")
 	_check(CoinsManager.selected_theme == id, "it is the equipped theme")
 	_check(CoinsManager.is_simon_manual(), "equipping a theme drops any skin")
-	_check(not CoinsManager.select_theme("bg_aurora"), "equipping an unowned one is refused")
+	_check(not CoinsManager.select_theme("bg_crystal"), "equipping an unowned one is refused")
 	_check(CoinsManager.selected_theme == id, "the refused equip changed nothing")
 
 	# It must reach the disk in the shape the loader reads back.

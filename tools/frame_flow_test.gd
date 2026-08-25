@@ -31,25 +31,26 @@ func _ready() -> void:
 	get_tree().quit(_fails)
 
 # ---------------------------------------------------------------------------
-# The catalog: exactly DEFAULT + the fifteen, correct ids, correct names, free.
+# The catalog: exactly DEFAULT + the fifteen, correct ids, correct names, correct
+# prices — and in the shop's cheapest-first display order, which is what ORDER means.
 # ---------------------------------------------------------------------------
 const EXPECTED := [
-	["default", "Default"],
-	["purple_neon", "Purple Neon"],
-	["cyan_neon", "Cyan Neon"],
-	["magenta_neon", "Magenta Neon"],
-	["electric_blue", "Electric Blue"],
-	["emerald_neon", "Emerald Neon"],
-	["golden_chrome", "Golden Chrome"],
-	["rose_gold", "Rose Gold"],
-	["obsidian_chrome", "Obsidian Chrome"],
-	["zebra_glow", "Zebra Glow"],
-	["tiger_glow", "Tiger Glow"],
-	["aurora", "Aurora"],
-	["circuit", "Circuit"],
-	["holographic", "Holographic"],
-	["arctic_glow", "Arctic Glow"],
-	["volcanic_glow", "Volcanic Glow"],
+	["default", "Default", 0],
+	["purple_neon", "Purple Neon", 100],
+	["cyan_neon", "Cyan Neon", 100],
+	["magenta_neon", "Magenta Neon", 100],
+	["electric_blue", "Electric Blue", 150],
+	["emerald_neon", "Emerald Neon", 150],
+	["zebra_glow", "Zebra Glow", 250],
+	["tiger_glow", "Tiger Glow", 250],
+	["rose_gold", "Rose Gold", 350],
+	["golden_chrome", "Golden Chrome", 400],
+	["obsidian_chrome", "Obsidian Chrome", 400],
+	["arctic_glow", "Arctic Glow", 500],
+	["circuit", "Circuit", 550],
+	["aurora", "Aurora", 600],
+	["holographic", "Holographic", 700],
+	["volcanic_glow", "Volcanic Glow", 800],
 ]
 
 func _catalog() -> void:
@@ -58,25 +59,43 @@ func _catalog() -> void:
 		% ButtonFrames.ORDER.size())
 	var ids_ok := true
 	var names_ok := true
-	var free_ok := true
+	var prices_ok := true
+	var band_ok := true
 	var meshes_ok := true
 	for i in EXPECTED.size():
 		var want_id: String = EXPECTED[i][0]
 		var want_name: String = EXPECTED[i][1]
+		var want_price: int = EXPECTED[i][2]
 		if i >= ButtonFrames.ORDER.size() or ButtonFrames.ORDER[i] != want_id:
 			ids_ok = false
 			continue
 		if ButtonFrames.frame_name(want_id) != want_name:
 			names_ok = false
-		if ButtonFrames.frame_price(want_id) != 0:
-			free_ok = false
+		if ButtonFrames.frame_price(want_id) != want_price:
+			prices_ok = false
+		# DEFAULT is the stock bezel and must stay free — it is the only way back after
+		# equipping a bought one. Every cosmetic sits on the 100..800 ladder.
+		var price := ButtonFrames.frame_price(want_id)
+		if want_id == ButtonFrames.DEFAULT_ID:
+			if price != 0: band_ok = false
+		elif price < 100 or price > 800:
+			band_ok = false
 		# Everything but DEFAULT must point at a real object in the library.
 		if (want_id != "default") != ButtonFrames.is_cosmetic(want_id):
 			meshes_ok = false
-	_check(ids_ok, "ids are the stable ones, in order")
+	_check(ids_ok, "ids are the stable ones, in cheapest-first order")
 	_check(names_ok, "display names are correct")
-	_check(free_ok, "every frame costs 0 coins")
+	_check(prices_ok, "every frame carries its expected price")
+	_check(band_ok, "DEFAULT is free and every cosmetic is priced in 100..800")
 	_check(meshes_ok, "all 15 (and only those 15) carry a library mesh")
+	# ORDER is documented as cheapest-first; a re-price that forgets to re-sort must
+	# fail here rather than in front of a player.
+	var ladder: Array[int] = []
+	for id: String in ButtonFrames.ORDER:
+		ladder.append(ButtonFrames.frame_price(id))
+	var sorted_ladder := ladder.duplicate()
+	sorted_ladder.sort()
+	_check(ladder == sorted_ladder, "ORDER is cheapest-first (%s)" % str(ladder))
 	# The storefront lists the sixteen buyable frames and nothing else. The three
 	# skin frames are catalog entries with no shop presence at all: they are worn
 	# because a skin is active, never because they were bought.
@@ -119,16 +138,31 @@ func _catalog() -> void:
 # Buying and equipping.
 # ---------------------------------------------------------------------------
 func _purchase() -> void:
-	print("--- free purchase ---")
+	print("--- purchase ---")
+	var cost := ButtonFrames.frame_price("tiger_glow")     # 250 on the current ladder
 	CoinsManager.balance = 0
 	var equips := [0]
 	CoinsManager.frames_changed.connect(func() -> void: equips[0] += 1)
-	_check(CoinsManager.purchase_frame("tiger_glow"), "buys with a zero balance")
-	_check(CoinsManager.balance == 0, "no coins deducted")
+	# Priced, so an empty wallet is refused — and refused without granting the frame.
+	_check(cost > 0, "tiger_glow carries a real price (%d)" % cost)
+	_check(not CoinsManager.purchase_frame("tiger_glow"), "refused with a zero balance")
+	_check(not CoinsManager.owns_frame("tiger_glow"), "the refused buy granted nothing")
+
+	CoinsManager.balance = cost
+	_check(CoinsManager.purchase_frame("tiger_glow"), "buys once funded")
+	_check(CoinsManager.balance == 0, "the price was deducted in full (%d left)" % CoinsManager.balance)
 	_check(CoinsManager.owns_frame("tiger_glow"), "owned after purchase")
 	_check(not CoinsManager.purchase_frame("tiger_glow"), "cannot re-buy what is owned")
 
-	# Every one of the fifteen has to be buyable, not just the one above.
+	# Every one of the fifteen has to be buyable, not just the one above — and the
+	# wallet must land at exactly zero, which only holds if each one charged its own
+	# price and nothing double-charged.
+	var total := 0
+	for id: String in ButtonFrames.ORDER:
+		if id == ButtonFrames.DEFAULT_ID or CoinsManager.owns_frame(id):
+			continue
+		total += ButtonFrames.frame_price(id)
+	CoinsManager.balance = total
 	var all_bought := true
 	for id: String in ButtonFrames.ORDER:
 		if id == ButtonFrames.DEFAULT_ID or CoinsManager.owns_frame(id):
@@ -136,10 +170,11 @@ func _purchase() -> void:
 		if not CoinsManager.purchase_frame(id):
 			all_bought = false
 	_check(all_bought and CoinsManager.balance == 0,
-		"all 15 can be bought, and the wallet never moves")
+		"the rest can be bought, and the wallet lands at 0 (%d)" % CoinsManager.balance)
 
 	print("--- equip is exclusive ---")
 	CoinsManager._apply_doc({})                       # back to a fresh wallet
+	CoinsManager.balance = 10000                      # funded, so the flow below is about equipping
 	CoinsManager.purchase_frame("tiger_glow")
 	_check(CoinsManager.select_frame("tiger_glow"), "equips an owned frame")
 	_check(CoinsManager.selected_frame == "tiger_glow", "tiger is the equipped one")

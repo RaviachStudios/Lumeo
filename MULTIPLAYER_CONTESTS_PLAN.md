@@ -1,6 +1,6 @@
 # Multiplayer Contests — Implementation Plan
 
-A plan to add **head-to-head contests** to Simon: a player creates a contest (choosing
+A plan to add **head-to-head contests** to Lumeo: a player creates a contest (choosing
 a **type** and a **difficulty**), shares its **contest ID** with friends, they join,
 the creator starts it, everyone plays **inside the contest**, and at the end a large
 **podium + full standings table** is shown. Contests are backed by Firestore and are
@@ -454,7 +454,7 @@ reuse `_show_sign_in_required_popup`). A small **badge** shows count of active c
 
 ### 8.5 Playing a contest game
 Reuse `game.gd`. In contest context:
-- Keep the coin HUD and normal Simon gameplay untouched (contest games still earn coins
+- Keep the coin HUD and normal gameplay untouched (contest games still earn coins
   + update leaderboards — requirement).
 - Relabel **Quit → Forfeit game** with a confirm ("This counts as your game / your turn
   ends"); for `one_game`, forfeiting = a submitted score of your current progress (or 0

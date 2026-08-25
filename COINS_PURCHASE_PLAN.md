@@ -63,10 +63,10 @@ a tampered client cannot change how many coins a SKU grants.
 ## Phase 1 — Install the billing plugin
 
 1. Download `GodotGooglePlayBilling` for Godot 4.6 and copy it into `addons/`
-   (same place as `GodotFirebaseAndroid`, `admob`).
+   (same place as `GodotFirebaseAndroid`, `GodotUnityAds`).
 2. Enable it in Project → Project Settings → Plugins.
 3. Confirm it shows up as an Android plugin in `export_presets.cfg` (alongside
-   the existing AdMob/Firebase entries).
+   the existing Unity Ads/Firebase entries).
 
 Plugin API used (exact names):
 - Methods: `start_connection()`, `is_ready()`, `query_product_details(ids, type)`,
@@ -263,7 +263,7 @@ guard against concurrent loads.)
    ```
    (Consider placing it first so it's the landing tab.)
 2. In `_render_category`, branch on `"coins"` to build a bespoke panel (like the
-   `simon`/`skins` panels) — a grid of pack cards. Reuse `_make_big_coin` and the
+   `frames`/`skins` panels) — a grid of pack cards. Reuse `_make_big_coin` and the
    card styling already in the file.
 3. Each pack card shows: coin amount, optional "BEST VALUE" tag, and a buy button
    whose label is the **localized price string** from

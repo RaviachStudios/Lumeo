@@ -2,8 +2,8 @@ extends CanvasLayer
 
 # The badge-earned GESTURE. A compact card slides in from the LEFT edge of the
 # screen, holds briefly, then slides back out. Deliberately non-intrusive:
-#   • LEFT side only — never covers the centred Simon wheel during a game.
-#   • MUTED — plays no sound, so it never competes with the Simon tones.
+#   • LEFT side only — never covers the centred wheel during a game.
+#   • MUTED — plays no sound, so it never competes with the game tones.
 #   • Queued — multiple awards earned at once show one after another.
 # Spawned once by BadgeManager and parented to the scene-tree root, so it floats
 # over whatever screen is active.

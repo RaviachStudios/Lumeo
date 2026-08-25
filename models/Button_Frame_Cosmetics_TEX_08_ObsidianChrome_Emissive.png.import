@@ -3,9 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://dcbsa40ks5yly"
-path="res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.ctex"
+path.s3tc="res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.s3tc.ctex"
+path.etc2="res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "40741cb87a414925f2414b908ccec345"
@@ -14,11 +16,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png"
-dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.ctex"]
+dest_files=["res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.s3tc.ctex", "res://.godot/imported/Button_Frame_Cosmetics_TEX_08_ObsidianChrome_Emissive.png-f6b426879959fb19c8eff344f938d1fd.etc2.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0
@@ -40,4 +42,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0
