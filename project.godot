@@ -16,7 +16,7 @@ run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.6", "Mobile")
 boot_splash/bg_color=Color(0.019607844, 0.078431375, 0.21960784, 1)
 boot_splash/show_image=false
-config/icon="uid://bx06f01d0ndvj"
+config/icon="res://icon/icon_512.png"
 
 [autoload]
 

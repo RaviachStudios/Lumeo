@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://to133ceilgx4"
-path="res://.godot/imported/Lumeo_Icon_192.png-577a7e32f44827272c1a176146822d85.ctex"
+uid="uid://bmkiti5xbp2ml"
+path="res://.godot/imported/icon_432_background.png-c65497951100cc5ad3e9e5af4800635d.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://Lumeo_Icon_192.png"
-dest_files=["res://.godot/imported/Lumeo_Icon_192.png-577a7e32f44827272c1a176146822d85.ctex"]
+source_file="res://icon/icon_432_background.png"
+dest_files=["res://.godot/imported/icon_432_background.png-c65497951100cc5ad3e9e5af4800635d.ctex"]
 
 [params]
 
