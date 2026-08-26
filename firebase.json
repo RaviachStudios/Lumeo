@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "lumeo-game",
     "public": "public",
     "ignore": [
       "firebase.json",
