@@ -21,3 +21,11 @@ plugin_unityads/build/
 plugin_unityads/.gradle/
 plugin_unityads/local.properties
 plugin_unityads/libs/*.aar
+
+# Trademark remediation working documents (the Hasbro memo, the remediation
+# brief and the complaint log). They now live outside the repo, in
+# Documents/Simon — this repo is public, so keep them out of it if they ever
+# get dropped back in here.
+TRADEMARK_MEMO.html
+LUMEO_REBRAND_BRIEF.md
+❯ Hi Developers at Raviach - claude session.txt
