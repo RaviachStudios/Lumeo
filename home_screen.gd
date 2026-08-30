@@ -18,6 +18,7 @@ extends Control
 const DailyClaimPopup := preload("res://daily_claim_popup.gd")
 const DailyTasksPopup := preload("res://daily_tasks_popup.gd")
 const DailyRankRewardPopup := preload("res://daily_rank_reward_popup.gd")
+const RebrandWelcomePopup := preload("res://rebrand_welcome_popup.gd")
 const ProfilePopup := preload("res://profile_screen.gd")
 const CoinsPurchasePopup := preload("res://coins_purchase_popup.gd")
 const HomeTutorial := preload("res://home_tutorial.gd")
@@ -222,10 +223,10 @@ func _ready() -> void:
 		# If the wallet hasn't finished loading yet, defer both until it has.
 		if CoinsManager.is_loaded():
 			CoinsManager.register_login()
-			CoinsManager.consume_pending_daily_rewards()
+			_surface_login_popups()
 		else:
 			CoinsManager.loaded.connect(CoinsManager.register_login, CONNECT_ONE_SHOT)
-			CoinsManager.loaded.connect(CoinsManager.consume_pending_daily_rewards, CONNECT_ONE_SHOT)
+			CoinsManager.loaded.connect(_surface_login_popups, CONNECT_ONE_SHOT)
 
 	_layout()
 	get_viewport().size_changed.connect(_layout)
@@ -3894,6 +3895,28 @@ func _draw_tasks_icon(c: Control) -> void:
 				Color(0.12, 0.70, 0.40), maxf(1.2, 1.7 * s), true)
 
 # Yesterday's leaderboard-standing reward just landed — show the summary popup.
+# The login modals, in the order a player should meet them. The rebrand welcome
+# is a once-in-the-game's-life event, so it goes first and everything else waits
+# behind it — two celebratory receipts stacked on top of each other would read as
+# one confusing screen.
+func _surface_login_popups() -> void:
+	if not is_inside_tree():
+		return
+	if CoinsManager.has_unseen_rebrand_grant():
+		_show_rebrand_welcome()
+		return
+	CoinsManager.consume_pending_daily_rewards()
+
+# The one-time rebrand refund receipt. The coins are already in the wallet (a
+# one-off migration credited them); this is purely the celebration, and closing
+# it by any route is what marks it seen. See rebrand_welcome_popup.gd.
+func _show_rebrand_welcome() -> void:
+	var popup := RebrandWelcomePopup.new()
+	popup.receipt = CoinsManager.rebrand_receipt.duplicate(true)
+	# Yesterday's rankings, if there are any, take their turn once this closes.
+	popup.tree_exited.connect(CoinsManager.consume_pending_daily_rewards)
+	add_child(popup)
+
 func _on_daily_rank_reward(total: int, results: Array) -> void:
 	if not is_inside_tree():
 		return

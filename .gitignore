@@ -29,3 +29,8 @@ plugin_unityads/libs/*.aar
 TRADEMARK_MEMO.html
 LUMEO_REBRAND_BRIEF.md
 ❯ Hi Developers at Raviach - claude session.txt
+
+# Firestore exports and the rebrand migration's plan/backup files
+# (tools/rebrand_migrate.js). Real player data — names, balances, inventories —
+# so it stays on the machine that ran the export, never in the repo.
+firestore_snapshot/

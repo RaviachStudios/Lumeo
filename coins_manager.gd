@@ -380,6 +380,11 @@ var equipped_simon: Dictionary = _default_equipped_simon()   # category -> color
 var owned_simon: Dictionary = _default_owned_simon()         # category -> Array[String]
 var selected_skin: String = ""           # equipped complete skin ("" = none yet)
 var owned_skins: Array[String] = []      # purchased complete skins (none yet)
+# The one-time rebrand receipt written by tools/rebrand_migrate.js: what was
+# refunded, the early-player gift, and (once seen) `shown`. Empty for every
+# account created after that migration ran, which is exactly what makes the
+# welcome popup fire for old players only — see has_unseen_rebrand_grant.
+var rebrand_receipt: Dictionary = {}
 var last_claim_date: String = ""         # "YYYY-MM-DD" UTC; "" = never claimed
 var streak_days: int = 0                 # consecutive days the user has opened the
 										  # app (1 on the first day, resets to 1 if
@@ -703,6 +708,33 @@ func set_remove_ads_owned(sku: String = "") -> void:
 		fields["purchase_history"] = purchase_history
 	remove_ads_changed.emit()
 	_save_partial(fields)
+
+# --- rebrand welcome receipt --------------------------------------------------
+
+# The wallet-doc field holding the rebrand refund receipt (see
+# rebrand_welcome_popup.gd and tools/rebrand_migrate.js).
+const REBRAND_FIELD := "rebrand_v1"
+
+# True while this account has a rebrand receipt it has never been shown. Both
+# halves of the popup's gate live in the doc, never on the device: an account
+# created after the migration has no receipt at all (so it can never qualify),
+# and `shown` is what stops the popup replaying after a reinstall or on a second
+# device. The coins were credited by the migration itself — this only gates the
+# celebration.
+func has_unseen_rebrand_grant() -> bool:
+	return not rebrand_receipt.is_empty() and not bool(rebrand_receipt.get("shown", false))
+
+# Mark the receipt as seen. The whole map is rewritten rather than just the flag
+# because a merge write replaces a map field wholesale — the other keys have to
+# ride along or they'd be dropped.
+func mark_rebrand_shown() -> void:
+	if not FirebaseManager.is_signed_in() or rebrand_receipt.is_empty():
+		return
+	if bool(rebrand_receipt.get("shown", false)):
+		return
+	rebrand_receipt["shown"] = true
+	raw_user_doc[REBRAND_FIELD] = rebrand_receipt.duplicate(true)
+	_save_partial({REBRAND_FIELD: rebrand_receipt.duplicate(true)})
 
 # Record that this account has seen the first-run home tour. Idempotent; a no-op
 # for guests (their "seen" flag is the local file, not the wallet doc).
@@ -1127,6 +1159,8 @@ func _emit_all() -> void:
 func _apply_doc(doc: Dictionary) -> void:
 	raw_user_doc = doc.duplicate(true)
 	balance = int(doc.get("coins", 0))
+	var rb: Variant = doc.get(REBRAND_FIELD, {})
+	rebrand_receipt = (rb as Dictionary).duplicate(true) if rb is Dictionary else {}
 	# "default" is always owned even if the doc somehow omits it.
 	owned_themes = [DEFAULT_THEME]
 	# owned_themes is stored as a map ({theme_id: true}) — see
