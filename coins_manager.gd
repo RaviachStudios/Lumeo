@@ -424,6 +424,12 @@ var tutorial_seen: bool = false
 # --- in-game session ---
 var session_earned: int = 0              # cleared in start_game_session()
 
+# Whether the game-over rewarded ad has already multiplied THIS session's
+# earnings. One boost per run: the offer is made once on the game-over screen,
+# and this is what stops a second show (a re-entered screen, a double-tap that
+# raced the first callback) from paying twice for one ad.
+var session_multiplied: bool = false
+
 func _ready() -> void:
 	FirebaseManager.signed_in.connect(_on_signed_in)
 	FirebaseManager.signed_out.connect(_on_signed_out)
@@ -440,6 +446,7 @@ func is_loaded() -> bool:
 
 func start_game_session() -> void:
 	session_earned = 0
+	session_multiplied = false
 	session_earned_changed.emit(session_earned)
 
 # Award coins for completing a level on this difficulty. Returns the amount
@@ -467,6 +474,34 @@ func commit_session() -> void:
 	earned_coins += session_earned
 	balance_changed.emit(balance)
 	_save_partial({"coins": balance, "earned_coins": earned_coins})
+
+# Pay the bonus for watching the game-over rewarded ad: the run's earnings, times
+# `multiplier`, instead of times one. commit_session() has already banked the 1x,
+# so what is credited here is the DIFFERENCE — (multiplier - 1) x session_earned.
+# Returns the extra coins credited, for the "+ N" animation; 0 if there was
+# nothing to multiply.
+#
+# WHY the guard is a flag on the session and not on the caller: the game-over
+# screen can be rebuilt (rotation, a resumed activity behind the ad), and the
+# reward callback arrives asynchronously from the ad SDK. A caller-side "I already
+# asked" bool would not survive either. This one is cleared only by
+# start_game_session(), so it is exactly as long-lived as the run it protects.
+#
+# Like every other credit path this writes the new absolute balance rather than a
+# delta, so a failed save leaves the player un-paid rather than double-paid, and
+# the worst case is one lost bonus rather than a corrupted wallet.
+func credit_session_multiplier(multiplier: int) -> int:
+	if multiplier <= 1 or session_multiplied:
+		return 0
+	if session_earned <= 0 or not FirebaseManager.is_signed_in():
+		return 0
+	var bonus := session_earned * (multiplier - 1)
+	session_multiplied = true
+	balance += bonus
+	earned_coins += bonus
+	balance_changed.emit(balance)
+	_save_partial({"coins": balance, "earned_coins": earned_coins})
+	return bonus
 
 # --- login-streak + daily-claim API ---
 

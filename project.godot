@@ -23,7 +23,7 @@ config/icon="res://icon/icon_512.png"
 GameState="*res://game_state.gd"
 AudioManager="*res://audio_manager.gd"
 ConsentManager="*res://consent_manager.gd"
-AdManager="*res://ad_manager_unity.gd"
+AdManager="*res://ad_manager_levelplay.gd"
 Firebase="*uid://byskkw8tp58n0"
 FirebaseManager="*res://firebase_manager.gd"
 LeaderboardManager="*res://leaderboard_manager.gd"
@@ -44,7 +44,7 @@ window/handheld/orientation="landscape"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/GodotFirebaseAndroid/plugin.cfg", "res://addons/GodotGooglePlayBilling/plugin.cfg", "res://addons/GodotUnityAds/plugin.cfg")
+enabled=PackedStringArray("res://addons/GodotFirebaseAndroid/plugin.cfg", "res://addons/GodotGooglePlayBilling/plugin.cfg", "res://addons/GodotLevelPlay/plugin.cfg")
 
 [input_devices]
 

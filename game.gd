@@ -1000,9 +1000,14 @@ func _game_over() -> void:
 	_state = "gameover"
 	_disarm_press_timer()
 	# Bank the coins earned this session into the persistent wallet. session_earned
-	# survives the commit, so the task board can count what the run paid out.
+	# survives the commit, so the task board can count what the run paid out — and
+	# so the game-over screen can offer to multiply it (see game_over.gd).
 	CoinsManager.commit_session()
 	DailyTasks.note_coins_earned(CoinsManager.session_earned)
+	# Advance the interstitial's per-N-games counter. Counted here rather than at
+	# the ad itself so quitting to home mid-run doesn't move the player toward the
+	# next ad — only games actually played do.
+	AdManager.note_game_finished()
 	AudioManager.play_lose_sound()
 	_set_status("Game Over!")
 	# Arena race: record this attempt (rounds cleared = level - 1) on the room and
@@ -1040,6 +1045,20 @@ func _game_over() -> void:
 		game_manager.show_contest_detail(cid)
 		return
 	await get_tree().create_timer(1.8).timeout
+	if not is_inside_tree():
+		return
+	# The game-over interstitial, between the round ending and the results screen
+	# appearing. Here rather than on the game-over screen itself so the ad lands in
+	# the gap the player already reads as "the run is over", and the results are
+	# the first thing they see when it closes — not something an ad interrupts.
+	#
+	# Always awaited: show_interstitial() emits interstitial_finished even when
+	# policy or fill mean nothing is shown (the common case — see the caps in
+	# ad_manager_levelplay.gd), so this costs a frame when there is no ad.
+	AdManager.show_interstitial()
+	await AdManager.interstitial_finished
+	if not is_inside_tree():
+		return
 	game_manager.show_game_over(level - 1)
 
 func _update_hud() -> void:

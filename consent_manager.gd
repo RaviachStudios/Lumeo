@@ -7,14 +7,19 @@ extends Node
 # SDK used to do this for us; it can't any more, because UMP serves the consent
 # message off an AdMob Application ID and ours belongs to a disabled account.
 #
-# Unity ships no consent UI at all — it only ACCEPTS an answer via its Developer
-# Consent API. So this file is the missing half: it decides whether to ask, asks,
-# stores the answer, and hands it to the SDK before the first ad request.
+# LevelPlay ships no consent UI either — it only ACCEPTS an answer, via
+# LevelPlay.setConsent plus the `do_not_sell` metadata flag. So this file is the
+# missing half: it decides whether to ask, asks, stores the answer, and hands it
+# to the SDK before the first ad request.
+#
+# Under mediation this matters MORE than it did with a single network, not less:
+# the answer is forwarded to every network in the auction, so one missing consent
+# is a missing consent at a dozen ad vendors at once.
 #
 # Three rules are load-bearing. Break any of them and the answer stops being a
 # lawful basis, whatever the dialog says:
 #
-#   1. Ask BEFORE the ad SDK initializes. See ad_manager_unity.gd _ready().
+#   1. Ask BEFORE the ad SDK initializes. See ad_manager_levelplay.gd _ready().
 #   2. Refusing must be exactly as easy as accepting — same size, same weight,
 #      same screen, no pre-ticked boxes. See consent_dialog.gd.
 #   3. The player can change their mind later. Wire open_settings() to a Privacy
@@ -28,7 +33,11 @@ const SAVE_PATH := "user://ad_consent.cfg"
 # Bump this whenever what we disclose materially changes — a new ad vendor, a new
 # purpose. Every stored answer below the current version is treated as unanswered
 # and the player is asked again, because they never agreed to the new thing.
-const DISCLOSURE_VERSION := 1
+# v2: the ad partner changed from Unity Ads alone to Unity LevelPlay mediation,
+# which forwards the answer to every network in its auction. That is a materially
+# wider set of recipients than anyone consented to under v1, so every stored v1
+# answer is treated as unanswered and the player is asked again.
+const DISCLOSURE_VERSION := 2
 
 # EU 27 + the three non-EU EEA states + the UK. Consent is legally required for
 # users here; elsewhere it is not, so we don't spend first-launch goodwill asking.
@@ -65,7 +74,7 @@ func has_answered() -> bool:
 	return _answered
 
 
-# The one call ad_manager_unity.gd makes at startup. Resolves consent — from
+# The one call ad_manager_levelplay.gd makes at startup. Resolves consent — from
 # storage, from the region check, or by asking — then reports the result exactly
 # once through `on_done`.
 #
@@ -118,8 +127,8 @@ func _consent_required() -> bool:
 
 
 func _country_code() -> String:
-	if Engine.has_singleton("GodotUnityAds"):
-		var plugin := Engine.get_singleton("GodotUnityAds")
+	if Engine.has_singleton("GodotLevelPlay"):
+		var plugin := Engine.get_singleton("GodotLevelPlay")
 		var code: String = plugin.getCountryCode()
 		if not code.is_empty():
 			return code.to_upper()
@@ -162,8 +171,8 @@ func _finish(granted: bool) -> void:
 
 
 func _apply_to_sdk(granted: bool) -> void:
-	if Engine.has_singleton("GodotUnityAds"):
-		Engine.get_singleton("GodotUnityAds").setConsent(granted)
+	if Engine.has_singleton("GodotLevelPlay"):
+		Engine.get_singleton("GodotLevelPlay").setConsent(granted)
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
