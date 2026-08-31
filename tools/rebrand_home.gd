@@ -21,12 +21,17 @@ func _ready() -> void:
 	await get_tree().process_frame
 	while not CoinsManager.is_loaded():
 		await get_tree().process_frame
-	CoinsManager._save_partial({CoinsManager.REBRAND_FIELD: {
+	# Seeded straight into the sim store: the receipt carries an array, which only
+	# the server may write — a client _save_partial of it is refused, on device and
+	# now in the editor too (see CoinsManager._no_arrays).
+	var doc: Dictionary = CoinsManager._sim_db.get(FirebaseManager.uid, {})
+	doc[CoinsManager.REBRAND_FIELD] = {
 		"at": "2026-08-30T19:15:19Z", "refund": 7870, "gift": 2000,
 		"items": [
 			{"key": "wheel",  "label": "Wheel cosmetics", "n": 38, "coins": 5690},
 			{"key": "themes", "label": "Old backgrounds", "n": 10, "coins": 2180},
-		]}})
+		]}
+	CoinsManager._sim_db[FirebaseManager.uid] = doc
 	CoinsManager._loaded_for_uid = ""
 	CoinsManager._load_user()
 	await get_tree().process_frame

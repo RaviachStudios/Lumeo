@@ -15,9 +15,11 @@
 // The receipt is ALSO the popup's gate, and both halves of that gate live here:
 //   * eligibility — only docs that exist when this runs get the field, so an
 //     account created afterwards can never see the popup. No date check.
-//   * once-only  — the client opens the popup when `rebrand_v1` exists and
-//     `rebrand_v1.shown` is absent, and Collect sets shown=true. Server-side
-//     state, so a reinstall or a second device cannot replay it.
+//   * once-only  — the client opens the popup when `rebrand_v1` exists and the
+//     separate `rebrand_v1_shown` flag is not set; Collect sets that flag.
+//     A scalar and not a key inside the receipt on purpose: the receipt holds
+//     `items`, an array, and the Android SDK refuses a client write carrying
+//     one — which is exactly how 1.0.56 shipped a popup that replayed forever.
 // The coins are already banked by the time the popup opens; Collect is a
 // celebration, not a transaction.
 //

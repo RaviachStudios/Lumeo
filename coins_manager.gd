@@ -712,29 +712,38 @@ func set_remove_ads_owned(sku: String = "") -> void:
 # --- rebrand welcome receipt --------------------------------------------------
 
 # The wallet-doc field holding the rebrand refund receipt (see
-# rebrand_welcome_popup.gd and tools/rebrand_migrate.js).
+# rebrand_welcome_popup.gd and tools/rebrand_migrate.js), and the SEPARATE
+# top-level flag that says it has been seen.
 const REBRAND_FIELD := "rebrand_v1"
+const REBRAND_SHOWN_FIELD := "rebrand_v1_shown"
 
-# True while this account has a rebrand receipt it has never been shown. Both
-# halves of the popup's gate live in the doc, never on the device: an account
-# created after the migration has no receipt at all (so it can never qualify),
-# and `shown` is what stops the popup replaying after a reinstall or on a second
-# device. The coins were credited by the migration itself — this only gates the
-# celebration.
+# WHY the flag is its own scalar field and not a `shown` key inside the receipt:
+# marking it seen used to rewrite the whole receipt map (a merge write replaces a
+# map field wholesale, so every key has to ride along) — but the receipt carries
+# `items`, an ARRAY, and the Android Firestore SDK rejects raw arrays, same as
+# everywhere else in this file. Every launch the write was refused, `shown` never
+# landed, and the popup opened again. The editor's simulated store is a plain
+# Dictionary and took the array happily, which is exactly why the harness passed.
+# A bare bool cannot hit that class of failure.
+var rebrand_shown: bool = false
+
+# True while this account has a rebrand receipt it has never been shown. An
+# account created after the migration has no receipt at all, so it can never
+# qualify; the flag is what stops the popup replaying after a reinstall or on a
+# second device. The coins were credited by the migration itself — this only
+# gates the celebration.
 func has_unseen_rebrand_grant() -> bool:
-	return not rebrand_receipt.is_empty() and not bool(rebrand_receipt.get("shown", false))
+	return not rebrand_receipt.is_empty() and not rebrand_shown
 
-# Mark the receipt as seen. The whole map is rewritten rather than just the flag
-# because a merge write replaces a map field wholesale — the other keys have to
-# ride along or they'd be dropped.
+# Mark the receipt as seen. One boolean field, nothing else touched.
 func mark_rebrand_shown() -> void:
 	if not FirebaseManager.is_signed_in() or rebrand_receipt.is_empty():
 		return
-	if bool(rebrand_receipt.get("shown", false)):
+	if rebrand_shown:
 		return
-	rebrand_receipt["shown"] = true
-	raw_user_doc[REBRAND_FIELD] = rebrand_receipt.duplicate(true)
-	_save_partial({REBRAND_FIELD: rebrand_receipt.duplicate(true)})
+	rebrand_shown = true
+	raw_user_doc[REBRAND_SHOWN_FIELD] = true
+	_save_partial({REBRAND_SHOWN_FIELD: true})
 
 # Record that this account has seen the first-run home tour. Idempotent; a no-op
 # for guests (their "seen" flag is the local file, not the wallet doc).
@@ -1161,6 +1170,10 @@ func _apply_doc(doc: Dictionary) -> void:
 	balance = int(doc.get("coins", 0))
 	var rb: Variant = doc.get(REBRAND_FIELD, {})
 	rebrand_receipt = (rb as Dictionary).duplicate(true) if rb is Dictionary else {}
+	# `rebrand_v1.shown` is read too so the handful of docs an admin may have
+	# stamped by hand still count as seen; nothing writes that shape anymore.
+	rebrand_shown = bool(doc.get(REBRAND_SHOWN_FIELD, false)) \
+		or bool(rebrand_receipt.get("shown", false))
 	# "default" is always owned even if the doc somehow omits it.
 	owned_themes = [DEFAULT_THEME]
 	# owned_themes is stored as a map ({theme_id: true}) — see
@@ -1320,6 +1333,13 @@ func _save_partial(fields: Dictionary) -> void:
 	if uid.is_empty():
 		return
 	if _is_editor:
+		# The simulated store refuses what the device would refuse: the Android
+		# Firestore SDK rejects raw arrays (see purchase_history and
+		# _owned_themes_map_for_save, which is why everything here is stored as a
+		# map-of-maps). It used to accept them, which let a write that could only
+		# ever fail on a real phone pass every editor test.
+		if not _no_arrays(fields, ""):
+			return
 		var d: Dictionary = _sim_db.get(uid, {})
 		for k in fields:
 			d[k] = fields[k]
@@ -1328,6 +1348,19 @@ func _save_partial(fields: Dictionary) -> void:
 	# merge=true writes only the listed fields, so concurrent updates from
 	# different code paths don't clobber each other.
 	Firebase.firestore.set_document(_COLL, uid, fields, true)
+
+# Walks a would-be write for arrays at any depth, reporting the field path of the
+# first one. Editor-only: on device the SDK does this rejection for us, loudly.
+func _no_arrays(value: Variant, path: String) -> bool:
+	if value is Array:
+		push_error("CoinsManager: refusing to write an array at '%s' — the Android "
+			% path + "Firestore SDK rejects raw arrays; store it as a map instead.")
+		return false
+	if value is Dictionary:
+		for k in (value as Dictionary):
+			if not _no_arrays((value as Dictionary)[k], path + "/" + String(k)):
+				return false
+	return true
 
 # --- date helpers (UTC YYYY-MM-DD; one canonical day per real-world day,
 #     regardless of the player's local timezone) ---

@@ -3902,7 +3902,7 @@ func _draw_tasks_icon(c: Control) -> void:
 func _surface_login_popups() -> void:
 	if not is_inside_tree():
 		return
-	if CoinsManager.has_unseen_rebrand_grant():
+	if CoinsManager.has_unseen_rebrand_grant() and not _local_rebrand_seen():
 		_show_rebrand_welcome()
 		return
 	CoinsManager.consume_pending_daily_rewards()
@@ -3913,9 +3913,30 @@ func _surface_login_popups() -> void:
 func _show_rebrand_welcome() -> void:
 	var popup := RebrandWelcomePopup.new()
 	popup.receipt = CoinsManager.rebrand_receipt.duplicate(true)
-	# Yesterday's rankings, if there are any, take their turn once this closes.
-	popup.tree_exited.connect(CoinsManager.consume_pending_daily_rewards)
+	popup.tree_exited.connect(func() -> void:
+		# Belt and braces on top of the wallet-doc flag: if that write is ever
+		# refused (it was once — see CoinsManager.REBRAND_SHOWN_FIELD), the device
+		# still remembers, so the worst case is one repeat on a new install rather
+		# than the party on every single launch.
+		_set_local_rebrand_seen()
+		# Yesterday's rankings, if there are any, take their turn once this closes.
+		CoinsManager.consume_pending_daily_rewards())
 	add_child(popup)
+
+# Device-local "has seen the rebrand welcome" flag, alongside the tutorial's.
+const REBRAND_SEEN_KEY := "rebrand_seen"
+
+func _local_rebrand_seen() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_PATH) != OK:
+		return false
+	return bool(cfg.get_value("rebrand", REBRAND_SEEN_KEY, false))
+
+func _set_local_rebrand_seen() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(PREFS_PATH)          # keeps the tutorial flag that already lives here
+	cfg.set_value("rebrand", REBRAND_SEEN_KEY, true)
+	cfg.save(PREFS_PATH)
 
 func _on_daily_rank_reward(total: int, results: Array) -> void:
 	if not is_inside_tree():
