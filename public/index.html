@@ -204,7 +204,7 @@
       <li><a href="#data-we-collect">Data we collect</a></li>
       <li><a href="#public-visibility">Public visibility (leaderboards &amp; Arena)</a></li>
       <li><a href="#cookies">Cookies &amp; tracking</a></li>
-      <li><a href="#advertising">Advertising &amp; Unity Ads</a></li>
+      <li><a href="#advertising">Advertising &amp; ad mediation</a></li>
       <li><a href="#third-parties">Third-party services</a></li>
       <li><a href="#your-rights">Your rights</a></li>
       <li><a href="#delete-data">Delete your account &amp; data</a></li>
@@ -251,8 +251,8 @@
       </tr>
       <tr>
         <td>Advertising data</td>
-        <td>Advertising ID and ad-interaction events, used to show and measure ads. Shared with Unity Technologies (Unity Ads)</td>
-        <td>Where ads are shown, via Unity Ads — see <a href="#advertising">Advertising &amp; Unity Ads</a></td>
+        <td>Advertising ID and ad-interaction events, used to show and measure ads. Shared with Unity Technologies (Unity LevelPlay) and the advertising networks it mediates</td>
+        <td>Where ads are shown, via Unity LevelPlay — see <a href="#advertising">Advertising &amp; ad mediation</a></td>
       </tr>
     </table>
   </section>
@@ -268,9 +268,11 @@
   </section>
 
   <section id="advertising">
-    <h2><span class="num">5</span>Advertising &amp; Unity Ads</h2>
-    <p>The Application shows ads to keep the game free to play. Ads are served by <strong>Unity Ads</strong>, operated by Unity Technologies, which is the Application's only advertising partner. To select and measure ads, Unity Ads may collect and process your device's <strong>advertising ID</strong> (Google Advertising ID), IP address, device and OS information, and ad-interaction events such as which ads were shown, watched, or clicked. This data is shared with Unity Technologies as an independent controller of it; see the <a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity Game Player and App User Privacy Policy</a>.</p>
-    <p>Two kinds of ad appear: full-screen ads shown between rounds, and optional "watch a video" ads that you choose to start in exchange for an in-game reward. A one-time in-app purchase is available to remove the full-screen ads; the optional reward videos remain available.</p>
+    <h2><span class="num">5</span>Advertising &amp; ad mediation</h2>
+    <p>The Application shows ads to keep the game free to play. Ads are served through <strong>Unity LevelPlay</strong> (formerly ironSource), an ad mediation platform operated by Unity Technologies. Mediation means LevelPlay runs an auction across several advertising networks for each ad shown, and the winning network supplies the ad. Your data is therefore shared not only with Unity Technologies but also with the advertising networks participating in that auction.</p>
+    <p>To select and measure ads, LevelPlay and the networks it mediates may collect and process your device's <strong>advertising ID</strong> (Google Advertising ID), IP address, device and OS information, and ad-interaction events such as which ads were shown, watched, or clicked. Each of these parties acts as an independent controller of that data. See the <a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity Game Player and App User Privacy Policy</a>, which covers Unity LevelPlay.</p>
+    <p>The networks currently enabled for this Application are listed in the Application's <a href="https://lumeo-game.web.app/app-ads.txt" target="_blank" rel="noopener noreferrer">app-ads.txt</a> file, which is the authoritative and up-to-date list of who is authorised to supply and sell ads in the Application.</p>
+    <p>Two kinds of ad appear: full-screen ads shown when a game ends, and optional "watch a video" ads that you choose to start in exchange for an in-game reward — either to continue playing, or to increase the coins you earned in that game. A one-time in-app purchase is available to remove the full-screen ads; the optional reward videos remain available, because you choose whether to start them.</p>
     <h3>Your choice about personalized ads</h3>
     <p>Personalized ads are only shown where you have agreed to them. The Application asks for that consent before any ad is requested, and you can change your answer at any time in the app under <strong>Settings → Ad Preferences</strong>. If you decline, you will still see ads, but they will be contextual (non-personalized) and your advertising ID will not be used to profile you.</p>
     <p>You can also opt out of personalized advertising at the device level:</p>
@@ -285,7 +287,7 @@
     <p>The Application utilizes third-party services that have their own privacy policies about handling data:</p>
     <ul>
       <li><a href="https://www.google.com/policies/privacy/" target="_blank" rel="noopener noreferrer">Google Play Services</a></li>
-      <li><a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity Ads (Unity Technologies)</a></li>
+      <li><a href="https://unity.com/legal/game-player-and-app-user-privacy-policy" target="_blank" rel="noopener noreferrer">Unity LevelPlay (Unity Technologies)</a> and the ad networks it mediates, listed in <a href="https://lumeo-game.web.app/app-ads.txt" target="_blank" rel="noopener noreferrer">app-ads.txt</a></li>
       <li><a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Google Analytics for Firebase</a></li>
       <li><a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener noreferrer">Firebase Authentication &amp; Firestore</a></li>
       <li><a href="https://godotengine.org/privacy-policy" target="_blank" rel="noopener noreferrer">Godot Engine</a></li>
@@ -376,12 +378,12 @@
       <li>Aggregated and anonymised data, which no longer identifies you.</li>
       <li>Anything required for legal, security or fraud-prevention purposes, for as long as that purpose requires.</li>
     </ul>
-    <p>Advertising data is handled separately: to stop your advertising ID being used for personalised ads, open <strong>Settings → Ad Preferences</strong> in the app and choose generic ads. See <a href="#advertising">Advertising &amp; Unity Ads</a>.</p>
+    <p>Advertising data is handled separately: to stop your advertising ID being used for personalised ads, open <strong>Settings → Ad Preferences</strong> in the app and choose generic ads. See <a href="#advertising">Advertising &amp; ad mediation</a>.</p>
   </section>
 
   <section id="ccpa">
     <h2><span class="num">10</span>Your California privacy rights (CCPA/CPRA)</h2>
-    <p>If you are a California resident, you have the right to know what personal information is collected, the right to delete personal information, the right to opt out of the sale or sharing of personal information, and the right to non-discrimination for exercising these rights. The Service Provider does not sell your personal information for money. However, showing <strong>personalized ads</strong> involves sharing your advertising ID with Unity Ads for cross-context behavioral advertising, which California and several other US state privacy laws treat as "sharing". You can opt out of that at any time in the app under <strong>Settings → Ad Preferences</strong> — choosing generic ads there is a complete opt-out of this sharing. To exercise your other CCPA/CPRA rights, contact the Service Provider at <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
+    <p>If you are a California resident, you have the right to know what personal information is collected, the right to delete personal information, the right to opt out of the sale or sharing of personal information, and the right to non-discrimination for exercising these rights. The Service Provider does not sell your personal information for money. However, showing <strong>personalized ads</strong> involves sharing your advertising ID with Unity LevelPlay and the ad networks it mediates for cross-context behavioral advertising, which California and several other US state privacy laws treat as "sharing". You can opt out of that at any time in the app under <strong>Settings → Ad Preferences</strong> — choosing generic ads there is a complete opt-out of this sharing. To exercise your other CCPA/CPRA rights, contact the Service Provider at <a href="mailto:raviachstudios@gmail.com">raviachstudios@gmail.com</a>.</p>
     <p>For a better experience while using the Application, the Service Provider may require certain personally identifiable information, including but not limited to a user ID. This information is retained and used as described in this policy, and may be used to send important notices and, where permitted by law, marketing communications.</p>
   </section>
 

@@ -1,3 +1,46 @@
+# app-ads.txt — Lumeo (com.raviachstudios.simon)
+#
+# Declares who is allowed to sell this app's ad inventory. Buyers do not follow a
+# link from the app: they read the Website field on the Play Store listing, take
+# that domain, and fetch /app-ads.txt at its ROOT.
+#
+# The listing points at lumeo-game.web.app, which is THIS file — Firebase Hosting
+# serves the repo's public/ directory. So this is the copy that matters, and
+# `firebase deploy --only hosting` is what publishes it.
+#
+# (raviachstudios.github.io also serves an app-ads.txt, containing one stale
+# Google AdMob line for the disabled account. It is not the crawled domain so it
+# changes nothing, but it authorises a dead account and should be deleted.)
+#
+# Lines are the UNION of what every network you monetize with publishes. A network
+# enabled on the LevelPlay dashboard but missing here cannot be verified by
+# buyers, and they bid lower or not at all.
+
+OWNERDOMAIN=lumeo-game.web.app
+
+# ── ironSource / LevelPlay ────────────────────────────────────────────────────
+#
+# 676255 is the ironSource Publisher ID (LevelPlay platform -> Account -> API tab).
+#
+# This is the load-bearing line. ironSource Ads direct demand was sunset on
+# 2026-04-30, so what "ironSource" serves now is ironSource Exchange —
+# programmatic demand. Programmatic buyers are precisely the ones that check
+# app-ads.txt and bid down, or refuse to bid, on inventory it cannot vouch for.
+# With ironSource the only network enabled on the dashboard, this one line carries
+# most of the fill.
+#
+# If the LevelPlay dashboard's own generated app-ads.txt block ever shows
+# something different from this, trust the dashboard and replace it.
+
+ironsrc.com, 676255, DIRECT
+
+# ── Unity ─────────────────────────────────────────────────────────────────────
+#
+# Unity's published block, kept from the direct Unity Ads integration this
+# replaced. Still valid: Unity Ads is now demand bidding through LevelPlay's
+# auction rather than being handed the impression. The DIRECT line is the Unity
+# publisher account (142298960); the rest are Unity's authorised resellers.
+
 start.io, 197760873, RESELLER
 themediagrid.com, falino, RESELLER, 9fac4a4a87c2a44f
 themediagrid.com, b8n9yh, RESELLER, 35d5010d7789b49d

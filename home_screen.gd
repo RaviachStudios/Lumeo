@@ -3960,7 +3960,7 @@ func _open_profile_popup() -> void:
 # button and a footer with the app version. Dismissed by tapping outside or
 # Close.
 const CONTACT_EMAIL := "RaviachStudios@gmail.com"
-const PRIVACY_POLICY_URL := "https://raviachstudios.github.io/Raviach-policy/"
+const PRIVACY_POLICY_URL := "https://lumeo-game.web.app/"
 
 func _show_settings_popup() -> void:
 	var sz := get_viewport_rect().size
