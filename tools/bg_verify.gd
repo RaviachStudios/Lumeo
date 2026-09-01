@@ -13,6 +13,7 @@ const Medium := preload("res://memory_game_ui.gd")
 const Hard := preload("res://hard_game_ui.gd")
 const Data := preload("res://background_scenes_data.gd")
 const ShopScreen := preload("res://shop_screen.gd")
+const LumeWorlds := preload("res://lume_worlds.gd")
 
 var _fail := 0
 var _pass := 0
@@ -40,8 +41,15 @@ func _ready() -> void:
 
 func _catalog() -> void:
 	print("\n--- catalog ---")
-	_check(BackgroundScenes.CATALOG.size() == 8, "8 backgrounds in CATALOG")
+	_check(BackgroundScenes.CATALOG.size() == 8, "8 Themes1 backgrounds in CATALOG")
 	_check(BackgroundScenes.ORDER.size() == 8, "8 in ORDER")
+	# The two Themes2 worlds live in their own catalog (WorldScenes) and are reached
+	# through the same façade — see world_scenes.gd. They must not have leaked into
+	# this one, and this one must not have lost anything to them.
+	_check(BackgroundScenes.all_order().size() == 11, "11 modelled backgrounds in all")
+	for id in WorldScenes.ORDER:
+		_check(not BackgroundScenes.CATALOG.has(id), "world %s is not in the Themes1 catalog" % id)
+		_check(BackgroundScenes.has_scene(String(id)), "world %s answers the façade" % id)
 	# Aurora was deleted outright (a rendering bug), not detached: no catalog entry,
 	# no data tables, no .glb. Nothing anywhere may still refer to it.
 	_check(not BackgroundScenes.CATALOG.has("bg_aurora"), "bg_aurora is gone from CATALOG")
@@ -79,7 +87,18 @@ func _catalog() -> void:
 	_check(CoinsManager.theme_price("reef") == 1200, "existing Coral Reef still 1200")
 	# The old shader themes stay in the CATALOG even though the shop no longer lists
 	# them — detaching a theme must never strip it from a wallet that already owns it.
-	_check(CoinsManager.THEMES.size() == 28, "20 old themes + 8 new = 28")
+	#
+	# The eight LUMEO worlds (lume_worlds.gd) were added on top of all of this and are
+	# counted separately: they are canvas themes, not modelled backgrounds, and this
+	# harness owns the modelled ones. tools/lume_verify.tscn is what pins THEIR ids
+	# and prices, and it holds this whole catalog as a frozen literal so that a
+	# change to anything below can only be deliberate.
+	_check(CoinsManager.THEMES.size() == 31 + LumeWorlds.ORDER.size(),
+		"20 shader themes + 8 Themes1 floors + 2 Themes2 worlds + Magical Lake + %d LUMEO worlds"
+		% LumeWorlds.ORDER.size())
+	for id in LumeWorlds.ORDER:
+		_check(not BackgroundScenes.has_scene(String(id)),
+			"LUMEO world %s is not a modelled background" % id)
 
 func _shop() -> void:
 	print("\n--- shop ---")
@@ -93,8 +112,29 @@ func _shop() -> void:
 	# The shop now sells ONLY the modelled backgrounds. "default" leads the list and is
 	# the deliberate exception: it is the only way back for a player who still has a
 	# detached theme equipped.
-	_check(items == (["default"] as Array) + (BackgroundScenes.ORDER as Array),
-		"the grid is Default followed by the eight modelled backgrounds")
+	# Default, then the eight Themes1 floors, then the Themes2 worlds — as a
+	# PREFIX now rather than as the whole list, because the eight LUMEO worlds are
+	# appended after them. Nothing in this prefix may move; lume_verify checks the
+	# suffix.
+	#
+	# MINUS the ids below, which are sold on the SPECIAL SKINS shelf instead. Each is
+	# a complete look — a world AND the gameplay buttons that world wears — so each is
+	# listed there and here nowhere, and a player is never offered the same id from
+	# two cards. Underneath they are still ordinary themes, which is why every catalog
+	# check above still covers them. See ShopScreen.SKIN_DEFS,
+	# tools/ice_shop_verify.tscn and tools/lake_verify.tscn.
+	var moved := ["world_ice", "world_lake"]
+	var modelled: Array = (["default"] as Array)
+	for id in BackgroundScenes.all_order():
+		if not moved.has(String(id)):
+			modelled.append(id)
+	_check(items.slice(0, modelled.size()) == modelled,
+		"the grid opens with Default, the eight Themes1 floors and Living Forest")
+	_check(items.size() == modelled.size() + LumeWorlds.ORDER.size(),
+		"and is followed only by the %d LUMEO worlds" % LumeWorlds.ORDER.size())
+	for id in moved:
+		_check(not items.has(id),
+			"%s is off the THEMES grid — it sells in SPECIAL SKINS" % id)
 	# Every older shader theme is DETACHED from the grid but still in the catalog, so
 	# an existing owner keeps it. Neither half of that may quietly change.
 	var detached := ["midnight", "indigo", "sunset", "crimson", "slate",

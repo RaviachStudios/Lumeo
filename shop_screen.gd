@@ -14,9 +14,11 @@ const ArenaUI := preload("res://arena_ui.gd")
 #   BUTTON FRAMES  — the modelled boards' button-bezel cosmetics (ButtonFrames), a
 #                    scrolling 3-wide grid, each card previewing a real GLB button
 #                    wearing it.
-#   SPECIAL SKINS  — complete pre-made wheel skins (CoinsManager.SIMON_SKINS).
-#                    Currently detached: no skin is flagged `released`, so the tab
-#                    shows the "Coming soon" card instead of a grid (see SKIN_DEFS).
+#   SPECIAL SKINS  — complete looks, one card each. Two kinds sit in the same grid:
+#                    pre-made WHEEL skins (CoinsManager.SIMON_SKINS), all currently
+#                    detached, and THEME-BACKED skins like ICE KINGDOM, which are an
+#                    ordinary background id (CoinsManager.THEMES / owned_themes) that
+#                    also re-dresses the gameplay buttons. See SKIN_DEFS.
 # Every card in every category shows a preview, the price, and the same state-aware
 # action button (BUY → EQUIP → EQUIPPED).
 #
@@ -42,10 +44,11 @@ const CATEGORIES := [
 		"key": "themes", "label": "THEMES", "icon": "diamond",
 		"accent": Color(1.00, 0.78, 0.22),
 		# THIS LIST IS THE SHOP'S SOURCE OF DISPLAY ORDER *AND* OF WHAT IS ON SALE.
-		# Only the eight modelled 3D backgrounds (BackgroundScenes) are listed. They are
-		# ordinary theme cards in every respect the shop cares about — the only
-		# difference is that their preview comes from a baked 3D render instead of a
-		# live shader, which BackgroundManager.make_preview resolves on its own.
+		# Only the modelled 3D backgrounds are listed: the eight Themes1 floors, then
+		# Living Forest. They are ordinary theme cards in every respect the
+		# shop cares about — the only difference is that their preview comes from a
+		# baked 3D render instead of a live shader, which BackgroundManager.make_preview
+		# resolves on its own.
 		#
 		# Every older shader theme (midnight … deepspace) is DETACHED, not deleted:
 		# its CoinsManager.THEMES entry and its BackgroundManager renderer are intact,
@@ -56,9 +59,28 @@ const CATEGORIES := [
 		# has a now-detached theme equipped — without a Default card they would be
 		# stuck on it. Its card is always "owned" and free, so the buy/equip flow
 		# handles it without special casing.
+		# The eight LUMEO worlds are appended after the modelled ones. They
+		# are 2D illustrated scenes like the (detached) shader themes rather than
+		# 3D geometry, but the shop cannot tell and does not need to: same card,
+		# same price badge, same buy/equip button, same owned_themes. Their preview
+		# is a baked still of the real gameplay board standing on the world, which
+		# BackgroundManager.make_preview resolves on its own.
+		#
+		# "world_ice" and "world_lake" are deliberately ABSENT. Both are still ordinary
+		# themes in every respect that matters to ownership — same CoinsManager.THEMES
+		# entry, same owned_themes / selected_theme, same free price — but each also
+		# brings its own gameplay buttons (Ice Kingdom's snowflakes, see IceButtons;
+		# Magical Lake's lily pads, see LilyButtons), which makes them complete looks
+		# rather than backdrops. Each is listed ONCE, in SPECIAL SKINS, so a player is
+		# never offered the same id from two tabs. See SKIN_DEFS.
 		"items": ["default",
 			"bg_darkmetal", "bg_hexfloor", "bg_neongrid", "bg_circuit",
-			"bg_deepspace", "bg_volcanic", "bg_crystal", "bg_arcade"],
+			"bg_deepspace", "bg_volcanic", "bg_crystal", "bg_arcade",
+			"world_forest",
+			"lume_rainbow", "lume_ocean",
+			"lume_candy", "lume_space",
+			"lume_forest", "lume_volcano", "lume_arcade",
+			"lume_kingdom"],
 	},
 	# Button-frame cosmetics for the modelled boards. No flat `items` list — its cards
 	# come from ButtonFrames.ORDER and are built specially in _render_category /
@@ -242,9 +264,13 @@ func _begin_load() -> void:
 	# Skip the skin-preview prewarm entirely while the SPECIAL SKINS tab is detached —
 	# the placeholder renders no wheels, so there's nothing to warm.
 	if not _skins_coming_soon():
+		# Only WHEEL skins have a bespoke "skin:<id>" background shader to compile. A
+		# theme-backed card's preview is a baked still with no shader of its own, so
+		# there is nothing to warm for it.
 		var skin_ids: Array[String] = []
 		for d in _live_skin_defs():
-			skin_ids.append(String(d["id"]))
+			if String(d.get("theme", "")).is_empty():
+				skin_ids.append(String(d["id"]))
 		BackgroundManager.prewarm_skin_previews(skin_ids)
 	# Render the THEMES grid and build the FRAMES + SKINS panels while the overlay still
 	# hides the construction. These are the two heaviest bursts in the shop, so both run
@@ -1035,12 +1061,17 @@ func _card_state(owned: bool, equipped: bool, affordable: bool) -> String:
 
 # Apply a resolved state's cached styling to a card's button + price block.
 func _style_card_button(btn: Button, price_box: Control, price_label: Label,
-		accent: Color, radius: int, state: String, owned: bool) -> void:
+		accent: Color, radius: int, state: String, owned: bool, price: int = -1) -> void:
 	var st := _card_button_style(accent, radius, state)
 	# Unowned cards show the price block in the button; owned ones show EQUIP/EQUIPPED.
-	price_box.visible = not owned
+	# A card that costs NOTHING shows neither: a coin beside a 0 reads as a price,
+	# and the one thing the button has to say is that there is not one. It is still
+	# a buy — the tap is what puts the id in the wallet — so the button keeps the
+	# same colour and the same confirm dialog behind it, and only the word changes.
+	var free := not owned and price == 0
+	price_box.visible = not owned and not free
 	price_label.add_theme_color_override("font_color", st["fg"])
-	btn.text = st["text"]
+	btn.text = "FREE" if free else String(st["text"])
 	btn.disabled = st["disabled_btn"]
 	btn.add_theme_stylebox_override("normal", st["normal"])
 	btn.add_theme_stylebox_override("hover", st["hover"])
@@ -1057,7 +1088,7 @@ func _apply_card_state(theme_id: String, c: Dictionary) -> void:
 	var equipped := CoinsManager.is_simon_manual() and CoinsManager.selected_theme == theme_id
 	var affordable := CoinsManager.can_afford(theme_id)
 	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
-		_card_state(owned, equipped, affordable), owned)
+		_card_state(owned, equipped, affordable), owned, CoinsManager.theme_price(theme_id))
 
 func _on_action(theme_id: String) -> void:
 	if CoinsManager.owns(theme_id):
@@ -1228,7 +1259,8 @@ func _apply_frame_card_state(frame_id: String, c: Dictionary) -> void:
 	var owned := CoinsManager.owns_frame(frame_id)
 	var equipped := CoinsManager.selected_frame == frame_id
 	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
-		_card_state(owned, equipped, CoinsManager.can_afford_frame(frame_id)), owned)
+		_card_state(owned, equipped, CoinsManager.can_afford_frame(frame_id)), owned,
+		CoinsManager.frame_price(frame_id))
 
 func _on_frame_action(frame_id: String) -> void:
 	if CoinsManager.owns_frame(frame_id):
@@ -1257,14 +1289,22 @@ const SKIN_ACCENT := Color(0.92, 0.45, 0.78)   # generic fallback for any skin w
 # world it previews. Requested pairs: Volcano red→orange, Arcade blue→purple, Jackpot
 # white→black, Luna Park white→red. See _skin_frame / _make_skin_card.
 const SKIN_FRAME_COLORS := {
-	"inferno":  [Color(1.00, 0.32, 0.08), Color(1.00, 0.64, 0.18)],   # molten red-orange
-	"arcade":   [Color(0.36, 0.48, 1.00), Color(0.70, 0.30, 1.00)],   # electric blue-purple
-	"casino":   [Color(0.96, 0.96, 0.98), Color(0.06, 0.06, 0.09)],   # ivory white / black
-	"lunapark": [Color(1.00, 0.96, 0.94), Color(1.00, 0.26, 0.30)],   # carnival white / red
+	"inferno":   [Color(1.00, 0.32, 0.08), Color(1.00, 0.64, 0.18)],   # molten red-orange
+	"arcade":    [Color(0.36, 0.48, 1.00), Color(0.70, 0.30, 1.00)],   # electric blue-purple
+	"casino":    [Color(0.96, 0.96, 0.98), Color(0.06, 0.06, 0.09)],   # ivory white / black
+	"lunapark":  [Color(1.00, 0.96, 0.94), Color(1.00, 0.26, 0.30)],   # carnival white / red
+	"world_ice": [Color(0.72, 0.92, 1.00), Color(0.24, 0.52, 0.96)],   # frost white / deep glacier
+	"world_lake": [Color(0.36, 0.90, 0.78), Color(0.42, 0.78, 0.36)],  # turquoise water / lily green
+	"world_casino": [Color(0.92, 0.78, 0.36), Color(0.10, 0.42, 0.28)], # table gold / felt green
 }
 const SKIN_CARD_W := 360.0
-const SKIN_CARD_H := 470.0
-const SKIN_PREVIEW := 260.0
+# Sized so a whole card — action button included — is on screen without scrolling at
+# the 1280x720 design size. _layout gives this panel `sz.y - content_y - 24` = 452px,
+# and a card costs SKIN_CARD_H + 2 * SKIN_FRAME_PAD. At the original 470 the FREE /
+# EQUIP button sat 70px below the fold, which no card in this tab had ever revealed
+# because none had been released yet.
+const SKIN_CARD_H := 396.0
+const SKIN_PREVIEW := 190.0
 const SKIN_PREVIEW_LOGICAL := 380.0   # render the live wheel at this logical size
 									   # then scale down (same trick as the skin
 									   # tab's preview — keeps the inner numeral/hub
@@ -1285,18 +1325,55 @@ const SKIN_FRAME_PAD := 26
 # _skins_coming_soon / _build_skins_coming_soon). Nothing is deleted — the full skin
 # card / preview pipeline stays intact and each skin returns the moment its entry is
 # flagged released (which also re-enables that skin's preview prewarm in _begin_load).
-# Released skins: NONE — every entry below is detached, so the tab is the placeholder.
+# Released skins: ICE KINGDOM only, so the tab is a one-card grid rather than the
+# placeholder.
 
 # Display order + pretty labels for the skins shown in the SPECIAL SKINS tab.
-# Adding a new skin = an entry here + a catalog entry in CoinsManager.SIMON_SKINS
-# + the corresponding skin path in SimonWheel. A `blurb` field is optional; when
-# absent the card renders just the title (used for VOLCANO). Only entries with
-# `released: true` appear in the shop — the rest stay hidden until they're ready.
-# Ordered by price, ascending.
+# A `blurb` field is optional; when absent the card renders just the title (used for
+# VOLCANO). Only entries with `released: true` appear in the shop — the rest stay
+# hidden until they're ready.
+#
+# TWO KINDS OF ENTRY share this list and the same card:
+#
+#   WHEEL skins (no `theme`) — a bespoke SimonWheel look. Adding one = an entry here
+#   + a catalog entry in CoinsManager.SIMON_SKINS + the skin path in SimonWheel. The
+#   card hosts a LIVE wheel and buys through owned_skins / selected_skin.
+#
+#   THEME-BACKED skins (`theme` set) — a complete look built out of a 3D background
+#   plus the buttons that background dresses. Nothing new is invented for it: it is
+#   an ordinary CoinsManager.THEMES id and buys, equips and persists through
+#   owned_themes / selected_theme exactly as a THEMES card would. Only its shelf
+#   moved. The card has no wheel; its preview is the same baked still the theme card
+#   used — the real gameplay board standing on the world, wearing that world's own
+#   buttons (see BackgroundManager.make_preview / IceButtons.active_for).
 const SKIN_DEFS := [
-	# All three are DETACHED for now (no `released` flag): the art, the SimonWheel skin
-	# paths and the CoinsManager catalog entries are untouched, so re-listing one is a
-	# single `"released": true` here. With none released the tab shows the coming-soon card.
+	# ICE KINGDOM: the `world_ice` background and the six snowflake buttons it wears,
+	# sold as one thing because that is how it plays. FREE — CoinsManager.THEMES prices
+	# it 0, and a 0-price card shows FREE instead of a coin, so the player claims it in
+	# one tap and equips it in the next (see _style_card_button).
+	{"id": "world_ice", "label": "ICE KINGDOM", "theme": "world_ice",
+		"blurb": "Buttons carved from ice.", "chip": "SNOWFLAKE BUTTONS",
+		"released": true},
+	# MAGICAL LAKE: the `world_lake` water and the six lily pads floating on it.
+	# Theme-backed exactly like Ice Kingdom above — its price, owned state, equip
+	# and preview all come from CoinsManager.THEMES via the `theme` field, and it
+	# is deliberately absent from CATEGORIES["items"] so it is offered from one
+	# shelf only.
+	{"id": "world_lake", "label": "MAGICAL LAKE", "theme": "world_lake",
+		"blurb": "Six lily pads on still water.", "chip": "LILY PAD BUTTONS",
+		"released": true},
+	# ROYAL CASINO: the `world_casino` poker table, the six moulded poker chips it
+	# deals with, and the event system that plays cards, chips and a roulette ball
+	# across the felt every third round (see casino_events.gd). Theme-backed exactly
+	# like the two above — price, owned state, equip and preview all come from
+	# CoinsManager.THEMES via the `theme` field — and deliberately absent from
+	# CATEGORIES["items"] so it is offered from one shelf only.
+	{"id": "world_casino", "label": "ROYAL CASINO", "theme": "world_casino",
+		"blurb": "The table is live.", "chip": "POKER CHIP BUTTONS",
+		"released": true},
+	# The wheel skins below are all DETACHED (no `released` flag): the art, the
+	# SimonWheel skin paths and the CoinsManager catalog entries are untouched, so
+	# re-listing one is a single `"released": true` here.
 	{"id": "casino", "label": "JACKPOT", "blurb": "Place your bets."},
 	{"id": "arcade", "label": "ARCADE", "blurb": "Insert coin."},
 	{"id": "lunapark", "label": "LUNA PARK", "blurb": "Step right up."},
@@ -1306,6 +1383,15 @@ const SKIN_DEFS := [
 	{"id": "phantom", "label": "PHANTOM", "blurb": "Something's watching."},
 	{"id": "inferno", "label": "VOLCANO"},  # detached: too laggy for now (art/pipeline kept intact)
 ]
+
+# The background id a THEME-BACKED skin sells, or "" for an ordinary wheel skin.
+# This is the single switch between the two kinds of SKIN_DEFS entry, and every
+# ownership/price/equip decision on a skin card routes through it.
+func _skin_theme(skin_id: String) -> String:
+	for d in SKIN_DEFS:
+		if String(d["id"]) == skin_id:
+			return String(d.get("theme", ""))
+	return ""
 
 # The subset of SKIN_DEFS that are live in the shop right now (flagged `released`).
 # All skin building/prewarm iterates this, so unreleased skins never render a card.
@@ -1369,8 +1455,17 @@ func _build_skins_panel(incremental := false) -> void:
 		card["y"] = float(int(i / SKIN_GRID_COLS)) * (SKIN_CARD_H + SKIN_CARD_GAP)
 		_skins_grid.add_child(card["root"])
 		# Configure the preview wheel now that its card is IN THE TREE — off-tree
-		# configuration mis-sized the SubViewport and mis-aimed the camera.
+		# configuration mis-sized the SubViewport and mis-aimed the camera. A
+		# theme-backed card has no wheel to configure; its preview is a baked still
+		# that renders itself.
 		var wheel: SimonWheel = card["preview"]
+		if wheel == null:
+			_skins_by_id[def["id"]] = card
+			if incremental:
+				await get_tree().process_frame
+				if not is_inside_tree():
+					return
+			continue
 		wheel.configure(5, PREVIEW_COLORS)
 		wheel.set_level(1)
 		wheel.set_overlay_compact(0.52, false)
@@ -1463,6 +1558,8 @@ func _build_skins_coming_soon() -> void:
 
 func _make_skin_card(def: Dictionary) -> Dictionary:
 	var skin_id: String = def["id"]
+	# "" for a wheel skin, the background id for a theme-backed one. See SKIN_DEFS.
+	var theme_id := String(def.get("theme", ""))
 
 	var root := Panel.new()
 	root.custom_minimum_size = Vector2(SKIN_CARD_W, SKIN_CARD_H)
@@ -1502,33 +1599,53 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	clip.add_theme_stylebox_override("panel", clip_st)
 	root.add_child(clip)
 
-	# The skin's bespoke background (e.g. the Volcano world), rendered behind the
-	# wheel so the card previews the full look you'll equip — not just the wheel.
-	var skin_bg := BackgroundManager.make_skin_preview(skin_id, clip.size)
-	skin_bg.position = Vector2.ZERO
-	clip.add_child(skin_bg)
+	# A wheel skin's preview is its world with a live wheel on it; a theme-backed
+	# skin's is the theme's own card art. `wheel` stays null in the second case, and
+	# every wheel helper on this panel already treats a null preview as "nothing to
+	# drive" — so a card with no wheel costs the tab exactly nothing.
+	var wheel: SimonWheel = null
+	if theme_id.is_empty():
+		# The skin's bespoke background (e.g. the Volcano world), rendered behind the
+		# wheel so the card previews the full look you'll equip — not just the wheel.
+		var skin_bg := BackgroundManager.make_skin_preview(skin_id, clip.size)
+		skin_bg.position = Vector2.ZERO
+		clip.add_child(skin_bg)
 
-	# Live SimonWheel preview with this skin applied. Logical size > displayed
-	# size + uniform scale = preview reads at the same proportions as the in-game
-	# wheel (same trick as the frame previews use).
-	var wheel := SimonWheel.new()
-	wheel.size = Vector2(SKIN_PREVIEW_LOGICAL, SKIN_PREVIEW_LOGICAL)
-	var pscale := SKIN_PREVIEW / SKIN_PREVIEW_LOGICAL
-	wheel.scale = Vector2(pscale, pscale)
-	wheel.position = Vector2((clip.size.x - SKIN_PREVIEW) * 0.5, (clip.size.y - SKIN_PREVIEW) * 0.5)
-	clip.add_child(wheel)
-	# NOTE: the wheel is configured LATER (see _build_skins_panel) — only AFTER this
-	# card is added to the tree. Building/configuring it off-tree left the SubViewport
-	# mis-sized (2× → only the top-left quarter showed) and mis-aimed (blank), because
-	# SubViewportContainer sizing + Camera3D.look_at both need an in-tree node. The
-	# preview works precisely because it configures its wheel in-tree.
+		# Live SimonWheel preview with this skin applied. Logical size > displayed
+		# size + uniform scale = preview reads at the same proportions as the in-game
+		# wheel (same trick as the frame previews use).
+		wheel = SimonWheel.new()
+		wheel.size = Vector2(SKIN_PREVIEW_LOGICAL, SKIN_PREVIEW_LOGICAL)
+		var pscale := SKIN_PREVIEW / SKIN_PREVIEW_LOGICAL
+		wheel.scale = Vector2(pscale, pscale)
+		wheel.position = Vector2((clip.size.x - SKIN_PREVIEW) * 0.5, (clip.size.y - SKIN_PREVIEW) * 0.5)
+		clip.add_child(wheel)
+		# NOTE: the wheel is configured LATER (see _build_skins_panel) — only AFTER this
+		# card is added to the tree. Building/configuring it off-tree left the SubViewport
+		# mis-sized (2× → only the top-left quarter showed) and mis-aimed (blank), because
+		# SubViewportContainer sizing + Camera3D.look_at both need an in-tree node. The
+		# preview works precisely because it configures its wheel in-tree.
 
-	# A skin that brings its own button frame says so, on the preview rather than in
-	# the copy: one small chip in the skin's own colour, tucked into the corner of the
-	# inset. The card already carries a title, a blurb and a price — anything larger
-	# than this and the grid starts to read as a spec sheet.
-	if not ButtonFrames.frame_for_skin(skin_id).is_empty():
-		clip.add_child(_skin_frame_chip(primary, clip.size))
+		# A skin that brings its own button frame says so, on the preview rather than in
+		# the copy: one small chip in the skin's own colour, tucked into the corner of the
+		# inset. The card already carries a title, a blurb and a price — anything larger
+		# than this and the grid starts to read as a spec sheet.
+		if not ButtonFrames.frame_for_skin(skin_id).is_empty():
+			clip.add_child(_skin_frame_chip(primary, clip.size))
+	else:
+		# The SAME still the theme's own card showed: the real gameplay board standing
+		# on the world, rendered once and cached per (id, size). It needs no special
+		# casing to sell the buttons as well as the backdrop, because the board in it
+		# is standing on this world and therefore already wearing this world's buttons
+		# — see IceButtons.active_for / MemoryGameUI._wanted_background.
+		var plate := BackgroundManager.make_preview(theme_id, clip.size)
+		plate.position = Vector2.ZERO
+		clip.add_child(plate)
+		# Same chip, same corner, saying the same kind of thing a wheel skin's frame
+		# chip says: this look changes your buttons too. The wording is the entry's,
+		# because there are two of these now and they do not wear the same buttons.
+		clip.add_child(_skin_frame_chip(primary, clip.size,
+			String(def.get("chip", "EXCLUSIVE BUTTONS"))))
 
 	# Name + blurb, below the preview.
 	var name_lbl := Label.new()
@@ -1569,20 +1686,36 @@ func _make_skin_card(def: Dictionary) -> Dictionary:
 	# ScrollContainer; a plain tap still registers as a click.
 	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	root.add_child(btn)
-	var price := _make_price_content(CoinsManager.skin_price(skin_id), 13.0, 22, 52.0)
+	var price := _make_price_content(_skin_card_price(skin_id), 13.0, 22, 52.0)
 	btn.add_child(price["box"])
 	btn.pressed.connect(func() -> void: _on_skin_action(skin_id))
 	return {
 		"root": root, "btn": btn, "price_box": price["box"],
 		"price_label": price["label"], "accent": primary, "preview": wheel,
+		"theme": theme_id,
 	}
 
 # The "this skin dresses your buttons too" chip. Sits inside the preview inset,
 # bottom-right, so it reads as a label ON the thing it describes.
-func _skin_frame_chip(accent: Color, area: Vector2) -> Panel:
-	var chip := Panel.new()
-	var w := 152.0
+func _skin_frame_chip(accent: Color, area: Vector2, text := "EXCLUSIVE FRAME") -> Panel:
 	var h := 24.0
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 12)
+	l.add_theme_color_override("font_color", accent.lightened(0.35))
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# The chip is sized to the LABEL, not to a number. A Label refuses to shrink below
+	# its own minimum width and does not clip, so a fixed 152 that suited "EXCLUSIVE
+	# FRAME" let the longer "SNOWFLAKE BUTTONS" spill out of the chip and get cut by
+	# the preview's clip_contents. Asking the label how wide it needs to be is the only
+	# version of this that stays correct for the next chip's wording — and it is the
+	# label's own minimum rather than Font.get_string_size, which under-reports it.
+	var w := maxf(152.0, l.get_combined_minimum_size().x + 26.0)
+	l.size = Vector2(w, h)
+
+	var chip := Panel.new()
 	chip.size = Vector2(w, h)
 	chip.position = Vector2(area.x - w - 10.0, area.y - h - 10.0)
 	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1592,14 +1725,6 @@ func _skin_frame_chip(accent: Color, area: Vector2) -> Panel:
 	st.border_color = Color(accent.r, accent.g, accent.b, 0.75)
 	st.set_border_width_all(1)
 	chip.add_theme_stylebox_override("panel", st)
-	var l := Label.new()
-	l.text = "EXCLUSIVE FRAME"
-	l.add_theme_font_size_override("font_size", 12)
-	l.add_theme_color_override("font_color", accent.lightened(0.35))
-	l.size = Vector2(w, h)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	chip.add_child(l)
 	return chip
 
@@ -1612,16 +1737,38 @@ func _refresh_skin_cards() -> void:
 	for skin_id in _skins_by_id:
 		_apply_skin_card_state(skin_id, _skins_by_id[skin_id])
 
+# What a skin card's button charges. A theme-backed skin is priced by the THEMES
+# catalog it actually lives in, never by SIMON_SKINS (which has no entry for it).
+func _skin_card_price(skin_id: String) -> int:
+	var theme_id := _skin_theme(skin_id)
+	if theme_id.is_empty():
+		return CoinsManager.skin_price(skin_id)
+	return CoinsManager.theme_price(theme_id)
+
 # Mirror of _apply_card_state for skin cards. The "equipped" state additionally
 # requires simon_mode == SKIN — equipping a manual per-part colour switches the
 # mode back to MANUAL, at which point even the formerly-selected skin reads as
 # merely OWNED, not equipped.
+#
+# A THEME-BACKED card asks the theme path instead, which is the same question
+# _apply_card_state asks: a wheel skin equipped elsewhere overrides every
+# background, so while one is on, this card reads OWNED and offers EQUIP — and
+# tapping it drops the skin and puts the world back.
 func _apply_skin_card_state(skin_id: String, c: Dictionary) -> void:
-	var owned := CoinsManager.owns_skin(skin_id)
-	var equipped := (not CoinsManager.is_simon_manual()) and CoinsManager.selected_skin == skin_id
-	var affordable := CoinsManager.can_afford_skin(skin_id)
+	var theme_id: String = c.get("theme", "")
+	var owned: bool
+	var equipped: bool
+	var affordable: bool
+	if theme_id.is_empty():
+		owned = CoinsManager.owns_skin(skin_id)
+		equipped = (not CoinsManager.is_simon_manual()) and CoinsManager.selected_skin == skin_id
+		affordable = CoinsManager.can_afford_skin(skin_id)
+	else:
+		owned = CoinsManager.owns(theme_id)
+		equipped = CoinsManager.is_simon_manual() and CoinsManager.selected_theme == theme_id
+		affordable = CoinsManager.can_afford(theme_id)
 	_style_card_button(c["btn"], c["price_box"], c["price_label"], c["accent"], 14,
-		_card_state(owned, equipped, affordable), owned)
+		_card_state(owned, equipped, affordable), owned, _skin_card_price(skin_id))
 
 # Re-applies each card's skin to its preview wheel. Cheap; safe to call any time
 # the skin's appearance might have changed (e.g. catalog re-tuned during dev).
@@ -1659,6 +1806,13 @@ func _update_skin_preview_visibility() -> void:
 		w.set_preview_paused(not on)
 
 func _on_skin_action(skin_id: String) -> void:
+	# A theme-backed skin buys and equips through the THEMES path, confirm dialog and
+	# all — it IS a theme card, standing on a different shelf. Reusing _on_action rather
+	# than copying it is what guarantees the two shelves cannot drift apart.
+	var theme_id := _skin_theme(skin_id)
+	if not theme_id.is_empty():
+		_on_action(theme_id)
+		return
 	if CoinsManager.owns_skin(skin_id):
 		CoinsManager.equip_skin(skin_id)
 		return

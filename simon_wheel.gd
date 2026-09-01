@@ -680,6 +680,17 @@ func luna_celebrate() -> void:
 		return
 	_marquee.celebrate()
 
+# The player has just completed round `round_no`. Accepted and ignored, the mirror of
+# the SimonWheel-only flourishes MemoryGameUI accepts as no-ops: game.gd calls this on
+# whatever play device it built, and the one background that does anything with it —
+# the Magical Lake's frog — lives inside a MemoryGameUI's SubViewport and is not
+# reachable from here. This exists so the call site never has to ask which it has.
+# Zero seconds of freeze, which is the "nothing happened" every non-lake background
+# answers with.
+func background_milestone(_round_no: int) -> float: return 0.0
+func background_id() -> String: return ""
+func background_celebration(_level_no: int) -> float: return 0.0
+
 # Project a wheel-space point to this Control's local pixel coords through the render
 # camera, accounting for any SubViewport/widget size mismatch so the overlay lines up.
 func _project(world: Vector3) -> Vector2:

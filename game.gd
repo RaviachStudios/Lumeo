@@ -18,6 +18,57 @@ const BG_BOT := Color(0.02, 0.08, 0.22, 1.0)
 const HUD_RIGHT_BTN_W := 114.0
 const HUD_RIGHT_MARGIN := 20.0
 
+# ---------------------------------------------------------------------------
+# THE HUD'S LANES
+# ---------------------------------------------------------------------------
+# The play screen is a 3D board with a flat HUD drawn on top of it, and until this
+# existed the two were laid out in ignorance of each other. That cost two defects
+# that tools/play_fit.tscn now measures directly, both of them on every level and
+# every difficulty:
+#
+#   * the "Your turn!" pill was drawn OVER one or two buttons on every skin. A
+#     button under an opaque pill is as unavailable as one off the screen — this is
+#     a game whose entire input is tapping buttons;
+#   * and on Ice Kingdom the bottom row ran forty pixels past the bottom edge,
+#     because the board's framing preference (BackgroundScenes.frame_bias) was two
+#     free numbers that nobody checked against the size of the viewport.
+#
+# So the pill's lane is declared here, published to the board (set_hud_insets) and
+# the board is framed INSIDE what is left. The numbers are the pill's own geometry
+# rather than a guessed margin, so moving the pill moves the board.
+const STATUS_H := 48.0            # the pill's height
+const STATUS_BOTTOM := 16.0       # ...its gap to the bottom edge
+const STATUS_CLEAR := 12.0        # ...and the air between it and the nearest button
+
+# The top-right column (close dome, coins) and the top-left (watch-ad) both start
+# here, and the board is kept out of neither: it is held off both SIDES by
+# _fit_camera's own width reserve, and the corners are where that reserve puts the
+# room. tools/play_fit.tscn asserts the corners stay clear per button, per board,
+# per aspect — which is the check that makes it safe not to spend a top lane.
+const HUD_TOP_MARGIN := 20.0
+const STATUS_FONT := 26
+
+# The height this HUD is AUTHORED at. Below it the HUD scales down with the frame;
+# at or above it nothing scales, so every shipping device sees the HUD exactly as
+# drawn (project.godot stretches canvas_items/expand from a 1280x720 base, which
+# keeps the viewport height at 720 or more on any real screen — width is what
+# varies).
+#
+# It exists because the HUD is in absolute pixels and the board is a fraction of
+# the frame, so on any viewport SHORTER than the design height the HUD grows
+# relative to the board it is drawn over. tools/play_fit.tscn caught exactly that
+# at 960x540: the close dome, unchanged at 52 px, is 9.6 % of that frame against
+# 7.2 % of a 720 one, and it reached far enough into the board to cover a button.
+const HUD_BASE_H := 720.0
+# The close dome's diameter at the design height. Named here rather than left a
+# local in _build_hud because _layout_hud has to re-derive it on every resize.
+const QUIT_D := 52.0
+
+
+# 1.0 at the design height and above; proportional below it.
+func _hud_scale() -> float:
+	return clampf(get_viewport_rect().size.y / HUD_BASE_H, 0.70, 1.0)
+
 var num_buttons: int
 var sequence: Array[int] = []
 var player_seq: Array[int] = []
@@ -47,7 +98,7 @@ var _last_input_frame: int = -1
 var _is_contest: bool = false
 
 var _status_lbl: Label
-var _status_panel: Panel
+var _status_panel: Control
 var _quit_btn: Button
 var _watch_ad_btn: Button
 # Coins HUD: a top-center pill showing the coins earned THIS session (starts at
@@ -105,7 +156,7 @@ func _ready() -> void:
 	_layout_wheel()
 	_wheel.configure(num_buttons, BUTTON_COLORS)
 	_apply_simon_skin()
-	get_viewport().size_changed.connect(_layout_wheel)
+	get_viewport().size_changed.connect(_relayout)
 	_build_hud()
 	# The rewarded "watch ads for replay" ad is the ONLY source of replays (they
 	# start at 0), so it's offered during arena races too — where the 10s per-press
@@ -168,6 +219,103 @@ func _draw() -> void:
 		draw_line(Vector2(0,y), Vector2(sz.x,y), Color(1,1,1,0.025), 1.0)
 
 # Give the modelled board the whole viewport; it frames itself inside it.
+# Re-lay EVERYTHING the viewport's size decides, in the one order that works: the
+# HUD's lanes are computed first, published to the board second, and the board
+# fitted third — a board framed against a HUD that has not moved yet is framed
+# against the last viewport.
+#
+# It runs on every resize, and before this it did not exist: `size_changed` was
+# wired straight to _layout_wheel, so the board re-fitted and the close dome, the
+# status pill, the coin pill and the quit dialog all stayed where the FIRST layout
+# had put them. Shrink the window and the close button is outside it.
+func _relayout() -> void:
+	_layout_hud()
+	_layout_wheel()
+
+
+# Where every flat control on the play screen goes, as a function of the viewport
+# and the device's safe area. Called from _build_hud and from every resize; nothing
+# here may be positioned anywhere else.
+func _layout_hud() -> void:
+	var sz := get_viewport_rect().size
+	var safe := _safe_insets()
+	var k := _hud_scale()
+	var left := HUD_TOP_MARGIN * k + safe.x
+	var right := HUD_RIGHT_MARGIN * k + safe.z
+	var top := HUD_TOP_MARGIN * k + safe.y
+	if _watch_ad_btn != null:
+		_watch_ad_btn.position = Vector2(left, top)
+	if _quit_btn != null:
+		_quit_btn.size = Vector2(QUIT_D, QUIT_D) * k
+		_quit_btn.position = Vector2(sz.x - _quit_btn.size.x - right, top)
+		_quit_btn.queue_redraw()
+	if _coin_panel != null:
+		_coin_panel.position = Vector2(sz.x - _coin_panel.size.x - right,
+			top + 58.0 * k)
+	if _countdown_lbl != null:
+		_layout_countdown(sz)
+	var dlg := get_node_or_null("QuitDialog") as Control
+	if dlg != null:
+		dlg.position = Vector2(roundf(sz.x * 0.5 - dlg.size.x * 0.5),
+			roundf(sz.y * 0.5 - dlg.size.y * 0.5))
+	_layout_status(sz)
+	# ...and the board is framed inside what the HUD left. The pill's lane is its
+	# own height plus its two margins — measured, not guessed, so that a change to
+	# the pill moves the buttons rather than quietly starting to cover them.
+	if _wheel != null:
+		_wheel.set_hud_insets(0.0,
+			(STATUS_BOTTOM + STATUS_H + STATUS_CLEAR) * k + safe.w)
+
+
+# The status pill, sized to its text and seated in its lane. Split out of
+# _set_status so that a resize re-seats it without needing the text to change.
+func _layout_status(sz: Vector2) -> void:
+	if _status_panel == null or _status_lbl == null:
+		return
+	var safe := _safe_insets()
+	var k := _hud_scale()
+	var fs := int(roundf(STATUS_FONT * k))
+	_status_lbl.add_theme_font_size_override("font_size", fs)
+	var font := _status_lbl.get_theme_font("font")
+	var tw: float = font.get_string_size(_status_lbl.text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var ph := STATUS_H * k
+	var pw: float = clampf(maxf(180.0 * k, tw + 60.0 * k),
+		180.0 * k, maxf(200.0, sz.x - 80.0))
+	_status_panel.size = Vector2(roundf(pw), roundf(ph))
+	_status_panel.position = Vector2(roundf(sz.x * 0.5 - pw * 0.5),
+		roundf(sz.y - (STATUS_BOTTOM + STATUS_H) * k - safe.w))
+	_status_lbl.position = Vector2.ZERO
+	_status_lbl.size = _status_panel.size
+
+
+# The device's safe area — a notch, a cutout, a gesture bar — as insets in VIEWPORT
+# pixels (left, top, right, bottom).
+#
+# The conversion matters: the safe area comes back in real window pixels and this
+# project stretches (canvas_items / expand, 1280x720 base), so a 90 px cutout on a
+# 2400-wide phone is 48 px of viewport, not 90. Mobile only — on desktop
+# get_display_safe_area returns the whole SCREEN, which against a smaller window
+# yields nonsense insets rather than zero.
+func _safe_insets() -> Vector4:
+	if not OS.has_feature("mobile"):
+		return Vector4.ZERO
+	var win := DisplayServer.window_get_size()
+	if win.x <= 0 or win.y <= 0:
+		return Vector4.ZERO
+	var safe := DisplayServer.get_display_safe_area()
+	if safe.size.x <= 0 or safe.size.y <= 0:
+		return Vector4.ZERO
+	var vp := get_viewport_rect().size
+	var sx := vp.x / float(win.x)
+	var sy := vp.y / float(win.y)
+	return Vector4(
+		maxf(float(safe.position.x), 0.0) * sx,
+		maxf(float(safe.position.y), 0.0) * sy,
+		maxf(float(win.x - safe.end.x), 0.0) * sx,
+		maxf(float(win.y - safe.end.y), 0.0) * sy)
+
+
 func _layout_wheel() -> void:
 	if _wheel == null:
 		return
@@ -271,7 +419,6 @@ func _build_hud() -> void:
 	add_child(_watch_ad_btn)
 
 	# Quit — a physical glossy red push-button dome with a white ✕, top-right.
-	const QUIT_D := 52.0
 	_quit_btn = (load("res://close_button.gd") as GDScript).new()
 	_quit_btn.position = Vector2(sz.x - QUIT_D - HUD_RIGHT_MARGIN, 20)
 	_quit_btn.size = Vector2(QUIT_D, QUIT_D)
@@ -286,6 +433,9 @@ func _build_hud() -> void:
 	# (Coins earned are still tracked + banked at game over via CoinsManager; the
 	# on-screen coins pill was removed from the play screen.)
 	_build_quit_dialog(sz)
+	# Everything above is CONSTRUCTED at a nominal size; this is what actually
+	# places it, and it is the same call every resize makes.
+	_layout_hud()
 
 	# Arena race: a big glowing 3-2-1 that appears on the side in the last 3s of a
 	# press window. Hidden by default; _process toggles + updates it.
@@ -349,20 +499,18 @@ func _solid3d_btn(btn: Button, base: Color, fg: Color, corner: int) -> void:
 # Status prompt below the wheel, housed in a soft dark-glass pill that auto-fits
 # the text width (kept centred). Built once; _set_status() updates the text.
 func _build_status_bar(sz: Vector2) -> void:
-	_status_panel = Panel.new()
+	# DRAWN, not styled. It was a Panel with a flat StyleBoxFlat — one colour, a
+	# hairline border, a soft shadow — which is the only control on this screen that
+	# was not drawn, and against a live 3D board wearing a bespoke skin it read as a
+	# debug label. status_pill.gd gives it the LEVEL badge's own language and the
+	# badge's own palette, so the two dark-glass readouts in opposite corners of the
+	# frame read as a set instead of as two different ideas.
+	_status_panel = (load("res://status_pill.gd") as GDScript).new()
 	_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.04, 0.05, 0.13, 0.80)
-	st.set_corner_radius_all(22)
-	st.border_color = Color(0.45, 0.55, 1.0, 0.35)
-	st.set_border_width_all(1)
-	st.shadow_color = Color(0.15, 0.25, 0.7, 0.30)
-	st.shadow_size = 14
-	_status_panel.add_theme_stylebox_override("panel", st)
 	add_child(_status_panel)
 
 	_status_lbl = Label.new()
-	_status_lbl.add_theme_font_size_override("font_size", 26)
+	_status_lbl.add_theme_font_size_override("font_size", STATUS_FONT)
 	_status_lbl.add_theme_color_override("font_color", Color(0.93, 0.95, 1.0))
 	_status_lbl.add_theme_color_override("font_shadow_color", Color(0, 0.02, 0.08, 0.6))
 	_status_lbl.add_theme_constant_override("shadow_offset_x", 0)
@@ -378,16 +526,12 @@ func _set_status(txt: String) -> void:
 	if _status_lbl == null:
 		return
 	_status_lbl.text = txt
-	var sz := get_viewport_rect().size
-	var font := _status_lbl.get_theme_font("font")
-	var tw: float = font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 26).x
-	var pw: float = maxf(180.0, tw + 56.0)
-	const PH := 52.0
-	_status_panel.size = Vector2(pw, PH)
-	_status_panel.position = Vector2(sz.x * 0.5 - pw * 0.5, sz.y - 84.0)
 	_status_panel.visible = txt != ""
-	_status_lbl.position = Vector2.ZERO
-	_status_lbl.size = Vector2(pw, PH)
+	# The pill's GEOMETRY is _layout_status's, not this function's, and the split is
+	# what makes the lane honest: the board is framed against the lane, the lane is
+	# the pill's rect, and a pill re-seated only when its text happens to change is
+	# a pill that is in the wrong place after every resize.
+	_layout_status(get_viewport_rect().size)
 
 # Top-center pill: a small gold coin glyph + the coins earned this session
 # (starts at 0). Only shown when signed in (offline users don't accumulate
@@ -656,6 +800,498 @@ func _fire_label(txt: String, fs: int) -> Label:
 	lbl.add_theme_font_size_override("font_size", fs)
 	return lbl
 
+# Big "YOU ROCK!" banner for the Magical Lake's level-8 party — a bright lime-white
+# face over a soft aqua bloom, in the lake's own greens so it belongs to the water
+# it pops over rather than being a UI card laid on top of it.
+#
+# NOT awaited, and that is the point rather than an oversight: the round is already
+# frozen by _freeze_for_event for the whole ~5 s party, and it is the PARTY's clock
+# that releases it. So this is free to be shorter than the event — it waits out the
+# pads surfacing, pops at about 0.9 s, breathes, and is completely gone by 3.3 s,
+# which leaves the last stretch of the celebration to the frogs and the sink to the
+# water. A banner still on screen while the pads go under is a banner that turns the
+# ending into a fade rather than a farewell.
+#
+# It is deliberately narrower than the other four banners (0.13 of the width against
+# their 0.16-0.17): five frogs are the subject here, and a full-width word across
+# the middle of the frame covers three of them.
+func _show_you_rock_text() -> void:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	var screen := get_viewport_rect().size
+	# Size the holder to the viewport EXPLICITLY (not via an anchor preset): the
+	# centred labels below fill this rect, so an unresolved size can't collapse the
+	# text into the top-left corner. Pivot at centre so the scale-pop grows from it.
+	holder.position = Vector2.ZERO
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
+
+	var fs := int(clampf(screen.x * 0.13, 62.0, 150.0))
+	var txt := "YOU ROCK!"
+
+	# A ring of small diamonds around the word. They are rotated ColorRects rather
+	# than a glyph on purpose — a star character is a bet on the shipped font having
+	# one, and a missing glyph is a row of boxes across the celebration.
+	var mid := screen * 0.5
+	for i in 9:
+		var a := TAU * float(i) / 9.0 + 0.31
+		var s := 11.0 + 9.0 * float((i * 5) % 3)
+		var pip := ColorRect.new()
+		pip.color = Color(0.82, 1.0, 0.92) if i % 2 == 0 else Color(0.62, 0.94, 1.0)
+		pip.size = Vector2(s, s)
+		pip.pivot_offset = Vector2(s, s) * 0.5
+		pip.rotation = PI * 0.25
+		pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var home := mid + Vector2(cos(a) * screen.x * 0.30, sin(a) * screen.y * 0.19)
+		pip.position = home - pip.size * 0.5
+		pip.scale = Vector2.ZERO
+		holder.add_child(pip)
+		# Out from the word and away, each on its own beat, so the ring twinkles
+		# instead of pulsing as one object.
+		var pt := holder.create_tween()
+		pt.tween_interval(0.95 + 0.055 * float(i))
+		pt.tween_property(pip, "scale", Vector2.ONE, 0.22) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		pt.parallel().tween_property(pip, "position",
+			pip.position + (home - mid).normalized() * 34.0, 1.5) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		pt.tween_property(pip, "scale", Vector2.ZERO, 0.85) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	# Layer 1 — soft aqua bloom behind the letters (thick, low-punch outline).
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(0.42, 1.0, 0.82, 0.85))
+	glow.add_theme_color_override("font_outline_color", Color(0.30, 0.92, 0.86, 0.7))
+	glow.add_theme_constant_override("outline_size", 40)
+	holder.add_child(glow)
+
+	# Layer 2 — crisp lime-white face with a deep lake-green outline and a cool drop
+	# shadow, so the letters read as lit from the water.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(0.94, 1.0, 0.86))
+	main.add_theme_color_override("font_outline_color", Color(0.04, 0.20, 0.18))
+	main.add_theme_constant_override("outline_size", 18)
+	main.add_theme_color_override("font_shadow_color", Color(0.20, 0.80, 0.70, 0.6))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 6)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Wait out the pads surfacing (0.85) → pop in with an overshoot (0.35) → breathe
+	# (1.2) → fade fully out (0.9). Gone at 3.30 s of a 5.00 s party.
+	holder.scale = Vector2(0.68, 0.68)
+	var tw := create_tween()
+	tw.tween_interval(0.85)
+	tw.tween_property(holder, "modulate:a", 1.0, 0.30)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.35) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.05, 1.05), 1.2) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.9) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
+	holder.queue_free()
+
+# ---------------------------------------------------------------------------
+# Ice Kingdom's two milestone banners
+# ---------------------------------------------------------------------------
+# The background id these belong to. The two celebrations themselves are the
+# BACKGROUND's — it decides whether a level number means anything to it and how long
+# the round must freeze — and these are the words that go over them, which are the
+# game's, because nothing inside a SubViewport can draw over the HUD.
+const ICE_BG := "world_ice"
+
+# ...and the Royal Casino's, for the level-8 ROYAL FLUSH. There is deliberately NO
+# every-third-round banner to go with it, unlike Ice Kingdom's FROZEN STREAK: the
+# casino's small events ARE the show — cards dealt, a roulette ball, a chip cascade —
+# and a line of text over the table every third round would compete with the thing it
+# was announcing. The table speaks for itself until level 8.
+const CASINO_BG := "world_casino"
+
+# What the every-third-level banner says, cycled by which milestone it is: level 3
+# is the first, 6 the second, and it comes round again at 15. Four phrases rather
+# than one because this fires every three levels for a whole run — the fourth time
+# a player reads the same two words in ninety seconds it has stopped being a reward.
+const ICE_STREAK_WORDS := [
+	"FROZEN STREAK!", "ICE COLD!", "KEEP GOING!", "UNSTOPPABLE!",
+]
+
+# The shimmer that runs across the big banner's letters: a soft band in SCREEN space
+# multiplying a white copy of the text, so the highlight travels across the whole
+# phrase rather than across each glyph.
+#
+# It has to be a shader and not a moving rectangle for one reason — a rectangle over
+# the text is also a rectangle over the ice behind it. Multiplying the LABEL's own
+# alpha is what keeps the band inside the letters.
+const ICE_SHIMMER_SHADER := """
+shader_type canvas_item;
+uniform float pos = -0.4;
+uniform float width = 0.16;
+void fragment() {
+	float d = (SCREEN_UV.x - pos) / width;
+	COLOR.a *= exp(-d * d);
+}
+"""
+
+func _ice_shimmer_mat() -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = ICE_SHIMMER_SHADER
+	var m := ShaderMaterial.new()
+	m.shader = sh
+	m.set_shader_parameter("pos", -0.4)
+	return m
+
+
+# The EXTRUSION under both banners, and the thing that makes them read as carved
+# rather than as typed: `depth` copies of the word, each one pixel lower and darker
+# than the last, laid down before the face. Six of them at 1280 wide.
+#
+# It is stacked Labels and not an outline because an outline goes round a letter and
+# an extrusion goes UNDER it — the difference is the whole of the 3D impression, and
+# at a banner's size an outline thick enough to fake one closes up the counters of
+# the a and the o.
+func _ice_extrude(holder: Control, txt: String, fs: int, depth: int,
+		base: Color) -> void:
+	for i in range(depth, 0, -1):
+		var lay := _fire_label(txt, fs)
+		var k := float(i) / float(depth)
+		lay.add_theme_color_override("font_color", base.darkened(0.35 * k))
+		lay.add_theme_color_override("font_outline_color", base.darkened(0.55))
+		lay.add_theme_constant_override("outline_size", 10)
+		lay.position = Vector2(0.0, float(i) * 2.2)
+		holder.add_child(lay)
+
+
+# EVENT 1's banner — "FROZEN STREAK!" and its three siblings, over the ~1.35 s ring
+# of crystals. Fast: in over a fifth of a second with a small overshoot, a beat, and
+# gone by 1.15 s, which is inside the freeze the background asked for.
+#
+# It sits ABOVE the middle of the frame (0.32 of the height) and not on it. The six
+# snowflakes are the subject of every frame in this game including this one, and a
+# word across their middle for a second is a second of not being able to read them.
+func _show_frozen_streak_text(level_no: int) -> void:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	var screen := get_viewport_rect().size
+	holder.position = Vector2(0.0, -screen.y * 0.155)
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
+
+	var idx: int = (int(level_no / 3) - 1) % ICE_STREAK_WORDS.size()
+	var txt: String = String(ICE_STREAK_WORDS[maxi(idx, 0)])
+	var fs := int(clampf(screen.x * 0.072, 34.0, 88.0))
+
+	# Layer 1 — a wide, soft cyan bloom, which is the frost light the crystals in the
+	# gutters are throwing at the same moment.
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(0.46, 0.86, 1.0, 0.70))
+	glow.add_theme_color_override("font_outline_color", Color(0.30, 0.72, 0.95, 0.55))
+	glow.add_theme_constant_override("outline_size", 30)
+	holder.add_child(glow)
+
+	# Layer 2 — the extrusion, in a deep polar blue.
+	_ice_extrude(holder, txt, fs, 5, Color(0.10, 0.32, 0.52))
+
+	# Layer 3 — the face: near-white with a cold blue cast, a deep ice outline and a
+	# tight cyan shadow directly under it.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(0.90, 0.98, 1.0))
+	main.add_theme_color_override("font_outline_color", Color(0.05, 0.16, 0.30))
+	main.add_theme_constant_override("outline_size", 12)
+	main.add_theme_color_override("font_shadow_color", Color(0.36, 0.80, 1.0, 0.55))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 4)
+	main.add_theme_constant_override("shadow_outline_size", 9)
+	holder.add_child(main)
+
+	holder.scale = Vector2(0.60, 0.60)
+	var tw := create_tween()
+	tw.tween_property(holder, "modulate:a", 1.0, 0.16)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.26) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.04, 1.04), 0.42) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.34) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	await tw.finished
+	holder.queue_free()
+
+
+# EVENT 2's banner — "ICE IN MY VEINS!", over the ~4.85 s aurora celebration.
+#
+# NOT awaited, exactly like the lake's: the round is already frozen for the whole
+# event and it is the EVENT's clock that releases it, so this is free to be shorter.
+# It waits out the aurora coming up and the sleigh reaching the middle of the sky
+# (1.15 s), pops, holds while the sleigh leaves, and is completely gone by 4.0 s of
+# 4.85 — which leaves the light sweep and the last of the snow to close the event on
+# their own. A banner still up while the sky comes down turns an ending into a fade.
+func _show_ice_veins_text() -> void:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	var screen := get_viewport_rect().size
+	# Lifted a little off the middle, and no further. Sixteen characters at a size
+	# that reads as a celebration is most of the frame's width, so the only place
+	# for it is the BAND BETWEEN THE ROWS of buttons — high enough to clear the near
+	# ones, low enough not to sit on the far ones. Lifting it to the top of the
+	# frame would put it over the sky the aurora and the sleigh are using.
+	holder.position = Vector2(0.0, -screen.y * 0.060)
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
+
+	var fs := int(clampf(screen.x * 0.090, 46.0, 116.0))
+	var txt := "ICE IN MY VEINS!"
+
+	# A ring of ice chips around the phrase, on the lake party's pattern: rotated
+	# ColorRects rather than a glyph, because a star character is a bet on the
+	# shipped font having one and a missing glyph is a row of boxes across the
+	# celebration.
+	var mid := screen * 0.5 + holder.position
+	for i in 10:
+		var a := TAU * float(i) / 10.0 + 0.19
+		var sz := 9.0 + 8.0 * float((i * 7) % 3)
+		var pip := ColorRect.new()
+		pip.color = Color(0.86, 0.97, 1.0) if i % 2 == 0 else Color(0.52, 0.86, 1.0)
+		pip.size = Vector2(sz, sz)
+		pip.pivot_offset = Vector2(sz, sz) * 0.5
+		pip.rotation = PI * 0.25
+		pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# A TALL ring, not a wide one: at 0.17 of the height the chips landed inside
+		# the phrase rather than around it, which reads as debris on the letters.
+		var home := screen * 0.5 + Vector2(cos(a) * screen.x * 0.35,
+			sin(a) * screen.y * 0.27)
+		pip.position = home - pip.size * 0.5
+		pip.scale = Vector2.ZERO
+		holder.add_child(pip)
+		var pt := holder.create_tween()
+		pt.tween_interval(1.30 + 0.05 * float(i))
+		pt.tween_property(pip, "scale", Vector2.ONE, 0.20) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		pt.parallel().tween_property(pip, "position",
+			pip.position + (home - mid).normalized() * 30.0, 1.5) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		pt.tween_property(pip, "scale", Vector2.ZERO, 0.8) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	# Layer 1 — the wide aurora bloom, in the same violet-into-cyan the sky is doing
+	# behind it, so the phrase belongs to the moment rather than sitting on it.
+	var halo := _fire_label(txt, fs)
+	halo.add_theme_color_override("font_color", Color(0.52, 0.55, 1.0, 0.55))
+	halo.add_theme_color_override("font_outline_color", Color(0.40, 0.60, 1.0, 0.55))
+	halo.add_theme_constant_override("outline_size", 46)
+	holder.add_child(halo)
+
+	# Layer 2 — a tighter cyan glow inside it.
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(0.40, 0.90, 1.0, 0.0))
+	glow.add_theme_color_override("font_shadow_color", Color(0.34, 0.86, 1.0, 0.65))
+	glow.add_theme_constant_override("shadow_offset_x", 0)
+	glow.add_theme_constant_override("shadow_offset_y", 0)
+	glow.add_theme_constant_override("shadow_outline_size", 24)
+	holder.add_child(glow)
+
+	# Layer 3 — the extrusion. Deeper than the streak banner's, because this one is
+	# nearly twice the size and an extrusion that does not scale with the letters
+	# reads as a printing error.
+	_ice_extrude(holder, txt, fs, 7, Color(0.07, 0.26, 0.46))
+
+	# Layer 4 — the face: thick, rounded, near-white with a cold cast, over a deep
+	# ice outline and a cyan shadow that acts as the bottom of the extrusion.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(0.93, 0.99, 1.0))
+	main.add_theme_color_override("font_outline_color", Color(0.04, 0.14, 0.28))
+	main.add_theme_constant_override("outline_size", 16)
+	main.add_theme_color_override("font_shadow_color", Color(0.30, 0.78, 1.0, 0.6))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 7)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Layer 5 — the shimmer. A white copy of the phrase whose alpha is a soft band in
+	# screen space; sweeping the band across is the highlight running along the ice.
+	var shine := _fire_label(txt, fs)
+	shine.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.9))
+	var smat := _ice_shimmer_mat()
+	shine.material = smat
+	holder.add_child(shine)
+
+	# 1.15 wait → pop (0.34) → breathe (1.35) → out (0.85). Gone at 3.9 s of 4.85.
+	holder.scale = Vector2(0.66, 0.66)
+	var tw := create_tween()
+	tw.tween_interval(1.15)
+	tw.tween_property(holder, "modulate:a", 1.0, 0.28)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.34) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.045, 1.045), 1.35) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.85) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	# The shimmer runs twice, on its own tween: once as the phrase lands and once
+	# while it is holding. Both start off the left edge and finish off the right, so
+	# the band is never seen to appear.
+	var sw := create_tween()
+	sw.tween_interval(1.45)
+	sw.tween_method(func(v: float) -> void: smat.set_shader_parameter("pos", v),
+		-0.25, 1.25, 0.85).set_trans(Tween.TRANS_SINE)
+	sw.tween_interval(0.55)
+	sw.tween_method(func(v: float) -> void: smat.set_shader_parameter("pos", v),
+		-0.25, 1.25, 0.95).set_trans(Tween.TRANS_SINE)
+	await tw.finished
+	holder.queue_free()
+
+
+# ---------------------------------------------------------------------------
+# The Royal Casino's level-8 banner
+# ---------------------------------------------------------------------------
+# "ROYAL FLUSH!" over CasinoEvents' five-card celebration. The celebration itself is
+# the BACKGROUND's — it deals the hand, holds the fifth card back, slams it open on
+# the Ace and decides how long the round must freeze — and this is the words that go
+# over it, which are the game's, because nothing inside a SubViewport can draw over
+# the HUD.
+#
+# NOT awaited, and that is the point rather than an oversight: the round is already
+# frozen by _freeze_for_event for the whole ~4.35 s hand, and it is the EVENT's clock
+# that releases it. So this is free to be shorter, and it is — it waits out the deal
+# and the four reveals, arrives exactly as the Ace turns over (2.50 s), holds through
+# the gold burst, and is completely gone by 4.34 s, which leaves the cards' exit to
+# close the celebration on its own. A banner still up while the hand slides away
+# turns an ending into a fade.
+#
+# ONE LINE, not "ROYAL..." then "FLUSH!". The brief offers both; this UI has four
+# other celebration banners and all of them are a single line, so a two-beat reveal
+# here would read as a different game's typography rather than as a bigger moment in
+# this one. The IMPACT is carried instead by the scale overshoot, the extrusion and
+# the shine, which is where a casino sign gets its weight anyway.
+#
+# It sits a little ABOVE the middle of the frame: the five cards are on the lane
+# across the top and the six chips are in the lower middle, so this is the band
+# between them.
+func _show_royal_flush_text() -> void:
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.modulate.a = 0.0
+	var screen := get_viewport_rect().size
+	holder.position = Vector2(0.0, -screen.y * 0.075)
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
+
+	var fs := int(clampf(screen.x * 0.108, 52.0, 132.0))
+	var txt := "ROYAL FLUSH!"
+
+	# A ring of small gold pips around the phrase — rotated ColorRects rather than a
+	# glyph, because a star or a suit character is a bet on the shipped font having
+	# one and a missing glyph is a row of boxes across the celebration. (Same reason
+	# CasinoEvents draws its hearts as an SDF instead of using the heart character.)
+	var mid := screen * 0.5 + holder.position
+	for i in 11:
+		var a := TAU * float(i) / 11.0 + 0.27
+		var sz := 9.0 + 8.0 * float((i * 5) % 3)
+		var pip := ColorRect.new()
+		pip.color = Color(1.0, 0.86, 0.44) if i % 2 == 0 else Color(1.0, 0.96, 0.80)
+		pip.size = Vector2(sz, sz)
+		pip.pivot_offset = Vector2(sz, sz) * 0.5
+		pip.rotation = PI * 0.25
+		pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# A TALL ring rather than a wide one: at a small vertical radius the pips land
+		# inside the phrase instead of around it, which reads as debris on the letters.
+		var home := screen * 0.5 + Vector2(cos(a) * screen.x * 0.33,
+			sin(a) * screen.y * 0.26)
+		pip.position = home - pip.size * 0.5
+		pip.scale = Vector2.ZERO
+		holder.add_child(pip)
+		# Out from the phrase and away, each on its own beat, so the ring twinkles
+		# instead of pulsing as one object.
+		var pt := holder.create_tween()
+		pt.tween_interval(2.62 + 0.045 * float(i))
+		pt.tween_property(pip, "scale", Vector2.ONE, 0.20) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		pt.parallel().tween_property(pip, "position",
+			pip.position + (home - mid).normalized() * 32.0, 1.3) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		pt.tween_property(pip, "scale", Vector2.ZERO, 0.7) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
+	# Layer 1 — the wide gold halo, which is the same light the table's own burst is
+	# throwing at that instant, so the phrase belongs to the moment rather than
+	# sitting on top of it.
+	var halo := _fire_label(txt, fs)
+	halo.add_theme_color_override("font_color", Color(1.0, 0.78, 0.26, 0.62))
+	halo.add_theme_color_override("font_outline_color", Color(1.0, 0.66, 0.16, 0.55))
+	halo.add_theme_constant_override("outline_size", 46)
+	holder.add_child(halo)
+
+	# Layer 2 — a tighter amber glow inside it.
+	var glow := _fire_label(txt, fs)
+	glow.add_theme_color_override("font_color", Color(1.0, 0.84, 0.40, 0.0))
+	glow.add_theme_color_override("font_shadow_color", Color(1.0, 0.72, 0.22, 0.70))
+	glow.add_theme_constant_override("shadow_offset_x", 0)
+	glow.add_theme_constant_override("shadow_offset_y", 0)
+	glow.add_theme_constant_override("shadow_outline_size", 24)
+	holder.add_child(glow)
+
+	# Layer 3 — the extrusion, in a deep bronze. This is what makes the phrase read as
+	# CAST rather than as typed, and it is stacked copies rather than a thick outline
+	# because an outline goes ROUND a letter and an extrusion goes UNDER it — at this
+	# size an outline heavy enough to fake one closes up the counters of the O and
+	# the R. (_ice_extrude is not ice-specific; it takes the base colour.)
+	_ice_extrude(holder, txt, fs, 7, Color(0.30, 0.16, 0.04))
+
+	# Layer 4 — the face: bright table gold over a near-black outline, with a warm
+	# shadow under it acting as the bottom of the extrusion.
+	var main := _fire_label(txt, fs)
+	main.add_theme_color_override("font_color", Color(1.0, 0.87, 0.44))
+	main.add_theme_color_override("font_outline_color", Color(0.14, 0.05, 0.02))
+	main.add_theme_constant_override("outline_size", 16)
+	main.add_theme_color_override("font_shadow_color", Color(1.0, 0.60, 0.14, 0.60))
+	main.add_theme_constant_override("shadow_offset_x", 0)
+	main.add_theme_constant_override("shadow_offset_y", 7)
+	main.add_theme_constant_override("shadow_outline_size", 12)
+	holder.add_child(main)
+
+	# Layer 5 — the shine. A white copy of the phrase whose alpha is a soft band in
+	# SCREEN space; sweeping the band across is the highlight travelling along the
+	# letters. It has to be a shader and not a moving rectangle for one reason — a
+	# rectangle over the text is also a rectangle over the table behind it, and
+	# multiplying the LABEL's own alpha is what keeps the band inside the letters.
+	var shine := _fire_label(txt, fs)
+	shine.add_theme_color_override("font_color", Color(1.0, 1.0, 0.94, 0.92))
+	var smat := _ice_shimmer_mat()
+	shine.material = smat
+	holder.add_child(shine)
+
+	# 2.50 wait — the deal and the four reveals — then the impact lands with the Ace:
+	# in over a quarter of a second from 0.55 with a BACK overshoot, a breath, and
+	# gone by 4.34 s of a 4.35 s celebration.
+	holder.scale = Vector2(0.55, 0.55)
+	var tw := create_tween()
+	tw.tween_interval(2.50)
+	tw.tween_property(holder, "modulate:a", 1.0, 0.24)
+	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.34) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(holder, "scale", Vector2(1.035, 1.035), 1.05) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(holder, "modulate:a", 0.0, 0.45) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	# The shine runs twice on its own tween: once as the phrase lands and once while
+	# it is holding. Both start off the left edge and finish off the right, so the
+	# band is never seen to appear or to stop.
+	var sw := create_tween()
+	sw.tween_interval(2.72)
+	sw.tween_method(func(v: float) -> void: smat.set_shader_parameter("pos", v),
+		-0.25, 1.25, 0.70).set_trans(Tween.TRANS_SINE)
+	sw.tween_interval(0.35)
+	sw.tween_method(func(v: float) -> void: smat.set_shader_parameter("pos", v),
+		-0.25, 1.25, 0.80).set_trans(Tween.TRANS_SINE)
+	await tw.finished
+	holder.queue_free()
+
+
 # Big "LUMEO KING" banner for the Arcade skin's level-8 blackout — regal gold letters
 # ringed by an electric neon glow (cyan→magenta), so it reads like a lit marquee sign
 # over the darkened hall. Pops in, holds with a gentle breath, fades out — ~3.3s total.
@@ -869,6 +1505,27 @@ func _player_pressed(idx: int) -> void:
 		if earned > 0:
 			_show_earn_indicator(earned)
 		BackgroundManager.notify_level_complete(level)      # kitty theme winks + cheers
+		# THE 3D BACKGROUND'S OWN MILESTONE, offered on EVERY completed round.
+		#
+		# It used to be asked only inside `level % 5 == 0`, which was the Magical
+		# Lake's number living in the game rather than in the lake. The BACKGROUND
+		# decides now (see BackgroundScenes.note_milestone): the lake still crosses a
+		# frog every fifth round, Ice Kingdom grows and shatters a ring of crystals
+		# every third, and every other background answers 0.0 to all of them. A
+		# fourth background wanting a fourth number does not touch this file.
+		#
+		# What comes back is the SECONDS THE ROUND MUST STAY FROZEN, and the freeze
+		# is taken the instant it is offered — there is no await between the round
+		# completing and this, which is the whole point of taking it here.
+		var bg_secs: float = _wheel.background_milestone(level)
+		if bg_secs > 0.0:
+			_freeze_for_event()
+			# Ice Kingdom's every-third-level burst gets a banner over it, raised now
+			# so it scales in while the crystals are still growing. Fired and NOT
+			# awaited: the banner is shorter than the event, and it is the EVENT's
+			# clock that releases the freeze.
+			if _wheel.background_id() == ICE_BG:
+				_show_frozen_streak_text(level)
 		# Every 3 rounds the Volcano skin's central hub volcano erupts and feeds a surge
 		# of fresh lava into the background river. Both calls are no-ops off the skin.
 		if level % 3 == 0:
@@ -892,6 +1549,41 @@ func _player_pressed(idx: int) -> void:
 			BackgroundManager.luna_celebrate()
 			if _is_lunapark_skin():
 				await _show_nice_ride_text()   # FREEZE until the "NICE RIDE!" banner fully fades out
+		# ...and the background's freeze is released HERE and nowhere earlier. Not when
+		# the lake's frog lands on the pad or reaches the left edge, and not when the
+		# last of Ice Kingdom's crystals lets go: only once the event is completely
+		# outside the viewport and the background has cleaned it up.
+		#
+		# After the Luna Park await rather than before it. The two can never both be
+		# running — they are on different backgrounds — but a freeze that ends while
+		# any banner is still up is a freeze that ended early, and this order cannot
+		# get that wrong.
+		if bg_secs > 0.0:
+			await get_tree().create_timer(bg_secs).timeout
+			_thaw_after_event()
+		# THE BIGGER OF THE TWO BACKGROUND HOOKS, offered every eighth completed level,
+		# for the milestone the every-round one is not enough for. Same contract, same
+		# returned freeze, and the same rule about who decides: the Magical Lake answers
+		# level 8 and only level 8 with the five-frog "YOU ROCK!" party, and Ice Kingdom
+		# answers every eighth with the aurora, the reindeer and "ICE IN MY VEINS!".
+		# Each refuses a repeat on its own account, so this cannot fire twice for one
+		# level.
+		if level % 8 == 0:
+			var party_secs: float = _wheel.background_celebration(level)
+			if party_secs > 0.0:
+				_freeze_for_event()
+				# Fired, NOT awaited: each banner's own tween is shorter than the
+				# celebration it sits over, and it is the CELEBRATION's clock that decides
+				# when the round resumes. The freeze covers both.
+				var finale_bg: String = _wheel.background_id()
+				if finale_bg == ICE_BG:
+					_show_ice_veins_text()
+				elif finale_bg == CASINO_BG:
+					_show_royal_flush_text()
+				else:
+					_show_you_rock_text()
+				await get_tree().create_timer(party_secs).timeout
+				_thaw_after_event()
 		# Jackpot skin only: every 8th completed level (8, 16, 24, …) fires a Mega
 		# Jackpot celebration — the hall washes through a rainbow, the gold JACKPOT
 		# sign powers on, the roulette ball rolls, and a big "JACKPOT!" banner pops
@@ -978,6 +1670,53 @@ func _disarm_press_timer() -> void:
 	_press_active = false
 	if _countdown_lbl:
 		_countdown_lbl.visible = false
+
+# ---------------------------------------------------------------------------
+# The celebration freeze
+# ---------------------------------------------------------------------------
+# A background milestone that is meant to be an INTERRUPTION rather than something
+# happening behind the next round (the Magical Lake's frog, and its level-8 party).
+#
+# There is no second gameplay clock here and no new pause system: this screen
+# already has exactly one thing that decides whether anything may happen, and it is
+# `_state`. Every entry point in the file is gated on it —
+#
+#   _input                 a tap only reaches _player_pressed while it is "input"
+#   _process               the Arena per-press countdown only ticks in "input"
+#   _on_replay             refuses outside "input"
+#   _on_watch_ad           refuses outside "input"
+#   _on_press_timeout      refuses outside "input"
+#
+# — so a state that is not "input" is already, and provably, a state in which the
+# player cannot press a button, the sequence cannot advance and the 10 s race clock
+# cannot expire. What the freeze adds is that the round does not MOVE ON either,
+# and that is the `await` at the call site: the next round is started by the line
+# after it, so while it is waiting no round begins, no level is reached and no
+# sequence is played.
+#
+# "event" rather than "idle" because a name that is never "input" cannot be
+# mistaken for one, and because the press timer is explicitly disarmed on the way
+# in: an Arena race could otherwise carry a live deadline into a five-second
+# celebration and knock the player out during it.
+const EVENT_STATE := "event"
+var _frozen_state := ""
+
+func _freeze_for_event() -> void:
+	if _state == EVENT_STATE:
+		return
+	_frozen_state = _state
+	_disarm_press_timer()
+	_state = EVENT_STATE
+
+# Put back exactly what was there. If something ended the game while the event was
+# running — the Android back gesture into the forfeit prompt is the one real path —
+# `_state` is no longer "event" and this does nothing, so a finished run cannot be
+# resurrected into the round it was in.
+func _thaw_after_event() -> void:
+	if _state != EVENT_STATE:
+		return
+	_state = _frozen_state if _frozen_state != "" else "idle"
+	_frozen_state = ""
 
 # The 10s window elapsed before the player pressed — flash the button they missed,
 # then end the game (counts exactly like a wrong press at this step).
