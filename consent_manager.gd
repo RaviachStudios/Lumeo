@@ -86,10 +86,20 @@ func ensure_consent(on_done: Callable) -> void:
 		on_done.call(_granted)
 		return
 
+	# Every unresolved caller waits on the signal, INCLUDING the one that starts
+	# the resolution below. _finish() is the single place an answer becomes final
+	# and it emits `consent_resolved` on every path, so routing the callback
+	# through the signal is what makes "on_done is called exactly once, always"
+	# true — calling it directly from the two resolution paths instead is how it
+	# came to be missed on both of them.
+	#
+	# Connected BEFORE the branch, because the region path below resolves
+	# synchronously and would otherwise emit into nothing.
+	consent_resolved.connect(func(g: bool) -> void: on_done.call(g), CONNECT_ONE_SHOT)
+
 	if _resolving:
-		# A second caller arrived mid-prompt; let it wait on the signal instead of
-		# stacking a second dialog on top of the first.
-		consent_resolved.connect(func(g: bool) -> void: on_done.call(g), CONNECT_ONE_SHOT)
+		# A second caller arrived mid-prompt; it is now waiting on the signal, so
+		# don't stack a second dialog on top of the first.
 		return
 
 	_resolving = true
