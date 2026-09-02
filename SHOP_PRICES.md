@@ -78,16 +78,16 @@ once, and that tap is still what writes the id into `owned_themes` and makes the
 equip persist. They are deliberately not pre-owned — handing them out in the
 default wallet would change the meaning of every save already on disk.
 
-Being free is also why they sit after the eight priced floors rather than at the
-front of the grid: their order is the authored one, from the world with the least
-happening in frame to the most, not a price ladder.
+They still sit after the eight priced floors rather than at the front of the grid:
+their order is the authored one, from the world with the least happening in frame to
+the most, not a price ladder.
 
 | Item | Id | Price | Shelf |
 |---|---|---|---|
 | Living Forest | `world_forest` | Free | THEMES |
-| Ice Kingdom | `world_ice` | Free | **SPECIAL SKINS** |
-| Magical Lake | `world_lake` | Free | **SPECIAL SKINS** |
-| Royal Casino | `world_casino` | Free | **SPECIAL SKINS** |
+| Ice Kingdom | `world_ice` | 4,000 | **SPECIAL SKINS** |
+| Magical Lake | `world_lake` | 4,000 | **SPECIAL SKINS** |
+| Royal Casino | `world_casino` | 4,000 | **SPECIAL SKINS** |
 
 **Ice Kingdom, Magical Lake and Royal Casino are sold on the SPECIAL SKINS tab, not
 this one.** They are the three themes that also dress the gameplay BUTTONS — the six

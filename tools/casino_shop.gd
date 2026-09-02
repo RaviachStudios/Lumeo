@@ -5,7 +5,7 @@ extends Node
 # rather than as three unrelated products that happen to share a row.
 #
 # Pass "-- owned" to see it after the claim (EQUIP), "-- equipped" to see it while
-# worn (EQUIPPED); with neither, the wallet is empty and the card must read FREE.
+# worn (EQUIPPED); with neither, the card must read its 4000-coin price.
 #
 #   Godot..._console.exe --path . res://tools/casino_shop.tscn [-- owned|equipped]
 #

@@ -117,19 +117,24 @@ const THEMES := {
 	# "inferno" and "rainbow" are shader themes, "bg_crystal" is Crystal Cave. These
 	# ids are what saved wallets contain, so they are frozen.
 	#
-	# Both are FREE. Price 0 is the same thing "default" above and the four
+	# LIVING FOREST is FREE. Price 0 is the same thing "default" above and the four
 	# skin-bound button frames are: the card still shows a buy button, the player
 	# still taps it once, and that tap is still what writes the id into owned_themes
 	# and makes the equip persist. Nothing about the ownership, purchase, equip or
-	# save path is special-cased for them — a free item is a priced item that costs
+	# save path is special-cased for it — a free item is a priced item that costs
 	# nothing, which is why `can_afford` and `purchase_theme` need no change.
 	#
-	# They are deliberately NOT pre-owned. Handing them out in `owned_themes`'
+	# The three SPECIAL SKINS below — Ice Kingdom, Magical Lake, Royal Casino — are
+	# that same item in every one of those respects and simply cost 4000. Nothing
+	# about the ownership, purchase, equip or save path knows the difference; the
+	# only thing their price changes is whether `can_afford` lets the tap through.
+	#
+	# None of them is pre-owned. Handing them out in `owned_themes`'
 	# default would rewrite the meaning of every wallet already on disk; leaving the
 	# tap in place means an existing player picks them up exactly the way they pick
 	# up anything else, and a player who never opens the shop is unaffected.
 	#
-	# Being free is also why they sit AFTER the eight priced floors rather than at
+	# They still sit AFTER the eight priced floors rather than at
 	# the front: the grid's order inside the pair is the authored one — the world
 	# with the least happening in frame to the most — not a price ladder. Keep this
 	# block, WorldScenes.ORDER and the shop's CATEGORIES["items"] in the same order.
@@ -138,13 +143,13 @@ const THEMES := {
 	# is sold on the SPECIAL SKINS shelf rather than in THEMES, because it dresses the
 	# gameplay BUTTONS as well as the ground (the snowflakes — see ice_buttons.gd),
 	# which makes it a complete look rather than a backdrop. Everything on this side
-	# of the shop is untouched by that: same entry, same price, same category, same
+	# of the shop is untouched by that: same entry, same category, same
 	# owned_themes / selected_theme. Only the card it is bought from moved.
 	"world_forest":  {"name": "Living Forest",  "price": 0, "category": "themes"},
-	"world_ice":     {"name": "Ice Kingdom",    "price": 0, "category": "themes"},
+	"world_ice":     {"name": "Ice Kingdom",    "price": 4000, "category": "themes"},
 	# MAGICAL LAKE is the second complete look and sits here for exactly the same
 	# reasons Ice Kingdom does: it is an ordinary theme on this side of the shop —
-	# same entry, same free price, same category, same owned_themes / selected_theme
+	# same entry, same 4000 price, same category, same owned_themes / selected_theme
 	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
 	# dresses the gameplay BUTTONS as well as the ground (the lily pads, see
 	# lily_buttons.gd). Only the card it is bought from is different.
@@ -152,10 +157,10 @@ const THEMES := {
 	# It is also the first background with no imported asset behind it at all: it is
 	# a plane, a shader and a scatter of generated props (lake_world.gd). Nothing
 	# about ownership can tell.
-	"world_lake":    {"name": "Magical Lake",   "price": 0, "category": "themes"},
+	"world_lake":    {"name": "Magical Lake",   "price": 4000, "category": "themes"},
 	# ROYAL CASINO is the third complete look and sits here for exactly the same
 	# reasons the two above do: it is an ordinary theme on this side of the shop —
-	# same entry, same free price, same category, same owned_themes / selected_theme
+	# same entry, same 4000 price, same category, same owned_themes / selected_theme
 	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
 	# dresses the gameplay BUTTONS as well as the ground (six moulded poker chips,
 	# see chip_buttons.gd). Only the card it is bought from is different.
@@ -163,7 +168,7 @@ const THEMES := {
 	# The id is "world_casino" and NOT "casino": that one has been spent since launch
 	# on the JACKPOT wheel skin, which is a different product with a different shelf
 	# and its own celebration (see game.gd's _is_casino_skin). Two ids, deliberately.
-	"world_casino":  {"name": "Royal Casino",   "price": 0, "category": "themes"},
+	"world_casino":  {"name": "Royal Casino",   "price": 4000, "category": "themes"},
 	# The eight LUMEO WORLDS (lume_worlds.gd). A third kind of background again, and
 	# the only one built entirely inside this project: no .blend, no .glb, no image
 	# — each is a pair of GLSL functions painted on BackgroundManager's canvas layer,
