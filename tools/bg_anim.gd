@@ -4,6 +4,12 @@ extends Node
 # moved — mean absolute difference over the whole frame, and the largest single
 # pixel change. Zero means nothing is animating; a large number means it is
 # distracting.
+#
+#   Godot..._console.exe --path . res://tools/bg_anim.tscn -- [id ...]
+#
+# With no ids it walks every modelled background, Themes1 floors and Themes2 worlds
+# alike. The worlds' motion is the .glb's own AnimationPlayer, sampled by the
+# board's idle redraw, so a zero here means the clip is not being driven at all.
 const Hard := preload("res://hard_game_ui.gd")
 const GAP := 2.5
 
@@ -12,7 +18,9 @@ func _ready() -> void:
 	CoinsManager.simon_mode = CoinsManager.SIMON_MODE_MANUAL
 	CoinsManager.selected_skin = ""
 	print("background      animated  mean|d|  max|d|   (sRGB 0-255, over %.1fs)" % (GAP * 2.0))
-	for id in BackgroundScenes.ORDER:
+	var args := OS.get_cmdline_user_args()
+	var ids: Array = args if args.size() > 0 else BackgroundScenes.all_order()
+	for id in ids:
 		CoinsManager.selected_theme = String(id)
 		var dev := Hard.new(); dev.input_enabled = false
 		dev.set_anchors_preset(Control.PRESET_FULL_RECT)

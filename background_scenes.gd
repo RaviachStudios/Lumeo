@@ -1,8 +1,14 @@
 extends RefCounted
 class_name BackgroundScenes
 
-# The nine LUME gameplay backgrounds: 3D floors that live in the board's own
+# The LUME gameplay backgrounds: 3D scenes that live in the board's own
 # SubViewport, under the buttons, seen through the same fitted gameplay camera.
+#
+# This class is the single façade for ALL of them. It owns the eight Themes1
+# FLOORS itself (below) and forwards the two Themes2 WORLDS to world_scenes.gd,
+# which is a different kind of asset — whole environments with their own authored
+# animation — but the same kind of product, sold and equipped through the same
+# path. No caller ever has to know which is which; see "The Themes2 worlds" below.
 #
 # ---------------------------------------------------------------------------
 # Why these are not BackgroundManager themes
@@ -203,6 +209,19 @@ const SEAT_MARGIN := 0.15
 # whose top edge lands at Blender y `top_y`. Zero for a scene with nothing standing
 # in it.
 static func seat_wanted(bg_id: String, top_y: float) -> float:
+	# Neither a world nor the lake is ever seated: one is a closed composition
+	# fitted to this camera, the other is an unbounded surface with nothing standing
+	# on it to clear. Both fall through the CATALOG test below and answer 0, and the
+	# same is true of seat_allowed — this note is here so that reads as intended
+	# rather than as an oversight.
+	# A world is never seated. The Themes1 scenes are floors with furniture standing
+	# on them, and sliding one forward only brings its own props back inside the
+	# frame. A world is a CLOSED composition: its deep background lives in a narrow
+	# band below the deck's far edge, placed against this camera's own occlusion ray,
+	# and sliding it along the ground would drag that band out of alignment with the
+	# very frame it was fitted to. See world_scenes.gd.
+	if WorldScenes.has_scene(bg_id):
+		return 0.0
 	if not CATALOG.has(bg_id):
 		return 0.0
 	var far: float = Data.FURNITURE_FAR_Y.get(String(CATALOG[bg_id]["coll"]), INF)
@@ -210,10 +229,87 @@ static func seat_wanted(bg_id: String, top_y: float) -> float:
 		return 0.0
 	return maxf(far - top_y, 0.0)
 
+# HOW THE BOARD ITSELF SHOULD BE FRAMED while this background is showing, as two
+# deltas on MemoryGameUI's own fit: (how much of the viewport's height the board may
+# span, where its centre sits). Zero for every background but one.
+#
+# It is the only thing in this file that moves the BOARD rather than the scenery,
+# and it exists because Ice Kingdom made a horizon (see IceWorld.HORIZON_FY). A
+# board fitted to fill 0.90 of the height centred at 0.487 has its top row of
+# buttons at 0.037 — above any horizon a picture could have — so the snowflakes
+# stood ON the skyline with the mountains cutting across them. Nothing in the
+# BACKGROUND can fix that: the buttons are 0.90 of the frame and the sky has to go
+# somewhere.
+#
+# So the background says where it needs the board, the board decides whether it can
+# oblige (see MemoryGameUI._fit_camera, which clamps), and every other background
+# answers (0, 0) and is framed exactly as it was.
+# How much of the TOP of the frame a background needs the buttons to stay out of,
+# as a fraction of the viewport's height. Zero for every background that is only a
+# picture behind the board.
+#
+# It is a separate hook from frame_bias, and the split is the point. `frame_bias` is
+# a PREFERENCE — "I would like the board this big, about here" — expressed as two
+# free numbers, and two free numbers cannot state a constraint: Ice Kingdom's asked
+# for a span of 0.835 centred at 0.637, which is a board running to 1.054 of the
+# height, and the fit obediently drew it forty pixels off the bottom of the screen.
+# This is the CONSTRAINT half, and MemoryGameUI._fit_camera solves the preference
+# inside it (see THE BAND) rather than instead of it.
+#
+# What each background is protecting:
+#
+#   Ice Kingdom  its HORIZON. The ice discards itself on a screen line and the sky
+#                stands behind it; a button whose rim crosses that line is a button
+#                silhouetted against mountains, which tools/ice_verify.tscn checks
+#                for by name ("no button stands on the skyline").
+#   Royal Casino its RAIL, the betting arc and the band every casino event is
+#                played in — see CasinoEvents' note on THE LANE, which refuses to
+#                run an event at all on a pose where that band does not exist.
+#
+# Both add a small margin on top of their own line, because what must clear it is a
+# button's RIM, and the fit measures rims.
+const BOARD_TOP_MARGIN := 0.022
+
+# `base_fill` and `base_centre` are the board's OWN unbiased framing, handed in
+# rather than read back: this file is the façade every background script funnels
+# through and MemoryGameUI already depends on it, so reaching the other way turns
+# the pair into a parse cycle and nothing in the project compiles.
+static func board_top_inset(bg_id: String, base_fill: float,
+		base_centre: float) -> float:
+	if IceWorld.has_scene(bg_id):
+		return IceWorld.HORIZON_FY + BOARD_TOP_MARGIN
+	# The casino has no single line to name — its rail, arc and event lane are built
+	# from the pose rather than from a screen fraction — so its constraint is read
+	# back out of the preference it already wrote: the TOP EDGE its own FRAME_BIAS
+	# was aiming at. That edge is the thing the bias existed to buy, and it is the
+	# half of it that was never in question; only the bottom overflowed.
+	var b := frame_bias(bg_id)
+	if b == Vector2.ZERO:
+		return 0.0
+	var fill: float = clampf(base_fill + b.x, 0.55, 0.98)
+	var centre: float = clampf(base_centre + b.y, 0.30, 0.80)
+	return maxf(centre - fill * 0.5, 0.0)
+
+
+static func frame_bias(bg_id: String) -> Vector2:
+	if IceWorld.has_scene(bg_id):
+		return IceWorld.FRAME_BIAS
+	# Royal Casino is the second, and it asks for less. It has a table EDGE rather
+	# than a horizon, and the band it needs above the top row of chips is where the
+	# rail, the betting arc and every casino event are played. See
+	# CasinoWorld.FRAME_BIAS, and CasinoEvents' note on THE LANE — which refuses to
+	# run any event at all on a pose where that band does not exist.
+	if CasinoWorld.has_scene(bg_id):
+		return CasinoWorld.FRAME_BIAS
+	return Vector2.ZERO
+
+
 # How far it may come forward before the outermost button — `board_reach` out from
 # the middle, which MemoryGameUI measures off the live board — reaches the scene's
 # first standing geometry.
 static func seat_allowed(bg_id: String, board_reach: float) -> float:
+	if WorldScenes.has_scene(bg_id):
+		return 0.0
 	if not CATALOG.has(bg_id):
 		return 0.0
 	var tall: float = Data.TALL_RADIUS.get(String(CATALOG[bg_id]["coll"]), INF)
@@ -250,11 +346,89 @@ const ENV_GAIN := 0.0330
 # contrast between these two is exactly what makes machining read as machining.
 const ENV_FLOOR := 0.30
 
+# ---------------------------------------------------------------------------
+# The Themes2 worlds
+# ---------------------------------------------------------------------------
+# Six more 3D backgrounds, imported later and from a different .blend, whose assets
+# carry things these nine do not: real keyframed animation, and materials whose
+# values survived the glTF round trip. Building one is enough of its own job to
+# live in world_scenes.gd — but it is NOT a second background system, and no caller
+# should ever have to ask which kind an id is.
+#
+# So this class stays the single façade. `has_scene`, `build`, `is_animated`, the
+# seating pair, the preview pieces and the backdrop colour all answer for both
+# catalogs, and MemoryGameUI / BackgroundManager / the shop / the harnesses are
+# unchanged apart from the new ids appearing in their lists.
+
+# Every 3D background id, Themes1 floors first, in shop order. `ORDER` on its own
+# stays the Themes1 ladder, because that is what its price/ordering comment and the
+# existing harness defaults mean by it.
+static func all_order() -> Array:
+	return (ORDER as Array) + (WorldScenes.ORDER as Array) + (IceWorld.ORDER as Array) \
+		+ (LakeWorld.ORDER as Array) + (CasinoWorld.ORDER as Array)
+
 static func has_scene(id: String) -> bool:
-	return CATALOG.has(id)
+	return CATALOG.has(id) or WorldScenes.has_scene(id) or IceWorld.has_scene(id) \
+		or LakeWorld.has_scene(id) or CasinoWorld.has_scene(id)
 
 static func display_name(id: String) -> String:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.display_name(id)
+	if IceWorld.has_scene(id):
+		return IceWorld.display_name(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.display_name(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.display_name(id)
 	return String(CATALOG.get(id, {}).get("name", id))
+
+# The flat colour behind a background: what a shop card is cleared to before the
+# bake lands, and what the board's viewport sits on. Each world carries its own
+# (they are not all night scenes — Rainbow Sky is a daylight one).
+static func backdrop_color(id: String) -> Color:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.backdrop_color_of(id)
+	if IceWorld.has_scene(id):
+		return IceWorld.backdrop_color(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.backdrop_color(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.backdrop_color(id)
+	return BACKDROP_COLOR
+
+# How often the board must be nudged to redraw while this background is equipped.
+# The Themes1 floors animate in their shaders at whole-second periods and are happy
+# at BG_IDLE_HZ; a world plays a 30 fps clip and wants sampling at its own rate.
+#
+# `scene` is optional and is only read by a background that redraws at two rates:
+# Ice Kingdom's milestone events need the app's own frame rate for a few seconds
+# and its resting rate (15 Hz) for everything else, and the id alone cannot say
+# which of those is true right now.
+static func idle_hz(id: String, scene: Node3D = null) -> float:
+	if LakeWorld.has_scene(id):
+		return LakeWorld.IDLE_HZ
+	if IceWorld.has_scene(id):
+		return IceWorld.idle_hz_for(scene)
+	# Same two-rate answer Ice Kingdom gives, and for the same reason: a card
+	# crossing the frame in half a second at the table's resting 15 Hz is a
+	# slideshow. See CasinoWorld.idle_hz_for.
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.idle_hz_for(scene)
+	return WorldScenes.IDLE_HZ if WorldScenes.has_scene(id) else BG_IDLE_HZ
+
+# The uniform scale that puts a background's composition back inside THIS board's
+# frame. The Themes1 floors are corrected by sliding instead (seat_wanted /
+# seat_allowed above) and always answer 1.0; the Themes2 worlds are closed
+# compositions that cannot be slid, and are fitted by scale — see
+# WorldScenes.fit_scale.
+static func fit_scale(id: String, cam: Camera3D, vp_size: Vector2, board_reach: float) -> float:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.fit_scale(id, cam, vp_size, board_reach)
+	# The lake is neither slid nor scaled. It is a SURFACE that runs past the frame
+	# in every direction and dissolves into its own distance haze, so there is no
+	# composition to recover and nothing to fit: what adapts to the three boards is
+	# where its dressing is laid, which is set_board_layout's job.
+	return 1.0
 
 # ---------------------------------------------------------------------------
 # Build
@@ -264,6 +438,14 @@ static func display_name(id: String) -> String:
 # Returns null for an unknown id, so every caller can treat "no 3D background" and
 # "a background I don't have" the same way.
 static func build(id: String) -> Node3D:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.build(id)
+	if IceWorld.has_scene(id):
+		return IceWorld.build(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.build(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.build(id)
 	if not CATALOG.has(id):
 		return null
 	var def: Dictionary = CATALOG[id]
@@ -297,12 +479,162 @@ static func build(id: String) -> Node3D:
 # Whether anything in this background moves. Static ones (there are none today, but
 # the machinery must not assume that) leave the board's redraw cadence alone.
 static func is_animated(id: String) -> bool:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.is_animated(id)
+	if IceWorld.has_scene(id):
+		return IceWorld.is_animated(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.is_animated(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.is_animated(id)
 	if not CATALOG.has(id):
 		return false
 	for o: Dictionary in Data.OBJECTS.get(String(CATALOG[id]["coll"]), []):
 		if _anim_kind(String(o.get("anim", ""))) != ANIM_STATIC:
 			return true
 	return false
+
+# ---------------------------------------------------------------------------
+# Laying something on the play surface
+# ---------------------------------------------------------------------------
+# The board draws the buttons' coloured ground pools on one flat sheet lying on the
+# ground (MemoryGameUI.GLOW_*). "The ground" is not the same place for every
+# background, and these two are how the board asks.
+#
+# A Themes1 FLOOR is the plane y = 0 and has no edge worth speaking of, so both
+# answer 0 — "nothing to say, keep your own default". A Themes2 WORLD is an island
+# whose deck stands above the origin and stops at a rim, and answers with both; see
+# the block above WorldScenes.pool_plane_y for what goes wrong when it is not asked.
+# A canvas theme has no 3D background at all and never reaches here.
+#
+# Both are in the background's own units, BEFORE fit_scale — the caller has the scale
+# it applied and multiplies.
+
+# How high this background's play surface is, or 0.0 for "use your own default".
+static func pool_plane_y(id: String) -> float:
+	if IceWorld.has_scene(id):
+		return IceWorld.pool_plane_y(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.pool_plane_y(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.pool_plane_y(id)
+	return WorldScenes.pool_plane_y(id) if WorldScenes.has_scene(id) else 0.0
+
+# The radius past which nothing may be laid on it, or 0.0 for "no edge".
+static func pool_radius(id: String) -> float:
+	if IceWorld.has_scene(id):
+		return IceWorld.pool_radius(id)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.pool_radius(id)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.pool_radius(id)
+	return WorldScenes.pool_radius(id) if WorldScenes.has_scene(id) else 0.0
+
+# How much of the pool this surface takes, as a multiple of MemoryGameUI.GLOW_PEAK.
+#
+# The third question in the same family as the two above, and asked for the same
+# reason: GLOW_PEAK was fitted against a NEAR-BLACK board, where a pool is light
+# appearing out of nothing. Every background before the lake was dark enough for
+# that to hold. The lake is a bright turquoise surface, and the pool sheet blends
+# MIX rather than ADD — so six pools overlapping in the middle of the board reach
+# an alpha of 0.6 and REPLACE most of the water with a pale wash. Measured: the
+# whole play area came out fogged, with the colour of the pools and none of the
+# water's.
+#
+# It is a property of the SURFACE, not of the pools, which is why it lives here and
+# not in a per-theme override on the board.
+static func pool_gain(id: String) -> float:
+	if IceWorld.has_scene(id):
+		return IceWorld.POOL_GAIN
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.POOL_GAIN
+	return LakeWorld.POOL_GAIN if LakeWorld.has_scene(id) else 1.0
+
+# ---------------------------------------------------------------------------
+# Telling a background about the board standing on it
+# ---------------------------------------------------------------------------
+# Two hooks, both no-ops for every background but the lake, and both carrying
+# information the board already has rather than anything new.
+#
+# Nothing before the lake needed them because nothing before the lake REACTED to
+# the buttons: a floor is a floor whether five discs or six are standing on it. A
+# water surface is not — it has to know where the pads are to keep a ripple around
+# each one, to put a contact shadow under each one, and to throw a splash from the
+# one that was just pressed. See lake_world.gd's WATER_SHADER.
+#
+# This is deliberately the ONLY thing the board tells a background, and it is
+# geometry, not state: no score, no round, no colour, no game. The lake cannot
+# learn anything about the match from it.
+
+# Where this board's buttons stand, how far the outermost one reaches, and the
+# camera and viewport the whole thing is being seen through — the last two because
+# a tabletop camera keystones the ground hard enough that "in the gutter" is only
+# answerable on screen (see LakeWorld's placement note). Called on build, on every
+# resize and on every difficulty change.
+static func set_board_layout(scene: Node3D, id: String, centres: PackedVector2Array,
+		reach: float, cam: Camera3D, vp_size: Vector2) -> void:
+	if scene != null and IceWorld.has_scene(id):
+		IceWorld.set_board_layout(scene, centres, reach, cam, vp_size)
+	if scene != null and LakeWorld.has_scene(id):
+		LakeWorld.set_board_layout(scene, centres, reach, cam, vp_size)
+	if scene != null and CasinoWorld.has_scene(id):
+		CasinoWorld.set_board_layout(scene, centres, reach, cam, vp_size)
+
+# One button at `centre` was just pressed.
+static func note_press(scene: Node3D, id: String, centre: Vector2) -> void:
+	if scene != null and LakeWorld.has_scene(id):
+		LakeWorld.note_press(scene, centre)
+	if scene != null and CasinoWorld.has_scene(id):
+		CasinoWorld.note_press(scene, centre)
+
+# The player has just COMPLETED round `round_no`.
+#
+# The third hook, and the one that breaks the rule the two above set: this is match
+# state, not geometry. It is here because the Magical Lake earns it — every fifth
+# completed round a frog crosses the water behind the board (LakeWorld's THE FROG
+# section) — and it is kept to a single integer for that reason. A background may
+# know which round has just ended; it may not know the score, the colour, the
+# sequence or whether the player is winning.
+#
+# A no-op for every background but the lake, exactly like the other two.
+#
+# ONE THING FLOWS BACK, and it is a duration: how many seconds the round must stay
+# frozen for whatever this started, or 0.0 for nothing. It used to return nothing
+# and game.gd used to ignore it, which is how the frog ended up crossing the lake
+# over the top of the next round's sequence. The background still cannot reach into
+# the game — it says how long it needs and the game decides what to do about it.
+#
+# IT IS NOW OFFERED ON EVERY COMPLETED ROUND, and that is the contract this note
+# always described rather than a widening of it. game.gd used to gate the call on
+# `level % 5 == 0` — the lake's number — which meant a second background could not
+# want a different one without editing the game. The BACKGROUND decides now: the
+# lake answers every fifth round with the frog, Ice Kingdom answers every third
+# with a burst of crystals, and everything else answers 0.0 to all of them.
+static func note_milestone(scene: Node3D, id: String, round_no: int) -> float:
+	if scene == null:
+		return 0.0
+	if LakeWorld.has_scene(id):
+		return LakeWorld.note_milestone(scene, round_no)
+	if IceWorld.has_scene(id):
+		return IceWorld.note_milestone(scene, round_no)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.note_milestone(scene, round_no)
+	return 0.0
+
+# The player has just COMPLETED level `level_no`, offered so a background can mark
+# a milestone the every-five-rounds one is not big enough for. Same contract and
+# the same returned freeze as note_milestone; the lake answers it at level 8 with
+# the five-frog party and every other background ignores it.
+static func note_finale(scene: Node3D, id: String, level_no: int) -> float:
+	if scene == null:
+		return 0.0
+	if LakeWorld.has_scene(id):
+		return LakeWorld.note_finale(scene, level_no)
+	if IceWorld.has_scene(id):
+		return IceWorld.note_finale(scene, level_no)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.note_finale(scene, level_no)
+	return 0.0
 
 # ---------------------------------------------------------------------------
 # Shop preview
@@ -321,7 +653,15 @@ const PREVIEW_ELEV_DEG := 33.51
 const PREVIEW_TARGET := Vector3(0.0, 0.35, 0.54)
 const PREVIEW_DIST := 10.04
 
-static func make_preview_camera(aspect: float) -> Camera3D:
+static func make_preview_camera(aspect: float, id: String = "") -> Camera3D:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.make_preview_camera(aspect)
+	if IceWorld.has_scene(id):
+		return IceWorld.make_preview_camera(aspect)
+	if LakeWorld.has_scene(id):
+		return LakeWorld.make_preview_camera(aspect)
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.make_preview_camera(aspect)
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	cam.keep_aspect = Camera3D.KEEP_WIDTH
@@ -350,7 +690,18 @@ const PREVIEW_EXPOSURE := 0.58
 # The board's own Environment, minus the transparency. Ambient and the sky are
 # irrelevant here: every background material is ambient_light_disabled and carries
 # its own environment term.
-static func make_preview_environment() -> WorldEnvironment:
+static func make_preview_environment(id: String = "") -> WorldEnvironment:
+	if WorldScenes.has_scene(id):
+		return WorldScenes.make_preview_environment(WorldScenes.world_of(id))
+	# The lake's whole palette was solved against the BOARD's Environment (see
+	# LakeWorld.tone), so its card is rendered through that one and not through the
+	# hotter PREVIEW_EXPOSURE below: every colour in it would land somewhere else.
+	if IceWorld.has_scene(id):
+		return IceWorld.make_preview_environment()
+	if LakeWorld.has_scene(id):
+		return LakeWorld.make_preview_environment()
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.make_preview_environment()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = BACKDROP_COLOR.linear_to_srgb()

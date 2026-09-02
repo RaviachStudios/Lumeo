@@ -51,6 +51,45 @@ func setup(key: String, size: Vector2, bgmgr: Node) -> void:
 			# Volcano (lava-river) ambience: warm embers rising off the molten rivers
 			# across the whole scene (the flowing lava itself is drawn in the shader).
 			_add_particles(dot, 16, 4.0, Color(1.0, 0.55, 0.18), 0.02, 0.06, 8.0, 22.0, 30.0, 0.60, 0.44, true)
+		# ------------------------------------------------------------------
+		# The eight LUMEO worlds (lume_worlds.gd). Every one of them deliberately
+		# leaves its DOTS out of the shader — sparkles, fireflies, embers, stars,
+		# pixels — because a dense per-pixel dot loop is the exact thing that put
+		# the older themes on this path in the first place (BACKGROUND_PERF_NOTES).
+		# Each world's shader draws its scene; these draw the air in it.
+		# ------------------------------------------------------------------
+		"lume_candy":
+			# sugar sparkle over the hills
+			_add_particles(dot, 26, 5.0, Color(1.0, 0.86, 0.94), 0.05, 0.14, 4.0, 12.0, 35.0, 0.46, 0.26, true)
+		"lume_space":
+			# the twinkling half of the star field (the still half is in the plate)
+			_add_particles(dot, 40, 3.0, Color(0.94, 0.96, 1.0), 0.04, 0.10, 0.0, 0.0, 0.0, 0.42, 0.42, true)
+		"lume_forest":
+			# fireflies: warm, slow, and the whole reason this scene is at night
+			_add_particles(dot, 18, 8.0, Color(1.0, 0.92, 0.48), 0.16, 0.34, 3.0, 11.0, 90.0, 0.52, 0.34, true)
+			# plus cool spores drifting through the shaft of light
+			_add_particles(dot, 18, 7.0, Color(0.62, 0.94, 0.74), 0.03, 0.08, 4.0, 12.0, 45.0, 0.46, 0.34, true)
+		"lume_volcano":
+			# embers off the lava runs
+			_add_particles(dot, 18, 4.5, Color(1.0, 0.58, 0.20), 0.02, 0.07, 9.0, 24.0, 30.0, 0.66, 0.30, true)
+		"lume_arcade":
+			# pixels: square, not round, because that is the joke
+			_add_particles(_make_pixel(), 16, 6.0, Color(0.70, 0.85, 1.0), 0.10, 0.26, 4.0, 14.0, 40.0, 0.30, 0.26, true)
+		"lume_rainbow":
+			# motes catching the sun over the terrace, high and barely moving
+			_add_particles(dot, 18, 7.5, Color(1.0, 0.98, 0.92), 0.05, 0.13, 3.0, 9.0, 40.0, 0.30, 0.26, true)
+			# and a little spectral glitter drifting up out of the drop, kept to the
+			# two corner wedges where the sky actually is
+			_add_particles(dot, 10, 8.0, Color(0.86, 0.80, 1.0), 0.05, 0.14, 4.0, 11.0, 55.0, 0.14, 0.12, true)
+		"lume_ocean":
+			# the bubbles, rising in strings off the coral in the gutters
+			_add_particles(_make_ring(), 9, 6.0, Color(0.66, 0.92, 0.98), 0.28, 0.52, 9.0, 20.0, 12.0, 0.60, 0.38, true)
+			# and the silt hanging in the water column, drifting almost not at all —
+			# this is what makes the frame read as water rather than as air
+			_add_particles(dot, 26, 9.0, Color(0.80, 0.95, 1.0), 0.03, 0.08, 2.0, 7.0, 60.0, 0.44, 0.44, true)
+		"lume_kingdom":
+			# gold motes lifting off the kingdom at golden hour
+			_add_particles(dot, 18, 7.0, Color(1.0, 0.90, 0.60), 0.04, 0.12, 4.0, 13.0, 40.0, 0.40, 0.26, true)
 		_:
 			pass
 	# only the kitty needs a per-frame gesture controller
@@ -134,6 +173,19 @@ func _make_heart() -> ImageTexture:
 			var h := u * u + v * v - 1.0
 			var val := h * h * h - u * u * v * v * v          # < 0 inside the heart
 			img.set_pixel(x, y, Color(1, 1, 1, clampf(0.5 - val * 5.0, 0.0, 1.0)))
+	return ImageTexture.create_from_image(img)
+
+# A soft-cornered square (arcade pixels, carnival confetti). Not a hard square:
+# a 1px-hard edge shimmers as a particle rotates and drifts sub-pixel.
+func _make_pixel() -> ImageTexture:
+	var px := 16
+	var img := Image.create(px, px, false, Image.FORMAT_RGBA8)
+	for y in px:
+		for x in px:
+			var u := absf((float(x) + 0.5) / px * 2.0 - 1.0)
+			var v := absf((float(y) + 0.5) / px * 2.0 - 1.0)
+			var d := maxf(u, v)
+			img.set_pixel(x, y, Color(1, 1, 1, clampf((0.86 - d) * 6.0, 0.0, 1.0)))
 	return ImageTexture.create_from_image(img)
 
 # A hollow ring (reef bubbles): alpha peaks at ~0.78 of the radius.

@@ -106,6 +106,113 @@ const THEMES := {
 	"bg_volcanic":  {"name": "Volcanic",      "price": 600, "category": "themes"},
 	"bg_crystal":   {"name": "Crystal Cave",  "price": 700, "category": "themes"},
 	"bg_arcade":    {"name": "Arcade Room",   "price": 800, "category": "themes"},
+	# The two LUME WORLDS (Themes2.blend / world_scenes.gd). Same kind of item as
+	# the eight above — a 3D scene the buttons stand in, equipped through
+	# owned_themes / selected_theme like everything else — but a whole environment
+	# rather than a floor: an island arena with a mid-ground and a deep abyss. Four
+	# more (Rainbow Sky, Inferno Abyss, Crystal Cavern, Galaxy Realm) were built and
+	# then cut before release; nothing on disk ever carried those ids.
+	#
+	# The "world_" prefix keeps them clear of BOTH namespaces already in use here:
+	# "inferno" and "rainbow" are shader themes, "bg_crystal" is Crystal Cave. These
+	# ids are what saved wallets contain, so they are frozen.
+	#
+	# Both are FREE. Price 0 is the same thing "default" above and the four
+	# skin-bound button frames are: the card still shows a buy button, the player
+	# still taps it once, and that tap is still what writes the id into owned_themes
+	# and makes the equip persist. Nothing about the ownership, purchase, equip or
+	# save path is special-cased for them — a free item is a priced item that costs
+	# nothing, which is why `can_afford` and `purchase_theme` need no change.
+	#
+	# They are deliberately NOT pre-owned. Handing them out in `owned_themes`'
+	# default would rewrite the meaning of every wallet already on disk; leaving the
+	# tap in place means an existing player picks them up exactly the way they pick
+	# up anything else, and a player who never opens the shop is unaffected.
+	#
+	# Being free is also why they sit AFTER the eight priced floors rather than at
+	# the front: the grid's order inside the pair is the authored one — the world
+	# with the least happening in frame to the most — not a price ladder. Keep this
+	# block, WorldScenes.ORDER and the shop's CATEGORIES["items"] in the same order.
+	#
+	# ICE KINGDOM is the exception to that last line, and only to that last line. It
+	# is sold on the SPECIAL SKINS shelf rather than in THEMES, because it dresses the
+	# gameplay BUTTONS as well as the ground (the snowflakes — see ice_buttons.gd),
+	# which makes it a complete look rather than a backdrop. Everything on this side
+	# of the shop is untouched by that: same entry, same price, same category, same
+	# owned_themes / selected_theme. Only the card it is bought from moved.
+	"world_forest":  {"name": "Living Forest",  "price": 0, "category": "themes"},
+	"world_ice":     {"name": "Ice Kingdom",    "price": 0, "category": "themes"},
+	# MAGICAL LAKE is the second complete look and sits here for exactly the same
+	# reasons Ice Kingdom does: it is an ordinary theme on this side of the shop —
+	# same entry, same free price, same category, same owned_themes / selected_theme
+	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
+	# dresses the gameplay BUTTONS as well as the ground (the lily pads, see
+	# lily_buttons.gd). Only the card it is bought from is different.
+	#
+	# It is also the first background with no imported asset behind it at all: it is
+	# a plane, a shader and a scatter of generated props (lake_world.gd). Nothing
+	# about ownership can tell.
+	"world_lake":    {"name": "Magical Lake",   "price": 0, "category": "themes"},
+	# ROYAL CASINO is the third complete look and sits here for exactly the same
+	# reasons the two above do: it is an ordinary theme on this side of the shop —
+	# same entry, same free price, same category, same owned_themes / selected_theme
+	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
+	# dresses the gameplay BUTTONS as well as the ground (six moulded poker chips,
+	# see chip_buttons.gd). Only the card it is bought from is different.
+	#
+	# The id is "world_casino" and NOT "casino": that one has been spent since launch
+	# on the JACKPOT wheel skin, which is a different product with a different shelf
+	# and its own celebration (see game.gd's _is_casino_skin). Two ids, deliberately.
+	"world_casino":  {"name": "Royal Casino",   "price": 0, "category": "themes"},
+	# The eight LUMEO WORLDS (lume_worlds.gd). A third kind of background again, and
+	# the only one built entirely inside this project: no .blend, no .glb, no image
+	# — each is a pair of GLSL functions painted on BackgroundManager's canvas layer,
+	# which is where every illustrated theme above (Dreamy Clouds, Coral Reef, Neon
+	# City) already lives. See lume_worlds.gd's header for why they are 2D and the
+	# fourteen 3D backgrounds could not be.
+	#
+	# The "lume_" prefix keeps them clear of all three namespaces already spent
+	# here: "clouds", "forest" and "rainbow" are shader themes, "bg_arcade" and
+	# "bg_volcanic" are Themes1 floors, "world_forest" is a Themes2 world. These ids
+	# are what saved wallets contain, so they are frozen.
+	#
+	# Priced 0 .. 1500 on their own ladder, cheapest first, which is also their
+	# shop order. They are illustrated scenes of the same class as the older shader
+	# themes above (80 .. 1600), so they are priced against THAT ladder rather than
+	# against the 3D floors' 100 .. 800 one, and the rung each sits on is how much
+	# world it has: an open sky at the bottom, a whole button kingdom at the top.
+	# No price above this block is touched.
+	#
+	# Not pre-owned, for the same reason nothing else here is: handing them out in
+	# `owned_themes`' default would rewrite the meaning of every wallet on disk.
+	# The two FREE ones lead the block, which is what keeps it cheapest-first. Price 0
+	# is the same thing "default", the two Themes2 worlds and the four skin-bound
+	# frames are: the card shows a buy button reading FREE, the player still taps it
+	# once, and that tap is still what writes the id into `owned_themes`. Nothing in
+	# the ownership, purchase, equip or save path is special-cased — a free item is a
+	# priced item that costs nothing.
+	#
+	# Not pre-owned, for the same reason nothing else here is: handing them out in
+	# `owned_themes`' default would rewrite the meaning of every wallet on disk.
+	#
+	# Not "Rainbow Sky": that was the name of a Themes2 world that has since been
+	# cut, and it is still distinct from "Rainbow" (a shader theme) — two cards with
+	# one name is not something the buy flow can disambiguate, the same reason Deep
+	# Void is not called Deep Space.
+	"lume_rainbow":  {"name": "Rainbow Skyway",    "price": 0,    "category": "themes"},
+	"lume_ocean":    {"name": "Deep Ocean",        "price": 0,    "category": "themes"},
+	"lume_candy":    {"name": "Candy World",       "price": 500,  "category": "themes"},
+	"lume_space":    {"name": "Space Pets",        "price": 600,  "category": "themes"},
+	# Not just "Magical Forest" colliding with anything, but note the two neighbours
+	# it has to stay distinct from on the same tab: "Enchanted Forest" (shader) and
+	# "Living Forest" (Themes2 world). Three forests, three names, three ids.
+	"lume_forest":   {"name": "Magical Forest",    "price": 800,  "category": "themes"},
+	# "Volcanic" (Themes1) and "Inferno" (shader) are both taken; this one is the
+	# funny one, and its name says so.
+	"lume_volcano":  {"name": "Volcano Party",     "price": 900,  "category": "themes"},
+	# "Arcade Room" (Themes1) is the modelled one; this is the neon night version.
+	"lume_arcade":   {"name": "Arcade Night",      "price": 1000, "category": "themes"},
+	"lume_kingdom":  {"name": "Button Kingdom",    "price": 1500, "category": "themes"},
 }
 
 # Difficulty unlocks. Every difficulty is free to play — this is the set of

@@ -6899,6 +6899,60 @@ const _SKIN_SHADERS := {
 	"lunapark": _LUNA_SHADER,
 }
 
+# ---------------------------------------------------------------------------
+# THE TWELVE LUMEO WORLDS
+# ---------------------------------------------------------------------------
+# Cloudy Button Sky, Button Beach, Candy World, Space Pets, Dinosaur Valley,
+# Magical Forest, Volcano Party, Arcade Night, Rainbow Carnival, Rainbow Skyway,
+# Deep Ocean, Button Kingdom.
+#
+# They are ordinary node themes in every way this file cares about — a baked
+# plate in _NODE_PLATE, a light per-frame pass in _NODE_DYN, a free-running
+# shader in _SHADERS for the prewarm and the pre-plate frames — and the entries
+# for all three are added at the bottom of those same three dicts. Nothing about
+# the existing themes changes.
+#
+# What is different is only where the GLSL lives. Each world is authored ONCE in
+# lume_worlds.gd as a pair of functions (lumeStatic / lumeDyn), and the three
+# shaders below are that pair under three different wrappers, so a world's static
+# and animated halves cannot drift apart the way three hand-kept copies can. The
+# _HEAD toolbox every other theme uses is in front of all of them, plus the LUMEO
+# kit (the key-cap motif, the flags, the grade) that the eight share.
+const LumeWorlds := preload("res://lume_worlds.gd")
+const _LUME_HEAD := _HEAD + LumeWorlds.KIT
+
+const _LUME_CANDY_STATIC := _LUME_HEAD + LumeWorlds.CANDY + LumeWorlds.W_STATIC
+const _LUME_CANDY_DYN := _LUME_HEAD + LumeWorlds.CANDY + LumeWorlds.W_DYN
+const _LUME_CANDY_SHADER := _LUME_HEAD + LumeWorlds.CANDY + LumeWorlds.W_FULL
+
+const _LUME_SPACE_STATIC := _LUME_HEAD + LumeWorlds.SPACE + LumeWorlds.W_STATIC
+const _LUME_SPACE_DYN := _LUME_HEAD + LumeWorlds.SPACE + LumeWorlds.W_DYN
+const _LUME_SPACE_SHADER := _LUME_HEAD + LumeWorlds.SPACE + LumeWorlds.W_FULL
+
+const _LUME_FOREST_STATIC := _LUME_HEAD + LumeWorlds.FOREST + LumeWorlds.W_STATIC
+const _LUME_FOREST_DYN := _LUME_HEAD + LumeWorlds.FOREST + LumeWorlds.W_DYN
+const _LUME_FOREST_SHADER := _LUME_HEAD + LumeWorlds.FOREST + LumeWorlds.W_FULL
+
+const _LUME_VOLCANO_STATIC := _LUME_HEAD + LumeWorlds.VOLCANO + LumeWorlds.W_STATIC
+const _LUME_VOLCANO_DYN := _LUME_HEAD + LumeWorlds.VOLCANO + LumeWorlds.W_DYN
+const _LUME_VOLCANO_SHADER := _LUME_HEAD + LumeWorlds.VOLCANO + LumeWorlds.W_FULL
+
+const _LUME_ARCADE_STATIC := _LUME_HEAD + LumeWorlds.ARCADE + LumeWorlds.W_STATIC
+const _LUME_ARCADE_DYN := _LUME_HEAD + LumeWorlds.ARCADE + LumeWorlds.W_DYN
+const _LUME_ARCADE_SHADER := _LUME_HEAD + LumeWorlds.ARCADE + LumeWorlds.W_FULL
+
+const _LUME_RAINBOW_STATIC := _LUME_HEAD + LumeWorlds.RAINBOW + LumeWorlds.W_STATIC
+const _LUME_RAINBOW_DYN := _LUME_HEAD + LumeWorlds.RAINBOW + LumeWorlds.W_DYN
+const _LUME_RAINBOW_SHADER := _LUME_HEAD + LumeWorlds.RAINBOW + LumeWorlds.W_FULL
+
+const _LUME_OCEAN_STATIC := _LUME_HEAD + LumeWorlds.OCEAN + LumeWorlds.W_STATIC
+const _LUME_OCEAN_DYN := _LUME_HEAD + LumeWorlds.OCEAN + LumeWorlds.W_DYN
+const _LUME_OCEAN_SHADER := _LUME_HEAD + LumeWorlds.OCEAN + LumeWorlds.W_FULL
+
+const _LUME_KINGDOM_STATIC := _LUME_HEAD + LumeWorlds.KINGDOM + LumeWorlds.W_STATIC
+const _LUME_KINGDOM_DYN := _LUME_HEAD + LumeWorlds.KINGDOM + LumeWorlds.W_DYN
+const _LUME_KINGDOM_SHADER := _LUME_HEAD + LumeWorlds.KINGDOM + LumeWorlds.W_FULL
+
 # Basic static-gradient themes (80 coins each). Each entry drives the shared
 # elegant-gradient shader built in _gradient_shader: a smooth vertical gradient +
 # a soft off-centre glow + a gentle vignette. Keys map to ids in CoinsManager.THEMES.
@@ -6939,6 +6993,16 @@ const _SHADERS := {
 	# standalone theme. Full free-running shader drives the shop preview; gameplay
 	# uses its baked plate + dyn overlay (see _NODE_PLATE / _NODE_DYN below).
 	"castle": _NIGHT_SHADER,
+	# The eight LUMEO worlds (lume_worlds.gd). Appended, never interleaved: the
+	# blocks above are the original catalog and stay exactly as they are.
+	"lume_candy": _LUME_CANDY_SHADER,
+	"lume_space": _LUME_SPACE_SHADER,
+	"lume_forest": _LUME_FOREST_SHADER,
+	"lume_volcano": _LUME_VOLCANO_SHADER,
+	"lume_arcade": _LUME_ARCADE_SHADER,
+	"lume_rainbow": _LUME_RAINBOW_SHADER,
+	"lume_ocean": _LUME_OCEAN_SHADER,
+	"lume_kingdom": _LUME_KINGDOM_SHADER,
 }
 
 # Whether a theme id is renderable by this manager (animated shader OR gradient OR
@@ -7025,6 +7089,14 @@ const _NODE_PLATE := {
 	"skin:casino": _CASINO_STATIC,
 	"skin:phantom": _PHANTOM_STATIC,
 	"skin:lunapark": _LUNA_STATIC,
+	"lume_candy": _LUME_CANDY_STATIC,
+	"lume_space": _LUME_SPACE_STATIC,
+	"lume_forest": _LUME_FOREST_STATIC,
+	"lume_volcano": _LUME_VOLCANO_STATIC,
+	"lume_arcade": _LUME_ARCADE_STATIC,
+	"lume_rainbow": _LUME_RAINBOW_STATIC,
+	"lume_ocean": _LUME_OCEAN_STATIC,
+	"lume_kingdom": _LUME_KINGDOM_STATIC,
 }
 const _NODE_DYN := {
 	"fairies": _FAIRIES_DYN,
@@ -7047,6 +7119,14 @@ const _NODE_DYN := {
 	"skin:casino": _CASINO_DYN,
 	"skin:phantom": _PHANTOM_DYN,
 	"skin:lunapark": _LUNA_DYN,
+	"lume_candy": _LUME_CANDY_DYN,
+	"lume_space": _LUME_SPACE_DYN,
+	"lume_forest": _LUME_FOREST_DYN,
+	"lume_volcano": _LUME_VOLCANO_DYN,
+	"lume_arcade": _LUME_ARCADE_DYN,
+	"lume_rainbow": _LUME_RAINBOW_DYN,
+	"lume_ocean": _LUME_OCEAN_DYN,
+	"lume_kingdom": _LUME_KINGDOM_DYN,
 }
 
 # Trivial full-screen blit: paint a baked plate texture across the _bg ColorRect
@@ -7215,7 +7295,17 @@ func make_preview(theme_id: String, size: Vector2) -> Control:
 		# (see _show_scene_still). Same static-thumbnail treatment the SPECIAL SKINS
 		# cards already use, and for the same reason: a grid of live 3D scenes is not
 		# something a shop should be paying for.
-		rect.color = BackgroundScenes.BACKDROP_COLOR.linear_to_srgb()
+		rect.color = BackgroundScenes.backdrop_color(theme_id).linear_to_srgb()
+		_show_scene_still(rect, theme_id, size)
+		return rect
+	if LumeWorlds.has_world(theme_id):
+		# A LUMEO world COULD run live on a card — it is a canvas shader like every
+		# other theme here. It deliberately does not. Its card is a baked still of
+		# the world with the real gameplay board standing in front of it, because
+		# what the player is buying is the two together: the same reason the Themes2
+		# worlds' cards carry a board (see _render_world_plate). A world shown empty
+		# sells a picture; a world shown with the buttons on it sells the game.
+		rect.color = Color(0.08, 0.07, 0.13)
 		_show_scene_still(rect, theme_id, size)
 		return rect
 	rect.color = Color(1, 1, 1, 1)
@@ -7246,10 +7336,121 @@ func _show_scene_still(rect: ColorRect, theme_id: String, size: Vector2) -> void
 	mat.set_shader_parameter("plate_tex", tex)
 	rect.material = mat
 
+# The Hard board, used as a shop card. A Themes2 world is a whole ENVIRONMENT the
+# buttons stand in the middle of, not a floor behind them, and a card showing it
+# empty sells the wrong thing — it is the world with the buttons on it that the
+# player is buying. So the card is the real gameplay device, at card size, standing
+# on the world the card is for, with its HUD off.
+#
+# Hard because that is the rig the worlds were composed against in Blender
+# (Ref_LUME_Buttons_Hard) and the widest of the three, so the card frames a world
+# the way its author did. The device is built inside a SubViewport of its own,
+# which is what keeps a full Control out of the running screen while it renders.
+const _PREVIEW_BOARD := preload("res://hard_game_ui.gd")
+
+func _render_world_plate(theme_id: String, size: Vector2) -> ImageTexture:
+	var px := Vector2i(maxi(64, int(size.x)), maxi(32, int(size.y)))
+	var vp := SubViewport.new()
+	vp.size = px
+	vp.transparent_bg = false
+	vp.own_world_3d = true
+	vp.msaa_3d = Viewport.MSAA_DISABLED
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var dev: Control = _PREVIEW_BOARD.new()
+	dev.input_enabled = false
+	dev.preview_background = theme_id
+	dev.hud_visible = false
+	dev.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vp.add_child(dev)
+	add_child(vp)
+	dev.configure(dev._count, [])
+	# The board's camera fit needs its own viewport to have been sized at least once,
+	# which is a frame after the Control is; the world's clip also wants to be off
+	# its first frame so a card shows the field of drifting things populated.
+	for i in 24:
+		await get_tree().process_frame
+	dev._kick_render()
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	vp.queue_free()
+	return ImageTexture.create_from_image(img)
+
+# A LUMEO world's card: the world painted across the card, with the real Hard
+# board standing in front of it. Two layers in one throwaway viewport — the world
+# is a canvas shader on a full-rect ColorRect, and the device draws over it
+# through its own transparent SubViewport, exactly the stack gameplay uses.
+#
+# Hard for the same reason the Themes2 cards use it: it is the widest of the three
+# rigs, so a card frames the world the way the widest board sees it. The shader is
+# the world's FULL (free-running) variant rather than its plate, so the card also
+# catches the movers — a cloud, a citizen, a lava blob — mid-scene.
+func _render_lume_card(theme_id: String, size: Vector2) -> ImageTexture:
+	var px := Vector2i(maxi(64, int(size.x)), maxi(32, int(size.y)))
+	var vp := SubViewport.new()
+	vp.size = px
+	vp.transparent_bg = false
+	vp.own_world_3d = true
+	vp.msaa_3d = Viewport.MSAA_DISABLED
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var rect := ColorRect.new()
+	# Anchored, not sized: a full-rect preset already drives the size, and setting
+	# both makes the engine warn that it is about to override one of them.
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.color = Color(1, 1, 1, 1)
+	var mat := ShaderMaterial.new()
+	mat.shader = _get_shader(theme_id)
+	# Every world anchors its furniture to `aspect`, so a card at a different aspect
+	# than gameplay re-composes itself rather than stretching.
+	mat.set_shader_parameter("aspect", float(px.x) / maxf(1.0, float(px.y)))
+	rect.material = mat
+	vp.add_child(rect)
+	var dev: Control = _PREVIEW_BOARD.new()
+	dev.input_enabled = false
+	dev.hud_visible = false
+	# Stand on NOTHING. Without this the board falls back to whatever the player has
+	# equipped, and a player with any of the fourteen modelled backgrounds on got
+	# that floor rendered inside every LUMEO card — the world the card is selling
+	# hidden behind it, and all twelve cards showing the same picture.
+	dev.preview_bare = true
+	dev.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vp.add_child(dev)
+	add_child(vp)
+	dev.configure(dev._count, [])
+	# The board's camera fit needs its own viewport sized at least once, which is a
+	# frame after the Control is; the extra frames also carry the world's animation
+	# off its first frame so a card is never the t=0 pose.
+	for i in 24:
+		await get_tree().process_frame
+	dev._kick_render()
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	vp.queue_free()
+	return ImageTexture.create_from_image(img)
+
 # Render a modelled background on its own, with no board in front of it, into a
 # card-sized still. The camera is the Hard board's — the pose these scenes were
 # composed against in Blender — so a card shows the same framing the player gets.
 func _render_scene_plate(theme_id: String, size: Vector2) -> ImageTexture:
+	if LumeWorlds.has_world(theme_id):
+		return await _render_lume_card(theme_id, size)
+	# A world, the ice, the lake or the casino table: all four are complete looks
+	# whose card has to
+	# show the BOARD standing in them, because the buttons are half of what is being
+	# sold. The eight Themes1 floors below are backdrops and are shown on their own.
+	#
+	# Ice Kingdom is here by NAME rather than by catalog, and that is the whole point
+	# of listing all four: it used to be a WorldScenes world and its ground is
+	# generated in Godot now (ice_world.gd), so a test written as "is it an imported
+	# world" quietly dropped it into the backdrop-only path and its shop card came
+	# out as an empty sheet of ice with no snowflakes on it. The lake and the casino
+	# table are generated the same way and would fail the same test.
+	if WorldScenes.has_scene(theme_id) or IceWorld.has_scene(theme_id) \
+			or LakeWorld.has_scene(theme_id) or CasinoWorld.has_scene(theme_id):
+		return await _render_world_plate(theme_id, size)
 	var scene := BackgroundScenes.build(theme_id)
 	if scene == null:
 		return null
@@ -7261,8 +7462,9 @@ func _render_scene_plate(theme_id: String, size: Vector2) -> ImageTexture:
 	vp.msaa_3d = Viewport.MSAA_DISABLED
 	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
 	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
-	vp.add_child(BackgroundScenes.make_preview_environment())
-	vp.add_child(BackgroundScenes.make_preview_camera(float(px.x) / maxf(1.0, float(px.y))))
+	vp.add_child(BackgroundScenes.make_preview_environment(theme_id))
+	vp.add_child(BackgroundScenes.make_preview_camera(
+		float(px.x) / maxf(1.0, float(px.y)), theme_id))
 	vp.add_child(scene)
 	add_child(vp)
 	await get_tree().process_frame
@@ -7459,7 +7661,7 @@ func _apply_theme() -> void:
 		_clear_props()
 		_static_rect.visible = false
 		_bg.material = null
-		_bg.color = BackgroundScenes.BACKDROP_COLOR.linear_to_srgb()
+		_bg.color = BackgroundScenes.backdrop_color(key).linear_to_srgb()
 		_render_mode = "SCENE3D"
 		_fit_to_viewport()
 		return

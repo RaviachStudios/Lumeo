@@ -52,7 +52,11 @@ const TAB_GAP := 10.0
 # at every aspect, whatever the formation underneath it is doing.
 const TAB_CENTRE_Y := 0.25
 const TAB_TOP_MIN := 88.0                # below the watch-ad pill / Quit row
-const TAB_BOTTOM_KEEP := 84.0            # game.gd's status pill row
+# game.gd's status pill row. It was 84.0 — a copy of the pill's old hardcoded
+# offset, which moved when the pill's lane was made responsive and the copy did
+# not. Derived from the pill's own geometry now, so the badge cannot drift into a
+# row that has since moved.
+const TAB_BOTTOM_KEEP := 76.0
 # Asymmetric corners: big and capsule-like on one side, tighter on the other, so
 # the silhouette reads as a tab rather than as one more rounded rectangle.
 const R_LEFT := 30.0

@@ -1,0 +1,2524 @@
+{
+ "camera": {
+  "origin": [
+   0.0,
+   5.85,
+   8.95
+  ],
+  "fov_x_deg": 43.6028,
+  "res": [
+   1920,
+   1080
+  ]
+ },
+ "shared_base": {
+  "Key_Light": [
+   165.0,
+   [
+    1.0,
+    0.96,
+    0.92
+   ]
+  ],
+  "Rim_Light": [
+   210.0,
+   [
+    0.62,
+    0.76,
+    1.0
+   ]
+  ],
+  "Fill_Light": [
+   55.0,
+   [
+    0.8,
+    0.86,
+    1.0
+   ]
+  ],
+  "Top_Soft": [
+   26.0,
+   [
+    1.0,
+    1.0,
+    1.0
+   ]
+  ],
+  "Rim_Light_B": [
+   170.0,
+   [
+    0.55,
+    0.7,
+    1.0
+   ]
+  ],
+  "Reflector_Front": [
+   105.0,
+   [
+    0.86,
+    0.9,
+    1.0
+   ]
+  ],
+  "Reflector_Back": [
+   150.0,
+   [
+    0.66,
+    0.78,
+    1.0
+   ]
+  ]
+ },
+ "worlds": {
+  "Ice": {
+   "coll": "WORLD_Ice",
+   "prefix": "ICE",
+   "label": "ICE KINGDOM",
+   "exposure": -0.2,
+   "tint": [
+    0.58,
+    0.75,
+    1.0
+   ],
+   "lights": [
+    {
+     "name": "ICE_Light_Moon",
+     "type": "SUN",
+     "color": [
+      0.6,
+      0.76,
+      1.0
+     ],
+     "energy": 2.6,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.0,
+     "origin": [
+      -11.0,
+      14.0,
+      -16.0
+     ],
+     "basis": [
+      [
+       -0.8031,
+       0.34986,
+       -0.48232
+      ],
+      [
+       0.0,
+       0.80946,
+       0.58717
+      ],
+      [
+       0.59585,
+       0.47155,
+       -0.65008
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Sheen",
+     "type": "AREA",
+     "color": [
+      0.66,
+      0.82,
+      1.0
+     ],
+     "energy": 340.0,
+     "size": 13.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      -2.6,
+      5.6,
+      -8.5
+     ],
+     "basis": [
+      [
+       -0.94754,
+       0.17108,
+       -0.27002
+      ],
+      [
+       0.0,
+       0.84472,
+       0.53521
+      ],
+      [
+       0.31965,
+       0.50713,
+       -0.8004
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Rim",
+     "type": "AREA",
+     "color": [
+      0.34,
+      0.62,
+      1.0
+     ],
+     "energy": 150.0,
+     "size": 8.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      3.5,
+      2.4,
+      -7.0
+     ],
+     "basis": [
+      [
+       -0.87737,
+       -0.14142,
+       0.4585
+      ],
+      [
+       -0.0,
+       0.95558,
+       0.29475
+      ],
+      [
+       -0.47981,
+       0.2586,
+       -0.83839
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Fill",
+     "type": "AREA",
+     "color": [
+      0.42,
+      0.6,
+      0.95
+     ],
+     "energy": 42.0,
+     "size": 12.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      3.4,
+      6.5
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.87622,
+       0.48192
+      ],
+      [
+       -0.0,
+       -0.48192,
+       0.87622
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Xtal_L",
+     "type": "POINT",
+     "color": [
+      0.2,
+      0.62,
+      1.0
+     ],
+     "energy": 70.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.55,
+     "origin": [
+      -3.75,
+      1.3,
+      -0.3
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Xtal_R",
+     "type": "POINT",
+     "color": [
+      0.2,
+      0.62,
+      1.0
+     ],
+     "energy": 70.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.55,
+     "origin": [
+      3.85,
+      1.3,
+      -0.1
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Xtal_LB",
+     "type": "POINT",
+     "color": [
+      0.2,
+      0.62,
+      1.0
+     ],
+     "energy": 40.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.55,
+     "origin": [
+      -3.05,
+      1.3,
+      -1.75
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "ICE_Light_Xtal_RB",
+     "type": "POINT",
+     "color": [
+      0.2,
+      0.62,
+      1.0
+     ],
+     "energy": 40.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.55,
+     "origin": [
+      3.0,
+      1.3,
+      -1.7
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "Key_Light",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 49.5,
+     "size": 5.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      -3.4,
+      4.6,
+      3.0
+     ],
+     "basis": [
+      [
+       0.68232,
+       0.53742,
+       -0.4956
+      ],
+      [
+       -0.0,
+       0.67792,
+       0.73514
+      ],
+      [
+       0.73106,
+       -0.5016,
+       0.46256
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Rim_Light",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 84.0,
+     "size": 4.5,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      2.8,
+      5.4,
+      -6.0
+     ],
+     "basis": [
+      [
+       -0.89443,
+       -0.29654,
+       0.33476
+      ],
+      [
+       0.0,
+       0.74855,
+       0.66308
+      ],
+      [
+       -0.44721,
+       0.59308,
+       -0.66952
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Fill_Light",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 8.8,
+     "size": 4.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      4.6,
+      1.7,
+      2.2
+     ],
+     "basis": [
+      [
+       0.42046,
+       -0.28926,
+       0.85996
+      ],
+      [
+       -0.0,
+       0.94782,
+       0.31882
+      ],
+      [
+       -0.90731,
+       -0.13405,
+       0.39852
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Top_Soft",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 6.76,
+     "size": 14.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      6.2,
+      -0.2
+     ],
+     "basis": [
+      [
+       -1.0,
+       -0.0,
+       0.0
+      ],
+      [
+       -0.0,
+       0.01653,
+       0.99986
+      ],
+      [
+       -0.0,
+       0.99986,
+       -0.01653
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Rim_Light_B",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 64.6,
+     "size": 7.0,
+     "size_y": 1.4,
+     "radius": 0.0,
+     "origin": [
+      -4.6,
+      4.6,
+      -5.4
+     ],
+     "basis": [
+      [
+       -0.75163,
+       0.36784,
+       -0.5475
+      ],
+      [
+       -0.0,
+       0.83005,
+       0.55768
+      ],
+      [
+       0.65959,
+       0.41917,
+       -0.62389
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Reflector_Front",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 18.9,
+     "size": 11.0,
+     "size_y": 3.0,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      6.0,
+      6.4
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.72589,
+       0.68781
+      ],
+      [
+       -0.0,
+       -0.68781,
+       0.72589
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Reflector_Back",
+     "type": "AREA",
+     "color": [
+      0.58,
+      0.75,
+      1.0
+     ],
+     "energy": 36.0,
+     "size": 11.0,
+     "size_y": 3.0,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      7.2,
+      -5.6
+     ],
+     "basis": [
+      [
+       -1.0,
+       -0.0,
+       0.0
+      ],
+      [
+       -0.0,
+       0.58124,
+       0.81373
+      ],
+      [
+       -0.0,
+       0.81373,
+       -0.58124
+      ]
+     ],
+     "shared": true
+    }
+   ],
+   "objects": [
+    {
+     "name": "ICE_Platform",
+     "slots": [
+      "ICE_M_Deck",
+      "ICE_M_Rim",
+      "ICE_M_Rock"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Icicles",
+     "slots": [
+      "ICE_M_Icicle"
+     ],
+     "vcol": false
+    },
+    {
+     "name": "ICE_Crystals",
+     "slots": [
+      "ICE_M_Crystal"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_CrystalCores",
+     "slots": [
+      "ICE_M_CrystalCore"
+     ],
+     "vcol": false
+    },
+    {
+     "name": "ICE_RimShards",
+     "slots": [
+      "ICE_M_Crystal"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sky",
+     "slots": [
+      "ICE_M_Sky"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_MoonHalo",
+     "slots": [
+      "ICE_M_Sky"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Moon",
+     "slots": [
+      "ICE_M_Sky"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mtn_Far",
+     "slots": [
+      "ICE_M_Far"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mtn_Mid",
+     "slots": [
+      "ICE_M_Mid"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Cliffs_Near",
+     "slots": [
+      "ICE_M_NearCliff"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Castle",
+     "slots": [
+      "ICE_M_Castle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_BigCrystals",
+     "slots": [
+      "ICE_M_Crystal"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_BigCrystalCores",
+     "slots": [
+      "ICE_M_CrystalCore"
+     ],
+     "vcol": false
+    },
+    {
+     "name": "ICE_BgArches",
+     "slots": [
+      "ICE_M_Mid"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mist_Far",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mist_Mid",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mist_Near",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Mist_Edge",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_PlatformCracks",
+     "slots": [
+      "ICE_M_Crack"
+     ],
+     "vcol": false
+    },
+    {
+     "name": "ICE_MistWisp_A",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_MistWisp_B",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_MistWisp_C",
+     "slots": [
+      "ICE_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Snow",
+     "slots": [
+      "ICE_M_SnowParticle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Snow_Far",
+     "slots": [
+      "ICE_M_SnowParticle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_00",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_01",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_02",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_03",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_04",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_05",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_06",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_07",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_08",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "ICE_Sparkles_09",
+     "slots": [
+      "ICE_M_Sparkle"
+     ],
+     "vcol": true
+    }
+   ],
+   "materials": {
+    "ICE_M_Deck": {
+     "base": [
+      0.153391,
+      0.357912,
+      0.620867
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.145,
+     "specular": 0.72,
+     "ior": 1.36,
+     "blend": false
+    },
+    "ICE_M_Rim": {
+     "base": [
+      0.109565,
+      0.226434,
+      0.383477
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.22,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Rock": {
+     "base": [
+      0.065739,
+      0.109565,
+      0.182608
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.72,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Icicle": {
+     "base": [
+      0.06,
+      0.24,
+      0.46
+     ],
+     "base_a": 1.0,
+     "vc_base": false,
+     "emis": [
+      0.14,
+      0.42,
+      0.74
+     ],
+     "emis_strength": 0.9,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.06,
+     "specular": 0.5,
+     "ior": 1.31,
+     "blend": false
+    },
+    "ICE_M_Crystal": {
+     "base": [
+      0.146935,
+      0.64117,
+      1.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.142857,
+      0.571429,
+      1.0
+     ],
+     "emis_strength": 2.337598,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.06,
+     "specular": 0.5,
+     "ior": 1.33,
+     "blend": false
+    },
+    "ICE_M_CrystalCore": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": false,
+     "emis": [
+      0.4,
+      0.86,
+      1.0
+     ],
+     "emis_strength": 5.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.5,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Sky": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 1.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "ICE_M_Far": {
+     "base": [
+      0.22825,
+      0.370906,
+      0.599155
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.342374,
+      0.542093,
+      0.884467
+     ],
+     "emis_strength": 1.7,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Mid": {
+     "base": [
+      0.222092,
+      0.364866,
+      0.602821
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.206228,
+      0.396593,
+      0.761458
+     ],
+     "emis_strength": 1.4,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_NearCliff": {
+     "base": [
+      0.103758,
+      0.161401,
+      0.265159
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.025363,
+      0.051879,
+      0.097994
+     ],
+     "emis_strength": 1.0,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Castle": {
+     "base": [
+      0.229725,
+      0.396798,
+      0.689176
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.274194,
+      0.548387,
+      1.0
+     ],
+     "emis_strength": 3.107557,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_Mist": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 1.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "ICE_M_Crack": {
+     "base": [
+      0.01,
+      0.03,
+      0.06
+     ],
+     "base_a": 1.0,
+     "vc_base": false,
+     "emis": [
+      0.16,
+      0.58,
+      1.0
+     ],
+     "emis_strength": 2.2,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.15,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "ICE_M_SnowParticle": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 2.2,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "ICE_M_Sparkle": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 6.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    }
+   },
+   "deck": {
+    "far": 3.7449,
+    "radius": 4.2134,
+    "skyline": {
+     "v": 0.135108,
+     "point": [
+      0.0,
+      0.075,
+      -3.91487
+     ]
+    },
+    "top": 0.0548
+   }
+  },
+  "Forest": {
+   "coll": "WORLD_Forest",
+   "prefix": "FOREST",
+   "label": "LIVING FOREST",
+   "exposure": -0.2,
+   "tint": [
+    0.92,
+    1.0,
+    0.8
+   ],
+   "lights": [
+    {
+     "name": "FOREST_Light_Sun",
+     "type": "SUN",
+     "color": [
+      1.0,
+      0.9,
+      0.62
+     ],
+     "energy": 2.4,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.0,
+     "origin": [
+      -9.0,
+      14.0,
+      -16.0
+     ],
+     "basis": [
+      [
+       -0.8526,
+       0.31884,
+       -0.41402
+      ],
+      [
+       0.0,
+       0.79229,
+       0.61014
+      ],
+      [
+       0.52256,
+       0.52021,
+       -0.67551
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Shaft",
+     "type": "AREA",
+     "color": [
+      1.0,
+      0.92,
+      0.58
+     ],
+     "energy": 380.0,
+     "size": 9.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      -3.0,
+      6.0,
+      -8.0
+     ],
+     "basis": [
+      [
+       -0.93178,
+       0.21094,
+       -0.29546
+      ],
+      [
+       -0.0,
+       0.81386,
+       0.58106
+      ],
+      [
+       0.36303,
+       0.54142,
+       -0.75834
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Rim",
+     "type": "AREA",
+     "color": [
+      0.55,
+      1.0,
+      0.72
+     ],
+     "energy": 190.0,
+     "size": 8.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      4.2,
+      2.4,
+      -7.2
+     ],
+     "basis": [
+      [
+       -0.84366,
+       -0.1484,
+       0.51596
+      ],
+      [
+       0.0,
+       0.96104,
+       0.27641
+      ],
+      [
+       -0.53688,
+       0.23319,
+       -0.81079
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Fill",
+     "type": "AREA",
+     "color": [
+      0.52,
+      0.78,
+      0.62
+     ],
+     "energy": 45.0,
+     "size": 12.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      3.2,
+      6.5
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.89443,
+       0.44721
+      ],
+      [
+       -0.0,
+       -0.44721,
+       0.89443
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Deep",
+     "type": "AREA",
+     "color": [
+      0.3,
+      0.85,
+      0.72
+     ],
+     "energy": 260.0,
+     "size": 26.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      -8.0,
+      -24.0
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.95106,
+       0.30902
+      ],
+      [
+       -0.0,
+       -0.30902,
+       0.95106
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Mush_L",
+     "type": "POINT",
+     "color": [
+      0.24,
+      0.95,
+      0.88
+     ],
+     "energy": 14.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.5,
+     "origin": [
+      -3.6,
+      0.45,
+      -0.6
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Mush_R",
+     "type": "POINT",
+     "color": [
+      0.24,
+      0.95,
+      0.88
+     ],
+     "energy": 14.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.5,
+     "origin": [
+      3.7,
+      0.45,
+      -0.5
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Mush_LB",
+     "type": "POINT",
+     "color": [
+      0.24,
+      0.95,
+      0.88
+     ],
+     "energy": 14.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.5,
+     "origin": [
+      -3.0,
+      0.45,
+      -2.4
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Mush_RB",
+     "type": "POINT",
+     "color": [
+      0.24,
+      0.95,
+      0.88
+     ],
+     "energy": 14.0,
+     "size": 0.0,
+     "size_y": 0.0,
+     "radius": 0.5,
+     "origin": [
+      3.0,
+      0.45,
+      -2.4
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0,
+       1.0
+      ],
+      [
+       -0.0,
+       -1.0,
+       -0.0
+      ]
+     ]
+    },
+    {
+     "name": "FOREST_Light_Back",
+     "type": "AREA",
+     "color": [
+      0.95,
+      1.0,
+      0.62
+     ],
+     "energy": 240.0,
+     "size": 12.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      -1.5,
+      3.2,
+      -9.0
+     ],
+     "basis": [
+      [
+       -0.98287,
+       0.05608,
+       -0.17555
+      ],
+      [
+       0.0,
+       0.95258,
+       0.30429
+      ],
+      [
+       0.18429,
+       0.29907,
+       -0.93627
+      ]
+     ]
+    },
+    {
+     "name": "Key_Light",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 56.1,
+     "size": 5.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      -3.4,
+      4.6,
+      3.0
+     ],
+     "basis": [
+      [
+       0.68232,
+       0.53742,
+       -0.4956
+      ],
+      [
+       -0.0,
+       0.67792,
+       0.73514
+      ],
+      [
+       0.73106,
+       -0.5016,
+       0.46256
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Rim_Light",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 71.4,
+     "size": 4.5,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      2.8,
+      5.4,
+      -6.0
+     ],
+     "basis": [
+      [
+       -0.89443,
+       -0.29654,
+       0.33476
+      ],
+      [
+       0.0,
+       0.74855,
+       0.66308
+      ],
+      [
+       -0.44721,
+       0.59308,
+       -0.66952
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Fill_Light",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 9.9,
+     "size": 4.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      4.6,
+      1.7,
+      2.2
+     ],
+     "basis": [
+      [
+       0.42046,
+       -0.28926,
+       0.85996
+      ],
+      [
+       -0.0,
+       0.94782,
+       0.31882
+      ],
+      [
+       -0.90731,
+       -0.13405,
+       0.39852
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Top_Soft",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 6.76,
+     "size": 14.0,
+     "size_y": 0.25,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      6.2,
+      -0.2
+     ],
+     "basis": [
+      [
+       -1.0,
+       -0.0,
+       0.0
+      ],
+      [
+       -0.0,
+       0.01653,
+       0.99986
+      ],
+      [
+       -0.0,
+       0.99986,
+       -0.01653
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Rim_Light_B",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 54.4,
+     "size": 7.0,
+     "size_y": 1.4,
+     "radius": 0.0,
+     "origin": [
+      -4.6,
+      4.6,
+      -5.4
+     ],
+     "basis": [
+      [
+       -0.75163,
+       0.36784,
+       -0.5475
+      ],
+      [
+       -0.0,
+       0.83005,
+       0.55768
+      ],
+      [
+       0.65959,
+       0.41917,
+       -0.62389
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Reflector_Front",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 21.0,
+     "size": 11.0,
+     "size_y": 3.0,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      6.0,
+      6.4
+     ],
+     "basis": [
+      [
+       1.0,
+       0.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.72589,
+       0.68781
+      ],
+      [
+       -0.0,
+       -0.68781,
+       0.72589
+      ]
+     ],
+     "shared": true
+    },
+    {
+     "name": "Reflector_Back",
+     "type": "AREA",
+     "color": [
+      0.92,
+      1.0,
+      0.8
+     ],
+     "energy": 36.0,
+     "size": 11.0,
+     "size_y": 3.0,
+     "radius": 0.0,
+     "origin": [
+      0.0,
+      7.2,
+      -5.6
+     ],
+     "basis": [
+      [
+       -1.0,
+       -0.0,
+       0.0
+      ],
+      [
+       -0.0,
+       0.58124,
+       0.81373
+      ],
+      [
+       -0.0,
+       0.81373,
+       -0.58124
+      ]
+     ],
+     "shared": true
+    }
+   ],
+   "objects": [
+    {
+     "name": "FOREST_Platform",
+     "slots": [
+      "FOREST_M_Stone",
+      "FOREST_M_RimStone",
+      "FOREST_M_Soil"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Roots",
+     "slots": [
+      "FOREST_M_Root"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Moss",
+     "slots": [
+      "FOREST_M_Moss"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Trees",
+     "slots": [
+      "FOREST_M_Bark"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Leaves",
+     "slots": [
+      "FOREST_M_Leaf"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_GlowPlants",
+     "slots": [
+      "FOREST_M_Biolum"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Stones",
+     "slots": [
+      "FOREST_M_Stone"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Sky",
+     "slots": [
+      "FOREST_M_Sky"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Trees_Far",
+     "slots": [
+      "FOREST_M_FarTree"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Trees_Mid",
+     "slots": [
+      "FOREST_M_MidTree"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Trees_Near",
+     "slots": [
+      "FOREST_M_MidTree"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_0",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_1",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_2",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_3",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_4",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_5",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Shaft_6",
+     "slots": [
+      "FOREST_M_Shaft"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Haze_0",
+     "slots": [
+      "FOREST_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Haze_1",
+     "slots": [
+      "FOREST_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Haze_2",
+     "slots": [
+      "FOREST_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Haze_3",
+     "slots": [
+      "FOREST_M_Mist"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Pollen",
+     "slots": [
+      "FOREST_M_Pollen"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Pollen_Far",
+     "slots": [
+      "FOREST_M_Pollen"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_00",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_01",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_02",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_03",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_04",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_05",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_06",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_07",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_08",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_09",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_10",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Fireflies_11",
+     "slots": [
+      "FOREST_M_Firefly"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_GlowMushrooms",
+     "slots": [
+      "FOREST_M_Mushroom"
+     ],
+     "vcol": true
+    },
+    {
+     "name": "FOREST_Flowers",
+     "slots": [
+      "FOREST_M_Flower"
+     ],
+     "vcol": true
+    }
+   ],
+   "materials": {
+    "FOREST_M_Stone": {
+     "base": [
+      0.369621,
+      0.347123,
+      0.263556
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.72,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_RimStone": {
+     "base": [
+      0.305339,
+      0.289269,
+      0.218559
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.8,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Soil": {
+     "base": [
+      0.144634,
+      0.102851,
+      0.064282
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.9,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Root": {
+     "base": [
+      0.262314,
+      0.196165,
+      0.127735
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.84,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Moss": {
+     "base": [
+      0.122945,
+      0.254086,
+      0.078685
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.85,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Bark": {
+     "base": [
+      0.247084,
+      0.183548,
+      0.122366
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "emis_strength": 0.0,
+     "vc_emis": false,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.86,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Leaf": {
+     "base": [
+      0.148381,
+      0.33633,
+      0.108813
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.158273,
+      0.395682,
+      0.118705
+     ],
+     "emis_strength": 0.55,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.72,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Biolum": {
+     "base": [
+      0.052,
+      0.156,
+      0.182
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.130435,
+      0.815217,
+      1.0
+     ],
+     "emis_strength": 1.9136,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.5,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Sky": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 1.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "FOREST_M_FarTree": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.178696,
+      0.285913,
+      0.160826
+     ],
+     "emis_strength": 1.2,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_MidTree": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.080069,
+      0.136117,
+      0.080069
+     ],
+     "emis_strength": 1.1,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Shaft": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 1.5,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "FOREST_M_Mist": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 1.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "FOREST_M_Pollen": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 2.2,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "FOREST_M_Firefly": {
+     "base": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "emis_strength": 7.0,
+     "vc_emis": true,
+     "vc_alpha": true,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 1.0,
+     "specular": 0.0,
+     "ior": 1.5,
+     "blend": true
+    },
+    "FOREST_M_Mushroom": {
+     "base": [
+      0.2436,
+      0.63945,
+      0.63945
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.211765,
+      1.0,
+      0.941176
+     ],
+     "emis_strength": 1.100006,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.55,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    },
+    "FOREST_M_Flower": {
+     "base": [
+      0.49,
+      0.42,
+      0.77
+     ],
+     "base_a": 1.0,
+     "vc_base": true,
+     "emis": [
+      0.448,
+      0.364,
+      0.924
+     ],
+     "emis_strength": 0.55,
+     "vc_emis": true,
+     "vc_alpha": false,
+     "alpha": 1.0,
+     "metallic": 0.0,
+     "roughness": 0.6,
+     "specular": 0.5,
+     "ior": 1.45,
+     "blend": false
+    }
+   },
+   "deck": {
+    "far": 3.7677,
+    "radius": 4.2292,
+    "skyline": {
+     "v": 0.133156,
+     "point": [
+      -0.27083,
+      0.075,
+      -3.94437
+     ]
+    },
+    "top": 0.071
+   }
+  }
+ },
+ "fps": 30,
+ "frame_range": [
+  1,
+  300
+ ]
+}

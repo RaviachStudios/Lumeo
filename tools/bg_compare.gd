@@ -23,6 +23,25 @@ const REF_FILE := {
 	"bg_arcade": "BG_ArcadeRoom.png",
 }
 
+# The Themes2 worlds come from a different .blend and a different render folder,
+# and their references have the BUTTONS in them (they were rendered through the
+# real Ref_LUME_Buttons_Hard rig), so the button cells are excluded from the
+# summary here exactly as they are for Themes1 — for the opposite reason, but to
+# the same end: what is being measured is the world.
+const WORLD_REF_DIR := "C:/Users/sahar/OneDrive/Documents/APP IDEAS/Simon/Themes2/renders/"
+const WORLD_REF_FILE := {
+	# `world_ice` is deliberately absent: Ice Kingdom is generated in Godot now
+	# (ice_world.gd) and has no Blender render to be compared against. lume_ice.png
+	# is still in Themes2/renders as the reference for the .glb, which is still on
+	# disk — see the note in world_scenes.gd.
+	"world_forest": "lume_forest.png",
+}
+
+static func _ref_path(id: String) -> String:
+	if WORLD_REF_FILE.has(id):
+		return WORLD_REF_DIR + String(WORLD_REF_FILE[id])
+	return REF_DIR + String(REF_FILE.get(id, ""))
+
 const COLS := 8
 const ROWS := 5
 # Cells the buttons cover on both images, so a background comparison is not
@@ -35,15 +54,24 @@ const BUTTON_CELLS := [
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
-	var ids: Array = args if args.size() > 0 else BackgroundScenes.ORDER
+	var ids: Array = []
+	for a in args:
+		if String(a) != "ref":
+			ids.append(a)
+	if ids.is_empty():
+		ids = BackgroundScenes.ORDER
 	for id in ids:
 		_compare(String(id))
 	get_tree().quit()
 
 func _compare(id: String) -> void:
-	var ref := Image.load_from_file(REF_DIR + String(REF_FILE.get(id, "")))
-	var got := Image.load_from_file(
-		ProjectSettings.globalize_path("user://bg_hard_%s.png" % id))
+	var ref := Image.load_from_file(_ref_path(id))
+	# "-- ref <id> ..." compares the reference-camera render from tools/world_ref.gd
+	# instead of the gameplay one, which takes framing out of the question and leaves
+	# only materials and lighting.
+	var use_ref := OS.get_cmdline_user_args().has("ref")
+	var got := Image.load_from_file(ProjectSettings.globalize_path(
+		("user://wref_%s.png" if use_ref else "user://bg_hard_%s.png") % id))
 	if ref == null or got == null:
 		print("MISSING  %s  ref=%s got=%s" % [id, ref != null, got != null])
 		return

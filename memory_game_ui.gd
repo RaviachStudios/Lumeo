@@ -61,6 +61,17 @@ const MODEL: PackedScene = preload("res://models/MemoryGame_UI_Medium.glb")
 # The right-edge LEVEL readout, shared by all three boards. Preloaded rather than
 # referenced by class_name so it never depends on the editor's global-class scan.
 const LEVEL_TAB := preload("res://level_tab.gd")
+# The button skins: complete looks that re-dress the six gameplay buttons while
+# their own 3D background is the one the board is standing on. Preloaded for the
+# same reason LEVEL_TAB is — they never have to wait on the editor's global-class
+# scan to resolve — and held as a LIST because the board's side of this is identical
+# for every one of them (see _apply_button_skin). Each module answers
+# active_for(bg_id), build(key) and trim_cache(keep), and nothing else about it
+# reaches here.
+const ICE_BUTTONS := preload("res://ice_buttons.gd")
+const LILY_BUTTONS := preload("res://lily_buttons.gd")
+const CHIP_BUTTONS := preload("res://chip_buttons.gd")
+const BUTTON_SKINS: Array = [ICE_BUTTONS, LILY_BUTTONS, CHIP_BUTTONS]
 
 # Button index -> the GLB's colour key. The index order matches game.gd's
 # BUTTON_COLORS (Red, Green, Blue, Yellow, Orange) so the existing per-index tones
@@ -184,6 +195,26 @@ const FIT_CENTRE_Y := 0.487
 const FALLBACK_SURFACE := {"idle": 1.0, "highlight": 2.60, "pressed": 1.70, "disabled": 0.10}
 const FALLBACK_RING := {"idle": 1.0, "highlight": 2.40, "pressed": 1.90, "disabled": 0.15}
 
+# Extra lift on the HIGHLIGHT rung only — the flash the player is actually reading
+# during playback. The authored step over idle (2.6x on the face, 2.4x on the ring)
+# is the Blender reference's, and on a phone at arm's length it was not a big
+# enough jump to catch reliably.
+#
+# TWO knobs, not one, and that split is the whole point. Pushing the FACE is what
+# washes a flash out: emission is applied to the colour in linear light, so past
+# about 1.5x the button's strongest channel clips and the hue slides toward white —
+# a brighter button showing LESS colour, which is the opposite of what was asked
+# for. The RING carries both the inset ring and the coloured pool that button
+# throws on the table (see GLOW_PEAK), and that pool is colour spreading across the
+# board rather than a face going pale, so it can be pushed much further and reads
+# as more of the button's own colour rather than less.
+#
+# ONLY the highlight rung is scaled. Idle is the board's resting look, which is what
+# the whole emission pipeline was fitted against, and pressed has to stay BELOW
+# highlight or a player's own tap outshines the sequence they are copying.
+const HIGHLIGHT_BOOST := 1.42        # the button face
+const HIGHLIGHT_GLOW_BOOST := 1.95   # the ring, and the pool it throws
+
 const STATE_IDLE := "idle"
 const STATE_HIGHLIGHT := "highlight"
 const STATE_PRESSED := "pressed"
@@ -206,12 +237,16 @@ const EMISSION_MATCH := 1.0
 # any distance, and it writes no alpha, so over this device's transparent
 # SubViewport it would be discarded at composite time regardless.
 #
-# So the pools are drawn explicitly: ONE unshaded plane lying ON the board, just
-# above y = 0, whose shader sums a radial falloff around each button centre. A
+# So the pools are drawn explicitly: ONE unshaded plane lying ON the surface the
+# buttons stand on, whose shader sums a radial falloff around each button centre. A
 # single extra draw call, no full-screen post-process, correct alpha, and each
-# button's pool is independently controllable. Because it lies in the board plane
-# it is depth-tested like everything else, so the frames occlude it and it reads
-# as light on a surface rather than a sprite pasted over the render.
+# button's pool is independently controllable. Because it lies in that surface it is
+# depth-tested like everything else, so the frames occlude it and it reads as light
+# on the ground rather than a sprite pasted over the render.
+#
+# "The surface the buttons stand on" is y = 0 for a Themes1 floor and for no
+# background at all, and is NOT for a Themes2 world — see _place_ground_glow, which
+# is the only place the difference is expressed.
 # Fitted to the reference's own pool, sampled outward from a button into empty
 # board (its hue channel, of 255):
 #     r    1.25  1.50  1.75
@@ -228,6 +263,11 @@ const GLOW_R_CUT := 3.20      # ...and is gone here (the reference keeps its
                               # over the whole frame)
 const GLOW_PLANE_Y := 0.012   # just off the board plane, under every frame
 const GLOW_PLANE_SIZE := 18.0
+# How much of the surface's own radius the pool is faded out over, when the surface
+# HAS an edge (see _place_ground_glow). 0.86 starts the fade at 86 % of it, which on
+# both worlds is about half a metre of ground — long enough that the cut is not a
+# line, short enough that the pool still reaches most of the deck.
+const GLOW_EDGE_FADE := 0.86
 # Draw order for the transparent layers: the ground pools sit under everything
 # else in the 3D scene.
 const GLOW_PRIORITY := -2
@@ -246,6 +286,13 @@ uniform float r_peak;
 uniform float falloff;
 uniform float r_knee;
 uniform float r_cut;
+// The edge of the surface the pools are lying on, and where the fade to it starts.
+// Zero means "no edge" — a Themes1 floor runs past the frame in every direction and
+// wants no clip at all. A Themes2 world is an island and does have one; without this
+// the pool spills off the deck, hangs over the abyss and lands on the far rim as a
+// bright band. See BackgroundScenes.pool_radius.
+uniform float deck_r;
+uniform float deck_fade;
 
 varying vec2 board;
 
@@ -263,6 +310,9 @@ void fragment() {
 			? smoothstep(r_in, r_peak, r)
 			: exp(-falloff * (r - r_peak)) * (1.0 - smoothstep(r_knee, r_cut, r));
 		acc += tints[i] * s;
+	}
+	if (deck_r > 0.0) {
+		acc *= 1.0 - smoothstep(deck_fade, deck_r, length(board));
 	}
 	// Normal (not additive) blending, so the pool writes alpha and survives
 	// compositing over a transparent viewport. Splitting the accumulated light
@@ -304,6 +354,22 @@ signal color_pressed(color_name: String)
 # instead and there must not be a second, ungated handler.
 var input_enabled := true
 
+# Preview overrides, for the shop. `preview_background` stands a specific 3D
+# background under the board whatever the player has equipped; `preview_bare`
+# stands it on NOTHING, for a card whose background is a 2D world painted BEHIND
+# the board rather than geometry under it; `hud_visible` drops the LEVEL tab,
+# which is interface and has no business in a shop card. All three are inert in
+# gameplay — nothing sets them there.
+#
+# `preview_bare` is not the same as leaving `preview_background` empty. Empty
+# means "ask the wallet", and on a LUMEO card that put the player's own equipped
+# floor inside the board and covered the world the card was advertising — every
+# card in the block showing the same picture, for anyone with one of the fourteen
+# modelled backgrounds on.
+var preview_background := ""
+var preview_bare := false
+var hud_visible := true
+
 # ---------------------------------------------------------------------------
 # Board spec
 # ---------------------------------------------------------------------------
@@ -324,6 +390,45 @@ var _cam_dist_start: float = CAM_DIST_START
 var _fit_fill_x: float = FIT_FILL_X
 var _fit_fill_y: float = FIT_FILL_Y
 var _fit_centre_y: float = FIT_CENTRE_Y
+
+# THE LANES THE HUD HOLDS, in viewport PIXELS, published by whoever owns the HUD
+# (game.gd) and zero everywhere else — a shop preview card has no status pill to
+# stay clear of and should not pay for one.
+#
+# They exist because the fit had no answer to the only question that matters about
+# a framing: does the board FIT? `_fit_fill_y` and `_fit_centre_y` are independent
+# numbers, and nothing ever checked that a span of the first placed at the second
+# lands inside the viewport. It did not. Measured through the real game at 1280x720
+# (tools/play_fit.tscn), before this existed:
+#
+#   * on Ice Kingdom the bottom row of buttons ran to 759-761 px in a 720 px
+#     viewport — FORTY PIXELS off the bottom of the screen, on all three
+#     difficulties and every level;
+#   * and on EVERY skin, the "Your turn!" pill was drawn over one or two buttons,
+#     which takes a button off the player just as effectively as an edge does,
+#     because the HUD is on the 2D layer above the board.
+#
+# A button that is off the screen cannot be seen and cannot be tapped, and this is
+# a game whose entire input is tapping buttons.
+var hud_top_inset := 0.0
+var hud_bottom_inset := 0.0
+
+# The margin the buttons keep from the viewport edge itself, as a fraction of its
+# height, on top of whatever the HUD reserves. Small: this is anti-clipping, not
+# composition — the HUD lanes are what actually shape the frame.
+const FIT_EDGE_SAFE := 0.020
+
+
+# Publish the lanes the HUD is holding, in viewport pixels, and re-frame if they
+# have moved. Called by whoever owns the HUD every time it lays itself out, which
+# includes every resize — the board cannot discover these for itself, and a board
+# framed against last frame's HUD is the bug this whole mechanism exists to stop.
+func set_hud_insets(top: float, bottom: float) -> void:
+	if is_equal_approx(top, hud_top_inset) and is_equal_approx(bottom, hud_bottom_inset):
+		return
+	hud_top_inset = top
+	hud_bottom_inset = bottom
+	_fit_camera()
 
 var _vpc: SubViewportContainer
 var _vp: SubViewport
@@ -359,10 +464,19 @@ var _anim_frame := -1
 # into both a MouseButton and a ScreenTouch event.
 var _tap_frame := -1
 
+# The button skin currently worn (one of BUTTON_SKINS, or null for the stock
+# buttons), and the stock meshes it displaced, so unequipping puts the board back
+# exactly.
+var _worn_skin: GDScript = null
+var _stock_mesh: Dictionary = {}
+# The board's own press clips, kept while a skin is wearing scaled copies of them.
+var _stock_anims: AnimationLibrary = null
+
 var _tab: Control                  # the left-edge LEVEL readout (LEVEL_TAB)
 var _board_rect := Rect2()         # the board's silhouette on screen, from the fit
 var _num_pack: Variant = null
 var _glow_mat: ShaderMaterial
+var _glow_plane: MeshInstance3D          # the sheet the pools are drawn on
 var _fit_points: PackedVector3Array = PackedVector3Array()
 # The viewport size the framing was last fitted for. The SubViewport takes its
 # size from the stretching container a frame or more AFTER this Control is sized,
@@ -410,9 +524,11 @@ func _build_shell() -> void:
 	# shop theme) has drawn behind it.
 	_vp.transparent_bg = true
 	_vp.own_world_3d = true
-	# MSAA on a render-target SubViewport is a heavy allocation on mobile GL
-	# drivers. The board's silhouettes are all big discs, which is the case that
-	# needs it least.
+	# Off by default, and switched on only by a skin that needs it — see
+	# _antialias_for. MSAA on a render-target SubViewport is a heavy ALLOCATION on
+	# mobile GL drivers (this project has already met a Mali OOM on a continuously
+	# updating viewport), so it is not something to turn on for every player when
+	# only two looks want it.
 	_vp.msaa_3d = Viewport.MSAA_DISABLED
 	# Start idle; _process/_kick_render drive the redraw cadence from there.
 	_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -428,6 +544,7 @@ func _build_shell() -> void:
 	_ap = _board.find_child("AnimationPlayer", true, false) as AnimationPlayer
 
 	_space_buttons()
+	_apply_button_skin()
 	_recolour_jade()
 	_build_buttons()
 	_refresh_frame()
@@ -451,11 +568,247 @@ func _space_buttons() -> void:
 		var p := holder.position
 		holder.position = Vector3(p.x * _spacing, p.y, p.z * _spacing)
 
+# ---------------------------------------------------------------------------
+# Button skins
+# ---------------------------------------------------------------------------
+# Swap a skin's meshes onto the board's own button nodes while that skin's own 3D
+# background is the one the board is standing on, and swap the stock ones back when
+# it is not. Two skins exist — Ice Kingdom's snowflakes (ice_buttons.gd) and
+# Magical Lake's lily pads (lily_buttons.gd) — and nothing in here can tell them
+# apart, which is the point: a third is a module and a CATALOG entry.
+#
+# This is the WHOLE integration. Each skin hands back the two meshes a stock button
+# is made of, built to the same contract — same node names, same origin, same y
+# range, same two surfaces meaning the same two things — so replacing `mesh` on the
+# existing MeshInstance3D leaves the nodes, and therefore the press clips, the
+# emission state machine, the hit-testing, the spacing and the camera fit, exactly
+# as they were. Nothing here positions a button or knows how many there are.
+#
+# Returns true only if the board actually changed, so the caller knows whether the
+# per-button caches need rebuilding.
+func _apply_button_skin() -> bool:
+	if _board == null:
+		return false
+	# Keyed off the background the board is ACTUALLY standing on, not off the wallet:
+	# in gameplay that resolves to the equipped theme, and on a shop card to the one
+	# the card is selling. So the Ice Kingdom card previews its own snowflakes.
+	var bg := _wanted_background()
+	var want: GDScript = null
+	for mod: GDScript in BUTTON_SKINS:
+		if mod.active_for(bg):
+			want = mod
+			break
+	if want == _worn_skin:
+		return false
+	# Resolve every colour BEFORE touching anything: a board with two skinned
+	# buttons and four stock ones is worse than a board with none.
+	var kits: Dictionary = {}
+	if want != null:
+		for key: String in _keys:
+			var kit: Dictionary = want.build(key)
+			if kit.is_empty():
+				return false
+			kits[key] = kit
+	for key: String in _keys:
+		var surf := _board.find_child("Button_%s_Surface" % key, true, false) as MeshInstance3D
+		var frame := _board.find_child("Button_%s_Frame" % key, true, false) as MeshInstance3D
+		if surf == null or frame == null:
+			continue
+		# The stock meshes are recorded only when there are none recorded yet, so a
+		# swap straight from one skin to another (which no equip flow reaches today,
+		# but a preview grid does) can never record one skin's meshes as the stock
+		# ones and strand the board on them.
+		if want != null:
+			if not _stock_mesh.has("%s_Surface" % key):
+				_stock_mesh["%s_Surface" % key] = surf.mesh
+				_stock_mesh["%s_Frame" % key] = frame.mesh
+			surf.mesh = kits[key]["surface"]
+			frame.mesh = kits[key]["frame"]
+		else:
+			surf.mesh = _stock_mesh.get("%s_Surface" % key, surf.mesh)
+			frame.mesh = _stock_mesh.get("%s_Frame" % key, frame.mesh)
+		# The per-instance overrides were duplicated off the mesh that just left.
+		# Clearing them hands the node back to its new mesh's own materials, which
+		# is what _build_buttons then copies.
+		for mi: MeshInstance3D in [surf, frame]:
+			for i in mi.get_surface_override_material_count():
+				mi.set_surface_override_material(i, null)
+	if want == null:
+		_stock_mesh.clear()
+	_light_skin(want)
+	_antialias_for(want)
+	_press_travel_for(want)
+	_worn_skin = want
+	# Everything not being worn goes back to the loader, so a difficulty change or
+	# an unequip does not leave the previous look's meshes resident.
+	for mod: GDScript in BUTTON_SKINS:
+		mod.trim_cache(_keys if mod == want else [])
+	return true
+
+
+# Press travel, per skin.
+#
+# The GLB's Press_<Key> clip sinks a button 115 mm into the board. That is the
+# stroke of a moulded plastic dome dropping into its housing, and it is the right
+# number for every board and every other look — but a skin can be something that
+# does not travel that far. A lily pad resting on water is: at the full stroke it
+# keeps 39 mm of its 154 mm above the waterline and reads as sinking rather than
+# as being pressed.
+#
+# So a skin may scale the AMPLITUDE, and only the amplitude. The timing, the easing
+# and the small overshoot on the way back are the board's and are untouched, so a
+# skinned press stays exactly as quick and as responsive as a stock one — it simply
+# does not go as deep.
+#
+# The Animation resources are sub-resources of the imported PackedScene and are
+# SHARED by every instance of it, so nothing here edits one in place: the scaled
+# clips go into a NEW library, the original is kept, and unequipping puts the
+# original library back. A second board built later still gets the stock stroke.
+func _press_travel_for(want: GDScript) -> void:
+	if _ap == null:
+		return
+	var libs := _ap.get_animation_library_list()
+	if libs.is_empty():
+		return
+	var key: StringName = libs[0]
+	var scale := 1.0
+	if want != null:
+		var v: Variant = want.get("PRESS_SCALE")
+		if v != null:
+			scale = float(v)
+
+	if is_equal_approx(scale, 1.0):
+		if _stock_anims != null:
+			_ap.remove_animation_library(key)
+			_ap.add_animation_library(key, _stock_anims)
+			_stock_anims = null
+		return
+
+	if _stock_anims == null:
+		_stock_anims = _ap.get_animation_library(key)
+	var lib := AnimationLibrary.new()
+	for nm: StringName in _stock_anims.get_animation_list():
+		var a := (_stock_anims.get_animation(nm) as Animation).duplicate(true) as Animation
+		for t in a.get_track_count():
+			if a.track_get_type(t) != Animation.TYPE_POSITION_3D:
+				continue
+			for k in a.track_get_key_count(t):
+				var p: Vector3 = a.track_get_key_value(t, k)
+				a.track_set_key_value(t, k, Vector3(p.x, p.y * scale, p.z))
+		lib.add_animation(nm, a)
+	_ap.remove_animation_library(key)
+	_ap.add_animation_library(key, lib)
+
+
+# Anti-aliasing, per skin.
+#
+# The stock button is a big disc, and a big disc is the silhouette that needs MSAA
+# least — which is why this viewport has always run without it. Every SKIN since
+# breaks that: a snowflake is 48 thin arms and a one-pixel bright rim, a lily pad is
+# a scalloped edge with a rolled lip, both over a background rather than over black.
+#
+# Measured at real gameplay size (tools/pad_aa.tscn): with MSAA off, 3.0 % of the
+# flake's frame differs from the anti-aliased render and the worst pixel differs by
+# 1.14 — a full black-to-white step. That is hard stair-stepping along every arm
+# with the rim breaking into dashes, and it is the "jagged edges and strange thin
+# lines" a skinned board shows and a stock one does not.
+#
+# 2x, not 4x: the error is a one-pixel boundary rather than a gradient, so the first
+# step removes nearly all of it for the smallest allocation. It costs ~1.0 ms/frame
+# on the whole board at 1080x2160 (tools/lake_cost.tscn) — which is why it is scoped
+# to the skins that need it instead of charged to everyone.
+func _antialias_for(want: GDScript) -> void:
+	if _vp == null:
+		return
+	var aa := want != null and bool(want.get("WANTS_AA"))
+	var mode := Viewport.MSAA_2X if aa else Viewport.MSAA_DISABLED
+	if _vp.msaa_3d != mode:
+		_vp.msaa_3d = mode
+
+
+# Some skins bring their own lighting, because the stock studio is not lighting for
+# them. It is two DirectionalLights at 0.14 and 0.05 energy whose entire job is a
+# specular highlight on six small metallic bezels — a stock button carries its own
+# colour as emission and needs almost nothing else. An asset whose design is SHAPE
+# rather than glow (the lily pads: a dish, a rolled rim, a raised vein fan) has
+# nothing to read by in that room, and no amount of emission substitutes, because a
+# flat self-lit surface has no gradient across it.
+#
+# So a skin may hand back a rig. It is culled to BOARD_LAYER exactly as the studio
+# is, so it can never reach a 3D background, and it exists ONLY while that skin is
+# worn — the stock board and all fifteen other backgrounds are untouched by a
+# single count.
+func _light_skin(want: GDScript) -> void:
+	var holder := _vp.get_node_or_null("SkinLights")
+	if holder != null:
+		_vp.remove_child(holder)
+		holder.queue_free()
+	if want == null or not want.has_method("lights"):
+		return
+	var rig: Array = want.lights(BOARD_LAYER)
+	if rig.is_empty():
+		return
+	holder = Node3D.new()
+	holder.name = "SkinLights"
+	for l: Node3D in rig:
+		holder.add_child(l)
+	_vp.add_child(holder)
+
+
+# The background id of the button skin the board is wearing, or "" for the stock
+# buttons. The acceptance harnesses assert on this rather than reaching for a
+# private flag, and it is how a board says which of the two looks it has on.
+func button_skin_id() -> String:
+	return "" if _worn_skin == null else String(_worn_skin.THEME_ID)
+
+# Which 3D background this board is actually standing on. game.gd reads it to pick
+# which skin's milestone banner to raise — the celebration itself is the
+# background's own (it decides whether the level number means anything to it and
+# how long the round must freeze), but the words that go over it are the game's.
+func background_id() -> String:
+	return _bg_id
+
+# Drop the per-button hit areas so _build_buttons can hang fresh ones. Only the
+# live re-skin needs this; the first build has none yet.
+func _clear_button_areas() -> void:
+	for key: String in _keys:
+		var holder := _board.find_child("Button_%s" % key, true, false) as Node3D
+		if holder == null:
+			continue
+		var area := holder.get_node_or_null("Hit_%s" % key)
+		if area != null:
+			holder.remove_child(area)
+			area.free()
+
 # Darken Jade to the deep-emerald target so it cannot be confused with Cyan.
 # See the JADE_* note: this is a brightness change along the authored hue, applied
 # as one factor to the surface and the under-glow so the whole button moves
 # together. The rim ring and the frame are untouched.
 func _recolour_jade() -> void:
+	# Only a board whose greens have not already been separated needs this, and the
+	# SKIN is what says so — `RECOLOUR_JADE = false` on its module opts out. (Read
+	# off the script through a variable: `SomeClass.get("CONST")` on a class name is
+	# a parse error in GDScript, the same reason WANTS_AA, PRESS_SCALE and
+	# HIGHLIGHT_FACE are read this way.)
+	#
+	# The correction exists because the authored Jade DOME renders a few counts from
+	# the authored Cyan one. It is written as "replace the albedo with JADE_TARGET",
+	# which is a fine thing to do to a moulded plastic top and a poor thing to do to
+	# an authored asset: it dims that button by 0.62 and substitutes a colour that
+	# has nothing to do with the art.
+	#
+	#   Ice Kingdom     keeps it — the flakes were authored, measured and signed off
+	#                   with it applied.
+	#   Magical Lake    opts out — a lily pad's grass green and its turquoise are
+	#                   nowhere near each other to begin with.
+	#   Royal Casino    opts out for a different and stronger reason: JADE_TARGET is
+	#                   a deep emerald, and the casino's ground is GREEN FELT. Taking
+	#                   the correction would move one of the six buttons onto the
+	#                   background's own hue, which is a worse confusion than the one
+	#                   it exists to fix. The chips' own accent inserts (a deep tint
+	#                   of each chip's hue — see chip_buttons.gd) do that job here.
+	if _worn_skin != null and _worn_skin.get("RECOLOUR_JADE") == false:
+		return
 	var surf := _board.find_child("Button_%s_Surface" % JADE_KEY, true, false) as MeshInstance3D
 	var frame := _board.find_child("Button_%s_Frame" % JADE_KEY, true, false) as MeshInstance3D
 	if surf == null or frame == null:
@@ -690,6 +1043,30 @@ func _read_states(surf: MeshInstance3D) -> Array[Dictionary]:
 	for st: String in [STATE_IDLE, STATE_HIGHLIGHT, STATE_PRESSED, STATE_DISABLED]:
 		s[st] = (float(extras["emission_%s" % st]) / s_idle) if (s_idle > 0.0 and extras.has("emission_%s" % st)) else FALLBACK_SURFACE[st]
 		r[st] = (float(extras["ring_%s" % st]) / r_idle) if (r_idle > 0.0 and extras.has("ring_%s" % st)) else FALLBACK_RING[st]
+	s[STATE_HIGHLIGHT] *= HIGHLIGHT_BOOST
+	r[STATE_HIGHLIGHT] *= HIGHLIGHT_GLOW_BOOST
+	# ...and a SKIN may lift its face's highlight rung further, because the two
+	# rungs above are a stock button's own ratio and a skin need not share it.
+	#
+	# The stock button's face and its ring are one moulded dome and the ring that
+	# frames it: they sit at the same angle to the light, so a face at 3.69x and a
+	# ring at 4.68x read as one lit object. A skin whose two surfaces are the same
+	# shape at different HEIGHTS does not — the lily pad's dish is a bowl recessed
+	# inside its own rolled rim, so at the stock ratio the rim flashes and the dish
+	# stays a dark hollow, and a highlight the player reads as a ring instead of as
+	# a button. That is a property of the ASSET, so it is declared by the asset's
+	# module (LilyButtons.HIGHLIGHT_FACE) rather than fixed here.
+	#
+	# Highlight only, exactly like the two above: idle is the resting look every
+	# skin was authored against, and pressed must stay below highlight.
+	#
+	# Read off the script through a variable — `SomeClass.get("CONST")` on a class
+	# name is a parse error in GDScript, the same reason WANTS_AA and PRESS_SCALE
+	# are read this way.
+	if _worn_skin != null:
+		var face_lift: Variant = _worn_skin.get("HIGHLIGHT_FACE")
+		if face_lift != null:
+			s[STATE_HIGHLIGHT] *= float(face_lift)
 	return [s, r]
 
 # One invisible Area3D per button, parented to the button's STATIONARY parent
@@ -744,6 +1121,8 @@ func _build_ground_glow() -> void:
 	_glow_mat.set_shader_parameter("falloff", GLOW_FALLOFF)
 	_glow_mat.set_shader_parameter("r_knee", GLOW_R_KNEE)
 	_glow_mat.set_shader_parameter("r_cut", GLOW_R_CUT)
+	_glow_mat.set_shader_parameter("deck_r", 0.0)
+	_glow_mat.set_shader_parameter("deck_fade", 0.0)
 
 	var mi := MeshInstance3D.new()
 	mi.name = "GroundGlow"
@@ -752,16 +1131,57 @@ func _build_ground_glow() -> void:
 	mi.position = Vector3(0.0, GLOW_PLANE_Y, 0.0)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_vp.add_child(mi)
+	_glow_plane = mi
+	_place_ground_glow()
 	_push_glow()
+
+# Put the pool sheet on whatever the buttons are actually standing on, and stop it
+# where that surface stops.
+#
+# For every background but one this is the board plane, unbounded, and nothing here
+# changes. A Themes2 WORLD is the exception and it fails BOTH ways at once if this is
+# skipped: its deck stands 55-71 mm above the origin, so a sheet at 12 mm is buried
+# under the whole play surface and no button lays any light on the ground; and the
+# only place the sheet then surfaces is past the island's rim, over the abyss, where
+# the camera's shallow angle squeezes the remaining nine metres of it into a bright
+# band along the far edge. What the player sees is a flash that misses the table and
+# washes the scenery instead — which is the opposite of the Themes1 behaviour it is
+# meant to match.
+#
+# Both numbers come from the background in ITS units and are scaled here, because
+# fit_scale scales the whole world about the origin.
+func _place_ground_glow() -> void:
+	if _glow_plane == null or _glow_mat == null:
+		return
+	var s := _bg_scene.scale.y if _bg_scene != null else 1.0
+	# The sheet keeps its own 12 mm clearance in both cases; what changes is what it
+	# is 12 mm above. 0.0 back from the background means "the board plane", which is
+	# every floor and every canvas theme.
+	var surface := BackgroundScenes.pool_plane_y(_bg_id) * s
+	_glow_plane.position.y = surface + GLOW_PLANE_Y
+	var edge := BackgroundScenes.pool_radius(_bg_id) * s
+	_glow_mat.set_shader_parameter("deck_r", edge)
+	_glow_mat.set_shader_parameter("deck_fade", edge * GLOW_EDGE_FADE)
+	# The background gets told the same thing, from the same place, for the same
+	# reason: this is where "which surface, and where do the buttons stand on it"
+	# is settled, and it is settled on every build, every resize and every
+	# difficulty change. A background that does not care (all fourteen but the
+	# lake) is not asked twice — see BackgroundScenes.set_board_layout.
+	BackgroundScenes.set_board_layout(_bg_scene, _bg_id, _centres, _board_reach(),
+		_cam, Vector2(_vp.size))
 
 # Push each button's current pool colour (its own hue, scaled by how far its glow
 # has risen above idle) into the shader.
 func _push_glow() -> void:
 	if _glow_mat == null:
 		return
+	# GLOW_PEAK was fitted against a near-black board, and how much of it a surface
+	# can take is the surface's business — see BackgroundScenes.pool_gain, which
+	# answers 1.0 for everything but the lake.
+	var peak := GLOW_PEAK * BackgroundScenes.pool_gain(_bg_id)
 	var tints := PackedVector3Array()
 	for idx in _count:
-		tints.append(_pool_tint[idx] * (GLOW_PEAK * _ring_cur[idx]))
+		tints.append(_pool_tint[idx] * (peak * _ring_cur[idx]))
 	_glow_mat.set_shader_parameter("tints", tints)
 
 # ---------------- the LEVEL tab ----------------
@@ -773,6 +1193,7 @@ func _push_glow() -> void:
 func _build_level_tab() -> void:
 	_tab = LEVEL_TAB.new()
 	add_child(_tab)
+	_tab.visible = hud_visible
 	_tab.layout_in(size, _board_rect)
 	_tab.apply_number_pack(_num_pack)
 
@@ -816,9 +1237,58 @@ func _fit_camera() -> void:
 	# replaces that margin on the left; the right keeps it, so a tall viewport —
 	# where width binds and the column actually costs something — cannot push the
 	# far edge of the board flush against the screen.
+	# The BACKGROUND may ask for the board to be framed differently — smaller, and
+	# lower down — and exactly one does: Ice Kingdom has a horizon in it, and a board
+	# that fills 0.90 of the height centred at 0.487 puts its top row of buttons
+	# above any horizon a picture could have. See BackgroundScenes.frame_bias.
+	#
+	# Clamped here rather than trusted, because this is the one hook that lets a
+	# background make the buttons smaller, and the buttons are the game.
+	var bias := BackgroundScenes.frame_bias(_bg_id)
+	var want_fill := clampf(_fit_fill_y + bias.x, 0.55, 0.98)
+	var want_centre := clampf(_fit_centre_y + bias.y, 0.30, 0.80)
+
+	# --- THE BAND, and it is the answer to "does it fit?".
+	#
+	# Everything above is a PREFERENCE: how much of the height the board would like
+	# to fill and where it would like to sit. The band is the part of the viewport
+	# the buttons are actually allowed to occupy, and it is built from real
+	# geometry rather than chosen — the HUD's own lanes (hud_top_inset /
+	# hud_bottom_inset, which game.gd measures off the controls it just laid out),
+	# the background's own (BackgroundScenes.board_top_inset: Ice Kingdom has a
+	# horizon and no button may stand on the skyline), and a small edge margin.
+	#
+	# The preference is then honoured only as far as the band allows: the span is
+	# capped to the band's height and its centre is clamped so both ends stay
+	# inside it. That is the whole fix, and it is why it is responsive — every term
+	# is a pixel lane or a fraction of THIS viewport, so it re-solves on every
+	# resize, at every aspect, on all three boards, at every level.
+	#
+	# SHRINKING IS THE LAST RESORT, NOT THE MECHANISM. On a plain background the
+	# board loses about 5 % of its height and moves up; on Ice Kingdom, whose
+	# preference asked for a span placed 5 % past the bottom of the screen, it is
+	# the CENTRE that moves and the size follows only as far as the horizon
+	# requires. A cropped button is not a smaller button — it is a missing one.
+	var edge := vp.y * FIT_EDGE_SAFE
+	var lo_px := maxf(hud_top_inset, 0.0) + edge
+	lo_px = maxf(lo_px, vp.y * BackgroundScenes.board_top_inset(
+		_bg_id, _fit_fill_y, _fit_centre_y))
+	var hi_px := vp.y - maxf(hud_bottom_inset, 0.0) - edge
+	# A floor under the band, so a viewport small enough or a HUD greedy enough to
+	# close it entirely still gets a board rather than a division by zero.
+	var band := maxf(hi_px - lo_px, vp.y * 0.35)
+	hi_px = lo_px + band
+	var fill_y := minf(want_fill, band / vp.y)
+	# `band_half`, not `half`: the re-centring pass below already owns a `half`
+	# (the span's own half-WIDTH), and GDScript will not let one function declare
+	# the name twice — the whole project stops parsing, and the error it reports is
+	# a chain of "could not resolve class" a long way from here.
+	var band_half := vp.y * fill_y * 0.5
+	var centre_y := clampf(vp.y * want_centre,
+		lo_px + band_half, hi_px - band_half) / vp.y
 	var far_margin := vp.x * (1.0 - _fit_fill_x) * 0.5
 	var avail_x := minf(vp.x * _fit_fill_x,
-		maxf(vp.x - LEVEL_TAB.reserved_width() - far_margin, 64.0))
+		maxf(vp.x - _tab_reserve() - far_margin, 64.0))
 	var dist := _cam_dist_start
 	var slide := Vector3.ZERO
 	for _pass in 3:
@@ -832,7 +1302,7 @@ func _fit_camera() -> void:
 		var span := mx - mn
 		if span.x <= 0.0 or span.y <= 0.0:
 			return
-		var k := maxf(span.x / avail_x, span.y / (vp.y * _fit_fill_y))
+		var k := maxf(span.x / avail_x, span.y / (vp.y * fill_y))
 		dist = clampf(dist * k, CAM_DIST_MIN, CAM_DIST_MAX)
 		# Re-centre. Pixels -> world at the target's depth, then slide the rig along
 		# its own right/up axes so the framing translates without tilting.
@@ -848,9 +1318,9 @@ func _fit_camera() -> void:
 		# which case it sits as far left as it can without doing so — and never so
 		# far right that it crops on the other side.
 		var half := span.x * 0.5
-		var lo := LEVEL_TAB.reserved_width() + half
+		var lo := _tab_reserve() + half
 		var cx := clampf(vp.x * 0.5, lo, maxf(lo, vp.x - far_margin - half))
-		var want := Vector2(cx, vp.y * _fit_centre_y)
+		var want := Vector2(cx, vp.y * centre_y)
 		var per_world := (vp.y * 0.5) / (tan(deg_to_rad(_cam_fov_y()) * 0.5) * dist)
 		var delta := (want - centre) / maxf(per_world, 0.0001)
 		var b := _cam.global_transform.basis
@@ -860,6 +1330,12 @@ func _fit_camera() -> void:
 	_seat_background()
 	if _tab != null:
 		_tab.layout_in(Vector2(_vp.size), _board_rect)
+
+# The column the LEVEL tab holds against the left edge — zero when there is no tab.
+# It is a fixed pixel width, so on a shop card (300 px across, HUD off) leaving it
+# in would push the whole composition a fifth of the frame to the right.
+func _tab_reserve() -> float:
+	return LEVEL_TAB.reserved_width() if hud_visible else 0.0
 
 # Where the board's silhouette actually lands on screen, in viewport pixels. The
 # tab seats itself against this rather than against a guessed margin, so each
@@ -937,6 +1413,11 @@ func _apply_emission(idx: int) -> void:
 # in no clip at all, so they never move: the surface sinks INTO its stationary
 # frame, which is the whole point of the animation.
 func _trigger_press(idx: int) -> void:
+	# Tell the background a button moved, before the clip runs. The lake throws a
+	# splash from that pad; nothing else listens. Purely geometric — where, not what
+	# or why — so a background can never learn anything about the match.
+	if _bg_scene != null and idx >= 0 and idx < _centres.size():
+		BackgroundScenes.note_press(_bg_scene, _bg_id, _centres[idx])
 	if _ap == null or idx < 0 or idx >= _count:
 		return
 	var frame := Engine.get_process_frames()
@@ -980,6 +1461,15 @@ func apply_skin(_outer: Variant, _inner: Variant, number: Variant, skin_id: Stri
 # that can change either of them comes through here rather than calling
 # apply_button_frame with a raw id, so the priority is decided in exactly one place.
 func _refresh_frame() -> void:
+	# The eighteen bezel cosmetics are a lathe built for the stock disc, and
+	# wearing one covers the housing's surface 0 with ButtonFrames.hidden_material()
+	# — which on an ice button is the frost socket itself and on a lily pad is the
+	# meniscus where it meets the water, neither of which is a black ring. So a
+	# skinned button always wears its own, never a cosmetic frame; the player's
+	# equipped frame is untouched and comes back the moment the skin is unequipped.
+	if _worn_skin != null:
+		apply_button_frame(ButtonFrames.DEFAULT_ID)
+		return
 	apply_button_frame(ButtonFrames.effective_frame(CoinsManager.selected_frame, _skin_id))
 
 # Sequence playback: light the button, don't sink it. game.gd's _flash calls this
@@ -1045,6 +1535,24 @@ func roulette_spin() -> void: pass
 func roulette_celebrate() -> void: pass
 func luna_light_chase() -> void: pass
 func luna_celebrate() -> void: pass
+
+# The player has just completed round `round_no`. Passed straight through to the 3D
+# background the board is standing on, which is a no-op for every one of them but
+# the Magical Lake — where it is what fires the every-five-rounds frog.
+#
+# It carries nothing but the number in, and a DURATION back out: the seconds the
+# round must stay frozen for whatever was started, 0.0 for nothing. A background
+# still may not reach back into the round — it says how long it needs, and game.gd
+# is what freezes. See BackgroundScenes.note_milestone.
+func background_milestone(round_no: int) -> float:
+	return BackgroundScenes.note_milestone(_bg_scene, _bg_id, round_no)
+
+# The player has just completed LEVEL `level_no` — the bigger of the two hooks, for
+# the milestone the every-five-rounds one is not enough for. The lake answers it at
+# level 8 with the five-frog "YOU ROCK!" party; every other background ignores it.
+# Same contract, same returned freeze in seconds.
+func background_celebration(level_no: int) -> float:
+	return BackgroundScenes.note_finale(_bg_scene, _bg_id, level_no)
 func set_overlay_compact(_numeral_scale: float, _show_dot: bool) -> void: pass
 func set_static_preview(_on: bool) -> void: pass
 func set_preview_paused(_paused: bool) -> void: pass
@@ -1235,6 +1743,7 @@ func _on_resized() -> void:
 func _process(dt: float) -> void:
 	if _vp != null and _vp.size != _fitted_size:
 		_fit_camera()
+	_tick_bg_playing()
 	_tick_frame_idle(dt)
 	_tick_bg_idle(dt)
 	var animating := _ap != null and _ap.is_playing()
@@ -1305,6 +1814,7 @@ var _bg_scene: Node3D
 var _bg_id := ""
 var _bg_idle := false               # is an ANIMATED background equipped?
 var _bg_idle_accum := 0.0
+var _bg_playing := true             # is a world's clip running? (see _tick_bg_playing)
 
 func _build_background() -> void:
 	var want := _wanted_background()
@@ -1316,19 +1826,36 @@ func _build_background() -> void:
 		_bg_scene = null
 	_bg_idle = false
 	if want.is_empty():
+		_place_ground_glow()
 		return
 	_bg_scene = BackgroundScenes.build(want)
 	if _bg_scene == null:
 		_bg_id = ""
+		_place_ground_glow()
 		return
 	_vp.add_child(_bg_scene)
 	_bg_idle = BackgroundScenes.is_animated(want)
-	_seat_background()
+	_bg_playing = true
+	# The FIT, not just the seat: a background may ask to be framed differently
+	# (frame_bias), and _bg_id has only just become this one. Without this the new
+	# framing would not land until the next resize. _fit_camera calls
+	# _seat_background itself.
+	_fit_camera()
+	_place_ground_glow()
 
 # Which 3D background should be showing, or "" for none. A complete Special Skin
 # outranks everything while it is on — the same rule BackgroundManager applies to
 # the 2D themes — so a skin's bespoke world is never half-covered by a floor.
 func _wanted_background() -> String:
+	# A shop card is this same board with a background the player has not equipped
+	# (and may not own), so a preview says which one to stand on instead of asking
+	# the wallet — or that it stands on nothing at all, which is what a LUMEO card
+	# needs: its world is painted behind the board, so anything under it is in the
+	# way. See BackgroundManager._render_scene_plate.
+	if preview_bare:
+		return ""
+	if not preview_background.is_empty():
+		return preview_background
 	if not CoinsManager.is_simon_manual():
 		return ""
 	var t: String = CoinsManager.selected_theme
@@ -1356,9 +1883,16 @@ func _seat_background() -> void:
 		return                        # looking at or above the horizon: nothing to seat
 	# Godot z is the negation of Blender y.
 	var top_y := -(o + d * (-o.y / d.y)).z
+	var reach := _board_reach()
 	_bg_scene.position.z = minf(
 		BackgroundScenes.seat_wanted(_bg_id, top_y),
-		BackgroundScenes.seat_allowed(_bg_id, _board_reach()))
+		BackgroundScenes.seat_allowed(_bg_id, reach))
+	# A Themes2 world is a closed composition and is fitted by scale rather than
+	# slid; every other background answers 1.0 here.
+	var s := BackgroundScenes.fit_scale(_bg_id, _cam, vp, reach)
+	_bg_scene.scale = Vector3(s, s, s)
+	# The pool sheet lies on this world's deck, and the deck just moved.
+	_place_ground_glow()
 
 # How far the outermost button reaches from the middle of the board: the furthest
 # button parent plus the frame radius. Measured off the live board rather than
@@ -1374,6 +1908,16 @@ func _board_reach() -> float:
 func _on_background_changed() -> void:
 	if _vp == null:
 		return
+	# Equipping or unequipping a skin changes the BUTTONS as well as the scenery, so
+	# a live board re-skins here the same way it re-dresses. Only when
+	# the swap actually happened: the per-button material copies are taken from
+	# whichever mesh is now on the node, so they have to be re-taken, and the
+	# Area3Ds have to be dropped first or _build_buttons would hang a second one
+	# off every holder.
+	if _apply_button_skin():
+		_clear_button_areas()
+		_build_buttons()
+		_refresh_frame()
 	_build_background()
 	_kick_render()
 
@@ -1388,10 +1932,24 @@ func _tick_bg_idle(dt: float) -> void:
 	if _vp.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
 		return                       # something else is already driving the redraw
 	_bg_idle_accum += dt
-	if _bg_idle_accum < 1.0 / BackgroundScenes.BG_IDLE_HZ:
+	if _bg_idle_accum < 1.0 / BackgroundScenes.idle_hz(_bg_id, _bg_scene):
 		return
 	_bg_idle_accum = 0.0
 	_kick_render()
+
+# A Themes2 world plays a real AnimationPlayer clip, which keeps writing transforms
+# on every idle frame whether or not anything is looking at them. The viewport
+# already stops redrawing when the board is off screen (game.gd hides it behind a
+# popup, the shop, the game-over card); this stops the clip with it, and resumes at
+# the phase it stopped on, so a world costs nothing while it is not visible.
+func _tick_bg_playing() -> void:
+	if _bg_scene == null:
+		return
+	var on := is_visible_in_tree()
+	if on == _bg_playing:
+		return
+	_bg_playing = on
+	WorldScenes.set_playing(_bg_scene, on)
 
 func _tick_frame_idle(dt: float) -> void:
 	if not _frame_idle or _vp == null:
