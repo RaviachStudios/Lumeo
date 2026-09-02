@@ -38,14 +38,25 @@ class LevelPlayExportPlugin extends EditorExportPlugin:
 	#  - mediation-sdk       the LevelPlay SDK itself (includes the ironSource
 	#                        network and, since 8.9.0, Ad Quality).
 	#  - unityads-adapter    lets LevelPlay mediate the Unity Ads demand this game
-	#                        was already running, instead of throwing it away. The
-	#                        adapter pulls the matching unity-ads SDK itself, so
-	#                        the old direct `com.unity3d.ads:unity-ads` dependency
-	#                        must NOT also be present (disable the GodotUnityAds
-	#                        plugin — two copies is a duplicate-class build error).
+	#                        was already running, instead of throwing it away.
+	#  - unity-ads           the Unity Ads SDK the adapter drives. It has to be
+	#                        listed HERE: the adapter's POM declares no
+	#                        dependencies at all, so nothing pulls the SDK in on
+	#                        its own. Ship the adapter without it and LevelPlay
+	#                        logs
+	#                          AdapterVersionScanner: failed to get version for
+	#                          UnityAds: NoClassDefFoundError com/unity3d/ads/MediationInfo
+	#                        at init, then answers every load with 509 Mediation
+	#                        No fill — the network is in the waterfall and cannot
+	#                        be instantiated. Nothing else reports it.
+	#                        Every com.unity3d.ads class adapter 5.12.0 references
+	#                        exists in 4.18.1; bump the two together and re-check.
+	#                        (This is also the dependency the retired GodotUnityAds
+	#                        export plugin used to contribute. Only one of the two
+	#                        plugins may be enabled — both would declare it twice.)
 	#                        Add more adapters here as you enable networks on the
-	#                        dashboard; an adapter with no dashboard instance just
-	#                        sits idle.
+	#                        dashboard, each with its own SDK; an adapter with no
+	#                        dashboard instance just sits idle.
 	#  - play-services-*     required by the SDK to read the advertising / app-set
 	#                        ID. Firebase already pulls most of this in; listing it
 	#                        explicitly keeps the ad stack working if Firebase is
@@ -54,6 +65,7 @@ class LevelPlayExportPlugin extends EditorExportPlugin:
 		return PackedStringArray([
 			"com.unity3d.ads-mediation:mediation-sdk:9.6.0",
 			"com.unity3d.ads-mediation:unityads-adapter:5.12.0",
+			"com.unity3d.ads:unity-ads:4.18.1",
 			"com.google.android.gms:play-services-appset:16.0.0",
 			"com.google.android.gms:play-services-ads-identifier:18.1.0",
 			"com.google.android.gms:play-services-basement:18.1.0",

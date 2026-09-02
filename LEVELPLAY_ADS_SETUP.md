@@ -41,10 +41,14 @@ you ever turn on server-to-server reward callbacks, which we do not use.
 
 ## 2. Turn on some demand
 
+> **What is actually enabled, as of 1.0.60:** one network per ad unit, and device
+> logs show it is Unity Ads — ironSource never appears in the waterfall. Check
+> **Setup → Networks** before trusting the rest of this section; it was written
+> expecting ironSource to be the one that was on.
+
 **ironSource alone is enough to ship.** It is a real network with real fill, it is
-built into `mediation-sdk`, and it needs no adapter and no extra setup — which is
-why it is the one that is already on. Ads will serve and pay with nothing else
-enabled. So this step does not block a release.
+built into `mediation-sdk`, and it needs no adapter and no extra setup. Ads will
+serve and pay with nothing else enabled, so this step does not block a release.
 
 What it costs you is the auction. With one network there isn't one: ironSource
 names its price and that is the price. Mediation earns more than a single network
@@ -54,20 +58,29 @@ where most of that gain comes from — after about four the curve flattens.
 **The cheapest next one is Unity Ads**, because you already have the account: game
 ID `800274606`, from the setup this replaced. On the dashboard under
 **Setup → Networks**, add Unity Ads, paste that game ID and the ad unit IDs from
-the Unity dashboard, and enable it for both of Lumeo's ad units. Its adapter is
-already in the export:
+the Unity dashboard, and enable it for both of Lumeo's ad units. This is the
+network Lumeo actually runs on today, and both halves of it are in the export:
 
 ```gdscript
 "com.unity3d.ads-mediation:unityads-adapter:5.12.0",
+"com.unity3d.ads:unity-ads:4.18.1",
 ```
 
-Anything beyond that (AppLovin, Meta, Vungle, Mintegral…) needs two things: the
+**Both lines, always.** A LevelPlay adapter's POM declares no dependencies, so the
+network SDK it drives is never pulled in for you — check the POM on Maven Central
+before you assume otherwise. An adapter without its SDK is worse than neither:
+the network is in the waterfall, cannot be instantiated, and every load comes
+back `509 Mediation No fill` with nothing in the log but one line at init,
+`AdapterVersionScanner: failed to get version for <network>`. That shipped once
+already, in 1.0.60.
+
+Anything beyond that (AppLovin, Meta, Vungle, Mintegral…) needs three things: the
 network configured on the LevelPlay dashboard, **and** its adapter added to
 `_get_android_dependencies` in `addons/GodotLevelPlay/export_plugin.gd` as
-`com.unity3d.ads-mediation:<network>-adapter:<version>`, then a re-export. Miss the
-adapter and LevelPlay simply never calls that network — no error, just no bids.
-An adapter with no dashboard configuration sits idle, so a spare line costs only a
-little APK size.
+`com.unity3d.ads-mediation:<network>-adapter:<version>`, **and** that network's own
+SDK beside it, then a re-export. Miss the adapter and LevelPlay simply never calls
+that network — no error, just no bids. An adapter with no dashboard configuration
+sits idle, so a spare line costs only a little APK size.
 
 ---
 
@@ -137,11 +150,10 @@ Already written into `project.godot` — you are only confirming the editor agre
 - **Project Settings → Autoload**: `ConsentManager` listed **above** `AdManager`,
   and `AdManager` points at `res://ad_manager_levelplay.gd`.
 
-> **`GodotUnityAds` must stay disabled.** Its export plugin adds
-> `com.unity3d.ads:unity-ads` directly, and the LevelPlay Unity Ads *adapter*
-> pulls its own copy. Two copies on the classpath is a duplicate-class Gradle
-> failure at export time, not a runtime bug — you would find out during the
-> export, but it costs you the export.
+> **`GodotUnityAds` must stay disabled.** Both export plugins declare
+> `com.unity3d.ads:unity-ads`, so with both enabled Gradle sees it twice. That is
+> a build-time failure, not a runtime bug — you would find out during the export,
+> but it costs you the export.
 
 The old `ad_manager_unity.gd`, `plugin_unityads/` and `addons/GodotUnityAds/` are
 left in the repo on purpose, as a working rollback. Nothing loads them.
@@ -322,6 +334,7 @@ several days to settle as the auction learns.
 | Nothing at all, no `GodotLevelPlay` log lines | Plugin AAR not built, or the addon is not enabled |
 | `APP_KEY is empty` in the log | Step 1 not done |
 | Initializes, never fills | Ad unit format wrong on the dashboard, or no network enabled/adapter missing |
+| `509: Mediation No fill` on every load, forever | A configured network's adapter is in the build but its SDK is not — look for `AdapterVersionScanner: failed to get version for <network>` at init (step 2) |
 | `ERROR_CODE_LOAD_BEFORE_INIT_SUCCESS_CALLBACK` | An ad was requested before init finished — should be impossible from this code; check for a second AdManager |
 | Fills, but eCPM is very low | app-ads.txt missing/stale at the crawled domain (step 2b), or only one network enabled (step 2) |
 | Duplicate class `com.unity3d.ads.*` at export | `GodotUnityAds` got re-enabled alongside the Unity adapter (see step 3) |
