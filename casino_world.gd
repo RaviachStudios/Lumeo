@@ -281,11 +281,16 @@ static func note_press(scene: Node3D, centre: Vector2) -> void:
 # ignores the rest — the decision is here and not in game.gd.
 #
 # What comes back is a duration and nothing else: the seconds the round must stay
-# frozen for what was just started. Same contract as the lake's and Ice Kingdom's —
-# but this table ALWAYS ANSWERS 0.0 HERE, because its small events play out on a lane
-# above the buttons and the next round is free to start underneath them. See
-# CasinoEvents.start_event for why that is a property of the geometry rather than a
-# shortcut.
+# frozen for what was just started. Same contract as the lake's and Ice Kingdom's,
+# and this table answers it in TWO different ways depending on what it started:
+#
+#   0.0   for the six lane events. They play out above the buttons and the next
+#         round is free to start underneath them — a property of the geometry
+#         rather than a shortcut; see CasinoEvents.start_event.
+#   >0    for the HAND, on the third and sixth of every eight-level cycle. Those
+#         cards are thrown by the croupier from behind the table INTO THE MIDDLE
+#         of it, across the ring of buttons, and the freeze is what makes that
+#         legal — see CasinoEvents.start_hand and the DEAL_WINDUP block above it.
 static func note_milestone(scene: Node3D, round_no: int) -> float:
 	if scene != null and scene.has_method("start_table_event"):
 		return float(scene.call("start_table_event", round_no))
@@ -298,6 +303,16 @@ static func note_finale(scene: Node3D, level_no: int) -> float:
 	if scene != null and scene.has_method("start_royal_flush"):
 		return float(scene.call("start_royal_flush", level_no))
 	return 0.0
+
+
+# True while the Royal Flush is still on the table — the ace, the confetti, the
+# croupier's dance, any of it. This is what game.gd waits on rather than only on the
+# duration `note_finale` returned: the duration is derived from the event's own
+# timeline (T_FLUSH + HOLD) and the two agree today, but the one that cannot go
+# stale is the event saying so itself. See BackgroundScenes.celebration_busy.
+static func celebration_busy(scene: Node3D) -> bool:
+	return scene != null and scene.has_method("event_active") \
+		and bool(scene.call("event_active"))
 
 
 # How often the board should nudge its SubViewport to redraw. IDLE_HZ normally; the
@@ -381,9 +396,19 @@ const SEED := 0x0ca510
 
 # How many of each prop to attempt. Anything that cannot be placed is dropped rather
 # than placed badly, so these are ceilings.
-const N_STACKS := 7               # short towers of chips
-const N_LOOSE := 9                # single chips lying flat
-const N_CARDS := 5                # face-down cards
+const N_STACKS := 9               # short towers of chips
+const N_LOOSE := 12               # single chips lying flat
+# NO face-down cards in the dressing any more, and the zero is the point rather
+# than a disabled feature: the table now says CHIPS AROUND THE EDGE, CARDS IN THE
+# MIDDLE. Five face-down cards scattered out by the rail were the only other cards
+# on the felt, and with a royal flush being built in the ring's centre they read as
+# competition for it — the eye goes to a card, and the ones that matter are the five
+# the player is collecting.
+#
+# The chips they made room for are added back to the two counts above, so the table
+# is no emptier than it was; it is just made of one thing at its edges instead of
+# two.
+const N_CARDS := 0                # face-down cards — see above
 const N_DUST := 18
 
 # A stack is this many chips, picked per stack.
@@ -444,6 +469,7 @@ const FALL_FAR := 4.2
 # ---------------------------------------------------------------------------
 var _felt: MeshInstance3D
 var _fmat: ShaderMaterial
+var _dealer: CasinoDealer
 var _dress: Node3D
 var _chips: MultiMeshInstance3D
 var _cards: MultiMeshInstance3D
@@ -458,6 +484,16 @@ var _laid_out := false
 # The z band the events' lane occupies, kept clear of dressing. See _scatter.
 var _lane_lo := 0.0
 var _lane_hi := 0.0
+# The screen box the croupier stands in, kept clear of dressing. He is BEHIND every
+# prop in the band he stands in — same ground plane, further away — so a chip stack
+# that lands on him is drawn behind his head as a shape growing out of it, which is
+# what the first render showed: a blue disc twice the size of his head, over his
+# shoulder, reading as part of him.
+var _dealer_box := Rect2()
+# What _lay_table solved that the croupier needs: where the table's edge is and
+# which screen row the topmost chip's top edge lands on.
+var _rail_r := 0.0
+var _top_px := 0.0
 
 # The dust puff a press throws off the felt, as an age per button. Purely local to
 # this file; the chip's own press clip and its contact shadow are the press.
@@ -484,10 +520,23 @@ func construct() -> void:
 	_dust.custom_aabb = AABB(Vector3(-24, -1, -24), Vector3(48, 8, 48))
 	_dress.add_child(_dust)
 
+	# THE CROUPIER, before the events, because the events are handed a reference to
+	# him and a null one would silently turn every deal back into a card that comes
+	# from nowhere. He is placed in _lay_table, which is the only place on this table
+	# that knows where the edge is.
+	_dealer = CasinoDealer.new()
+	_dealer.name = "Croupier"
+	add_child(_dealer)
+	_dealer.construct()
+
 	_events = CasinoEvents.new()
 	_events.name = "EventsRoot"
 	add_child(_events)
 	_events.call("construct")
+	# WHERE THE CARDS COME FROM. Handed over the same way the felt is, and for the
+	# same reason: a node path from the events into their parent's other child is a
+	# dependency that breaks silently when either file moves.
+	_events.call("attach_dealer", _dealer)
 	# The two lighting events change the TABLE, so they are given its material
 	# directly rather than reaching back up the tree for it — a node path from a
 	# child into its parent is a dependency that breaks silently when either file
@@ -596,10 +645,31 @@ func set_layout(centres: PackedVector2Array, reach: float, cam: Camera3D,
 		# scattered, so the lane is solved first and `_scatter` avoids it.
 		if _events != null:
 			_events.call("set_layout", centres, reach, cam, vp_size)
+		# ...AND THE CROUPIER AFTER THEM, because the size of his hands is solved
+		# against the size of the cards they deal, and the row those are dealt into
+		# is what the events have just finished fitting. A dealer placed inside
+		# _lay_table gets last frame's card length, or none at all on the first.
+		_place_dealer(cam, vp_size, reach)
 		_scatter(reach, cam, vp_size)
 		_laid_out = true
 	elif _events != null:
 		_events.call("set_layout", centres, reach, cam, vp_size)
+
+
+# Stand the croupier's arms in the band above the table's edge, at the size his own
+# cards make him. See CasinoDealer.place.
+func _place_dealer(cam: Camera3D, vp: Vector2, reach: float) -> void:
+	if _dealer == null:
+		return
+	var card := 0.0
+	if _events != null:
+		card = float(_events.get("_hand_len"))
+		if card <= 0.0:
+			card = float(_events.get("_card_len"))
+	_dealer.place(cam, vp, reach, _rail_r, _top_px, card)
+	# ...and the idle breath needs the loop running from now on.
+	if _dealer.placed():
+		set_process(true)
 
 
 # Solve the lamp, the arc and the rail against this camera.
@@ -649,6 +719,12 @@ func _lay_table(reach: float, cam: Camera3D, vp: Vector2) -> void:
 		else reach * FALL_NEAR
 	var far := (rail_r * 1.02) if rail_on > 0.0 else reach * FALL_FAR
 	_fmat.set_shader_parameter("fall", Vector2(near, maxf(far, near + 0.5)))
+
+	# The two numbers the CROUPIER is fitted against, kept for `_place_dealer` — he
+	# is placed after the events rather than here, because the size of his hands is
+	# solved against the size of the cards they deal and only the events know that.
+	_rail_r = rail_r if rail_on > 0.0 else 0.0
+	_top_px = top_px
 
 
 # The ground radius whose FAR point (0, 0, -r) projects to screen row `py`.
@@ -740,6 +816,16 @@ func _process(dt: float) -> void:
 	# back off when they finish.
 	if _events != null and bool(_events.call("tick", dt)):
 		live = true
+	# THE CROUPIER BREATHES, and that is why this loop no longer switches itself
+	# off on this background. A pair of hands frozen to the millimetre is the one
+	# thing that gives away that they are props; the motion is the asset's own IDLE
+	# clip (CasinoDealer.idle seeks it) and it is only stepped while nothing else is
+	# running, so it costs one skeleton pose at the rate the board is already
+	# redrawing this table at.
+	if _dealer != null and _dealer.placed():
+		if not (_events != null and bool(_events.call("active"))):
+			_dealer.idle(dt)
+		live = true
 	if not live:
 		set_process(false)
 
@@ -760,7 +846,15 @@ func _push_puffs() -> void:
 func start_table_event(round_no: int) -> float:
 	if _events == null or not _laid_out:
 		return 0.0
-	var secs: float = _events.call("start_event", round_no)
+	# THE HAND FIRST. On the third and sixth of every eight-level cycle the table is
+	# building a royal flush in its middle (CasinoEvents' THE HAND), and that
+	# outranks the random lane flourish those rounds would otherwise draw — it is
+	# the thing the player is actually collecting. Every other multiple of three
+	# falls through to the bag exactly as before, so the two interleave: the hand at
+	# 3 and 6, a lane event at 9, 12, 15, 18 and 21, the flush at 8.
+	var secs: float = _events.call("start_hand", round_no)
+	if secs <= 0.0:
+		secs = _events.call("start_event", round_no)
 	# Keyed off whether an event is RUNNING, not off the freeze it asked for. The
 	# small events deliberately ask for none (see CasinoEvents.start_event), and an
 	# earlier version that started the clock only when a freeze came back started
@@ -777,6 +871,27 @@ func start_royal_flush(level_no: int) -> float:
 	if secs > 0.0:
 		set_process(true)
 	return secs
+
+
+# The hand has to be re-seated whenever the board is (a resize, a difficulty
+# change), and CasinoEvents.set_layout does that — this is only here so the table
+# can be asked what it is holding without reaching into the events module.
+func hand_stage() -> int:
+	return int(_events.get("_hand_stage")) if _events != null else 0
+
+
+# The screen box the hand covers, for the banner that has to keep off it. See
+# CasinoEvents.hand_screen_rect.
+func hand_rect(cam: Camera3D, vp: Vector2) -> Rect2:
+	if _events == null or not _laid_out:
+		return Rect2()
+	return _events.call("hand_screen_rect", cam, vp)
+
+
+static func focus_rect(scene: Node3D, cam: Camera3D, vp: Vector2) -> Rect2:
+	if scene != null and scene.has_method("hand_rect"):
+		return scene.call("hand_rect", cam, vp)
+	return Rect2()
 
 
 func event_active() -> bool:
@@ -1008,6 +1123,10 @@ func _scatter(reach: float, cam: Camera3D, vp: Vector2) -> void:
 	var hi := reach * DRESS_CLEAR + DRESS_FAR
 	# The strip of table the events play in, kept clear of furniture. Zero when the
 	# lane could not be solved, in which case there are no events either.
+	# The HANDS only. An arm crosses most of the top of the frame and refusing every
+	# prop behind one would empty the table's whole back edge — a chip stack behind
+	# a forearm is occluded and reads correctly. One behind a PALM does not.
+	_dealer_box = _dealer.hands_screen_rect(cam, vp) if _dealer != null else Rect2()
 	_lane_lo = 0.0
 	_lane_hi = 0.0
 	if _events != null and bool(_events.get("_lane_ok")):
@@ -1408,6 +1527,11 @@ func _frame_point(rng: RandomNumberGenerator, lo: float, hi: float,
 			continue
 		var s := cam.unproject_position(p)
 		if s.x < x0 or s.x > x1 or s.y < y0 or s.y > y1:
+			continue
+		# ...and not on top of the croupier's hands. A screen test and not a world
+		# one, because what is wrong with a prop there is not where it is standing —
+		# it is a long way behind them — but that it is drawn inside a palm.
+		if _dealer_box.has_area() and _dealer_box.has_point(s):
 			continue
 		return p
 	return Vector3.INF

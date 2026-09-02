@@ -97,7 +97,11 @@ func _check_spacing() -> void:
 			even = false
 	_ok(even, "all five still on one circle (equal angular spacing kept)", "radii %s" % str(radii))
 	var grew := r / AUTHORED_RADIUS
-	_ok(grew >= 1.10 and grew <= 1.15, "radius grew 10-15%%", "%.1f%% (%.3f -> %.3f)" % [
+	# The push is chosen so that EVERY board — five buttons, six or three — opens to
+	# the same clear space between neighbouring frames, from three different authored
+	# starts. It was 10-15% while 0.47 was the target; the target is 0.84 now. The
+	# band below is the gap itself, which is the thing the number exists for.
+	_ok(grew >= 1.28 and grew <= 1.36, "radius grew ~32%%", "%.1f%% (%.3f -> %.3f)" % [
 		(grew - 1.0) * 100.0, AUTHORED_RADIUS, r])
 	# Nearest neighbours, and the gap that opens between their frames.
 	var min_gap := INF
@@ -109,6 +113,10 @@ func _check_spacing() -> void:
 	var authored_gap := 2.0 * AUTHORED_RADIUS * sin(deg_to_rad(36.0)) - FRAME_RADIUS * 2.0
 	_ok(min_gap > authored_gap * 2.0, "neighbouring frames have real breathing room",
 		"gap %.3f, was %.3f" % [min_gap, authored_gap])
+	# ...and it is the SAME breathing room every other board gets. One rule, three
+	# boards: see MemoryGameUI.SPACING_SCALE and EasyGameUI.EASY_SPACING.
+	_ok(min_gap > 0.78 and min_gap < 0.90, "...the same gap as every other board",
+		"gap %.3f" % min_gap)
 	# Sizes untouched.
 	for key: String in ORDER:
 		var mi := _dev.surface_mesh(key)
@@ -189,8 +197,17 @@ func _check_input() -> void:
 		_ok(edge == i, "tap off-centre on %s" % key, "got %d" % edge)
 	_ok(_dev.segment_at_point(_cam.unproject_position(Vector3(0.0, 0.02, 0.0))) == -1,
 		"the empty middle is not a button")
+	# BEHIND THE BACK BUTTON, and it has to be measured from where that button
+	# actually is. This was a hardcoded -5.10 — the authored radius plus 3.0 — and
+	# the ray the tap casts passes over the back button on its way there, so pushing
+	# the ring out by 32% dropped the ray onto the button it was meant to clear and
+	# the check failed for the one reason it was never testing.
+	var back_r := _holder(ORDER[0]).position.length()
+	for key: String in ORDER:
+		back_r = maxf(back_r, _holder(key).position.length())
 	_ok(_dev.segment_at_point(_cam.unproject_position(
-		Vector3(0.0, 0.02, -5.10))) == -1, "the dead board behind the back button is not one either")
+		Vector3(0.0, 0.02, -(back_r + 3.0)))) == -1,
+		"the dead board behind the back button is not one either")
 
 	_dev.input_enabled = true
 	var ev := InputEventMouseButton.new()

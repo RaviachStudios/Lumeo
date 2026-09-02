@@ -80,7 +80,7 @@ const HARD_FIT_CENTRE_Y := 0.487
 
 # The board spec. Everything not named here stays exactly as MemoryGameUI has it —
 # including SPACING_SCALE (this board is authored at the same 2.15 centre-to-centre
-# as Medium's, so the same 15% push opens the same 0.47 gap between frames) and the
+# as Medium's, so the same 32% push opens the same 0.84 gap between frames) and the
 # Jade darkening (Jade and Cyan are authored the same two-teals-apart here as they
 # were there, and keeping the same correction keeps green the same green on both
 # difficulties).

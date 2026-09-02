@@ -127,20 +127,22 @@ func _check_hierarchy() -> void:
 	_ok(_dev._count == 3 and _dev._keys.size() == 3, "the device drives three buttons",
 		"%d / %s" % [_dev._count, str(_dev._keys)])
 
-# The asset already spaces this board correctly, so the device must NOT push it
-# out the way it does the other two.
+# The three are pushed out to the same clear space between frames the other two
+# boards get — from a different authored start, at a different scale. See
+# EasyGameUI.EASY_SPACING for why this board's number is not the other two's.
 func _check_spacing() -> void:
-	print("\n-- spacing (authored, not pushed) --")
+	print("\n-- spacing --")
+	var want_r := AUTHORED_RADIUS * EasyGameUI.EASY_SPACING
 	var radii: Array[float] = []
 	for key: String in ORDER:
 		var p := _holder(key).position
 		radii.append(Vector2(p.x, p.z).length())
 	var even := true
 	for v: float in radii:
-		if absf(v - AUTHORED_RADIUS) > 0.001:
+		if absf(v - want_r) > 0.001:
 			even = false
-	_ok(even, "all three still at the authored circumradius (equal angles kept)",
-		"radii %s vs %.4f" % [str(radii), AUTHORED_RADIUS])
+	_ok(even, "all three still on one circle (equal angles kept, pushed out evenly)",
+		"radii %s vs %.4f" % [str(radii), want_r])
 	var gaps: Array[float] = []
 	var min_gap := INF
 	for i in ORDER.size():
@@ -153,9 +155,10 @@ func _check_spacing() -> void:
 		if absf(d - gaps[0]) > 0.001:
 			equilateral = false
 	_ok(equilateral, "the three sit on an equilateral triangle", str(gaps))
-	# Medium and Hard reach a 0.47 gap only after their 15% push. This board is
-	# there as authored, which is why _spacing is 1.0.
-	_ok(min_gap > 0.40 and min_gap < 0.55, "frames have the same breathing room as the other boards",
+	# The same clear space Medium and Hard open to, from a different start: they are
+	# authored 2.15 and pushed 32%, this board is authored 2.4501 and pushed 15%.
+	# Every board in the game lands between 0.82 and 0.84.
+	_ok(min_gap > 0.78 and min_gap < 0.90, "frames have the same breathing room as the other boards",
 		"gap %.3f" % min_gap)
 	for key: String in ORDER:
 		var aabb := _dev.surface_mesh(key).get_aabb()

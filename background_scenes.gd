@@ -636,6 +636,43 @@ static func note_finale(scene: Node3D, id: String, level_no: int) -> float:
 		return CasinoWorld.note_finale(scene, level_no)
 	return 0.0
 
+# IS THE CELEBRATION ACTUALLY STILL RUNNING?
+#
+# The two hooks above answer with a DURATION, and a duration is a prediction. It is
+# the right shape for the freeze — the game has to be told how long to stop for at
+# the instant it stops, not a second later — but it is the background, and not the
+# clock game.gd started, that knows when the last thing it put on the screen has
+# gone. A celebration that is retimed inside its own file and forgets to update the
+# number it returns is a celebration the player watches the tail of with the next
+# round already playing underneath it.
+#
+# So the freeze is released on the LONGER of the two: the duration that was asked
+# for, and this — bounded by the caller, because a background that never answers
+# false must not be able to stop the game (see game.gd's CELEBRATION_CAP).
+#
+# Every background that does not answer is idle by definition: nothing else here
+# has anything running after its own duration has elapsed.
+# The part of the SCREEN this background is asking not to be covered while the game
+# draws a celebration banner over it. Empty for every background but the Royal
+# Casino, whose royal flush is lying in the middle of the table — see
+# CasinoEvents.hand_screen_rect for why a fixed position for the banner cannot work.
+#
+# In the BOARD's viewport coordinates; the caller adds the board's own offset.
+static func focus_rect(scene: Node3D, id: String, cam: Camera3D, vp: Vector2) -> Rect2:
+	if scene == null or cam == null:
+		return Rect2()
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.focus_rect(scene, cam, vp)
+	return Rect2()
+
+
+static func celebration_busy(scene: Node3D, id: String) -> bool:
+	if scene == null:
+		return false
+	if CasinoWorld.has_scene(id):
+		return CasinoWorld.celebration_busy(scene)
+	return false
+
 # ---------------------------------------------------------------------------
 # Shop preview
 # ---------------------------------------------------------------------------

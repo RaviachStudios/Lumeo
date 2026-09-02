@@ -50,15 +50,19 @@ const EASY_KEYS := ["Cyan", "Yellow", "Magenta"]
 # ---------------------------------------------------------------------------
 # The other two boards are authored 2.15 apart centre-to-centre for a frame
 # DIAMETER of 2.0 — a 0.15 gap, which reads as discs crowding each other — and the
-# parent pushes their button parents out by 15% to open it to 0.47.
+# parent pushes their button parents out by 32% to open it to 0.84.
 #
-# This board is authored 2.4501 apart on all three edges, which is that same
-# opened-up gap (0.45) already. Pushing it again would take it to 0.82 — visibly
-# looser than the other two difficulties, and paid for in on-screen button size,
-# which is the opposite of what a three-button board wants. So Easy is used
-# exactly as authored, which is also what makes its Blender reference render a
-# valid thing to fit the camera against.
-const EASY_SPACING := 1.0
+# This board is authored 2.4501 apart on all three edges: a 0.45 gap, which is
+# where the other two USED to stop. 15% takes it to 0.82, which is where they stop
+# now — so the three difficulties open to the same clear space between neighbours,
+# from three different authored starts. That is the whole reason this number is not
+# 1.0 any more: it was left alone while 0.45 was the target and the target moved.
+#
+# The cost is the same one Medium and Hard pay (see MemoryGameUI.SPACING_SCALE):
+# the board's span is wider, the fit frames the span, so each button loses about
+# 8 % of its on-screen width. On a three-button board those are still the biggest
+# buttons in the game.
+const EASY_SPACING := 1.15
 
 # ---------------------------------------------------------------------------
 # Camera

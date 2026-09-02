@@ -910,6 +910,15 @@ const ICE_BG := "world_ice"
 # was announcing. The table speaks for itself until level 8.
 const CASINO_BG := "world_casino"
 
+# The ceiling on a level-8 background celebration, counting everything: the freeze it
+# asked for AND any time it is given afterwards to finish what it is still drawing
+# (see the wait in _player_pressed). The round is stopped for every second of it, and
+# a celebration the player starts waiting out has stopped being a reward.
+#
+# It is a CAP and not a duration. Nothing schedules against it; it exists so that a
+# background which never reports itself idle cannot hold the game.
+const CELEBRATION_MAX := 5.0
+
 # What the every-third-level banner says, cycled by which milestone it is: level 3
 # is the first, 6 the second, and it comes round again at 15. Four phrases rather
 # than one because this fires every three levels for a whole run — the fourth time
@@ -1168,21 +1177,45 @@ func _show_ice_veins_text() -> void:
 # this one. The IMPACT is carried instead by the scale overshoot, the extrusion and
 # the shine, which is where a casino sign gets its weight anyway.
 #
-# It sits a little ABOVE the middle of the frame: the five cards are on the lane
-# across the top and the six chips are in the lower middle, so this is the band
-# between them.
+# WHERE IT SITS IS SOLVED AGAINST THE HAND, and that is the one thing about this
+# banner that is not a taste call.
+#
+# It was a fixed 0.075 of the height above centre, which was right while the five
+# cards slid across the LANE at the back and the middle of the frame was empty felt.
+# The hand is DEALT INTO THE MIDDLE of the table now, and there is no fixed number
+# that works: the row is solved per board (CasinoEvents._solve_hand) and lands in the
+# true middle on Hard and Medium but in the open band BEHIND the triangle on Easy —
+# most of the frame's height apart. A phrase over the royal flush is a phrase over
+# the thing it exists to announce.
+#
+# So the background hands back the box its hand covers and the banner takes the
+# larger of the two bands left over, biased to the one ABOVE: the band below holds
+# the near button and the status pill, and text over those is worth avoiding in a
+# way that text over the back of the table is not. Over a button IS allowed here and
+# nowhere else in this file, because the round is frozen the whole time it is up.
 func _show_royal_flush_text() -> void:
 	var holder := Control.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.modulate.a = 0.0
 	var screen := get_viewport_rect().size
-	holder.position = Vector2(0.0, -screen.y * 0.075)
-	holder.size = screen
-	holder.pivot_offset = screen * 0.5
-	add_child(holder)
 
 	var fs := int(clampf(screen.x * 0.108, 52.0, 132.0))
 	var txt := "ROYAL FLUSH!"
+
+	var half := float(fs) * 0.80
+	# Typed, because `_wheel` is not: the board is held as a Control and an inferred
+	# type off an untyped call is a parse error in this file, not a warning.
+	var keep: Rect2 = _wheel.background_focus_rect()
+	var row := screen.y * 0.5
+	if keep.has_area():
+		var above: float = keep.position.y
+		var below: float = screen.y - keep.end.y
+		row = above * 0.5 if above >= below * 0.85 else (keep.end.y + screen.y) * 0.5
+	holder.position = Vector2(0.0,
+		clampf(row, half + 8.0, screen.y - half - 8.0) - screen.y * 0.5)
+	holder.size = screen
+	holder.pivot_offset = screen * 0.5
+	add_child(holder)
 
 	# A ring of small gold pips around the phrase — rotated ColorRects rather than a
 	# glyph, because a star or a suit character is a bet on the shipped font having
@@ -1208,7 +1241,7 @@ func _show_royal_flush_text() -> void:
 		# Out from the phrase and away, each on its own beat, so the ring twinkles
 		# instead of pulsing as one object.
 		var pt := holder.create_tween()
-		pt.tween_interval(2.62 + 0.045 * float(i))
+		pt.tween_interval(2.08 + 0.045 * float(i))
 		pt.tween_property(pip, "scale", Vector2.ONE, 0.20) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		pt.parallel().tween_property(pip, "position",
@@ -1265,12 +1298,18 @@ func _show_royal_flush_text() -> void:
 	shine.material = smat
 	holder.add_child(shine)
 
-	# 2.50 wait — the deal and the four reveals — then the impact lands with the Ace:
-	# in over a quarter of a second from 0.55 with a BACK overshoot, a breath, and
-	# gone by 4.34 s of a 4.35 s celebration.
+	# 1.96 wait — the croupier's throw and the ace's flight — then the impact lands
+	# with the Ace as it slams over (CasinoEvents.RF_SLAM), a breath, and gone by
+	# 3.70 s of a 4.72 s celebration, which leaves the last stretch to the dance.
+	#
+	# THESE THREE NUMBERS TRACK RF_SLAM AND NOTHING ELSE — they sit 0.08, 0.20 and
+	# 0.30 after it. They were 2.50 / 2.62 / 2.72 against a slam at 2.42; the finale
+	# was pulled half a second earlier to buy the croupier's dance its two and a
+	# half seconds inside the same five-second ceiling, and a banner left where it
+	# was would have arrived after the card it announces had turned over.
 	holder.scale = Vector2(0.55, 0.55)
 	var tw := create_tween()
-	tw.tween_interval(2.50)
+	tw.tween_interval(1.96)
 	tw.tween_property(holder, "modulate:a", 1.0, 0.24)
 	tw.parallel().tween_property(holder, "scale", Vector2.ONE, 0.34) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -1282,7 +1321,7 @@ func _show_royal_flush_text() -> void:
 	# it is holding. Both start off the left edge and finish off the right, so the
 	# band is never seen to appear or to stop.
 	var sw := create_tween()
-	sw.tween_interval(2.72)
+	sw.tween_interval(2.18)
 	sw.tween_method(func(v: float) -> void: smat.set_shader_parameter("pos", v),
 		-0.25, 1.25, 0.70).set_trans(Tween.TRANS_SINE)
 	sw.tween_interval(0.35)
@@ -1583,6 +1622,23 @@ func _player_pressed(idx: int) -> void:
 				else:
 					_show_you_rock_text()
 				await get_tree().create_timer(party_secs).timeout
+				# ...AND THEN WAIT FOR THE ANIMATION ITSELF. `party_secs` is the
+				# celebration's own length, measured off its own timeline, and the
+				# clock above was started before a frame of it had been drawn — so
+				# it is right until the day the celebration is retimed and the
+				# number it returns is not. Asking the background whether it has
+				# actually finished is what keeps those two from drifting, and it
+				# costs nothing on a background that is already done: every one but
+				# the Royal Casino's answers false immediately.
+				#
+				# BOUNDED, and bounded against the WHOLE celebration rather than
+				# against this wait, so no background can hold the round past
+				# CELEBRATION_MAX however long it thinks it needs.
+				var slack := maxf(CELEBRATION_MAX - party_secs, 0.0)
+				var waited := 0.0
+				while waited < slack and _wheel.background_busy():
+					await get_tree().process_frame
+					waited += get_process_delta_time()
 				_thaw_after_event()
 		# Jackpot skin only: every 8th completed level (8, 16, 24, …) fires a Mega
 		# Jackpot celebration — the hall washes through a rainbow, the gold JACKPOT

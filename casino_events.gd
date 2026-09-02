@@ -93,12 +93,133 @@ const EVENT_COUNT := 6
 # ran: every clock in the file treated it as idle.
 const EV_FLUSH := 6
 
+# ...and the HAND being dealt into the middle of the table. Same reasoning as
+# EV_FLUSH: outside the enum, because the random bag draws `% EVENT_COUNT`, but a
+# non-negative number, because `_kind >= 0` is what "something is running" means to
+# `active()`, `tick()` and CasinoWorld's `_process`.
+const EV_HAND := 7
+
 # How often the table does something, in completed rounds. The BACKGROUND decides
 # this, not game.gd — see CasinoWorld.note_milestone.
 const EVERY := 3
 
 # ...and the level the ROYAL FLUSH answers.
 const FINALE_EVERY := 8
+
+# ---------------------------------------------------------------------------
+# THE HAND
+# ---------------------------------------------------------------------------
+# A royal flush built in the MIDDLE of the table, one deal at a time, across an
+# eight-level cycle:
+#
+#     level % 8 == 3    10, J and Q are dealt face up into the middle
+#     level % 8 == 6    the KING joins them
+#     level % 8 == 0    the ACE completes it — ROYAL FLUSH, confetti, lights up
+#
+# and then the table is cleared and the next cycle starts building again.
+#
+# IT IS PERSISTENT, and that is the thing that makes it different from every other
+# event in this file. The six lane events are two-to-three second flourishes that
+# leave nothing behind; this hand STAYS on the felt between milestones, so a player
+# at level 5 is looking at three cards they earned and can see what is missing. The
+# cards are written into the same `_cards_mm` the events use — they are re-pushed
+# when an event stops, so the hand survives one — and cost nothing while they sit
+# there, because a MultiMesh with static transforms is not redrawn by anything.
+#
+# WHY THE MIDDLE IS SAFE, given that the whole rest of this file is built on keeping
+# objects OFF the play area. The chips are a RING and its middle is empty felt; the
+# hand is fitted inside that hole and every corner of every card is checked against
+# every chip (see _solve_hand). The lane exists because a card crossing the table
+# would pass OVER a button; a card inside the ring never reaches one. The fit is
+# what makes that a property rather than a hope, and it is solved per board, so
+# Easy's three-chip triangle and Hard's six-chip ring each get the hand their own
+# geometry has room for.
+const HAND_CYCLE := 8
+const HAND_AT_LOW := 3            # 10, J, Q
+const HAND_AT_KING := 6           # ...then the K
+
+# How far apart the cards sit, in card WIDTHS. Under 1.0, so they overlap the way a
+# hand spread on a table does — which is also what lets five cards fit a hole that
+# five separated ones would not.
+const HAND_STEP := 0.66
+# A few degrees of fan across the row, so it reads as cards someone laid down and
+# not as a row of tiles.
+const HAND_TILT := 0.045
+# The biggest a hand card may be as a fraction of the frame's HEIGHT, and the floor
+# in board units under whatever the fit returns. The floor is absolute and not a
+# fraction of what it wanted, for the reason the lane's is: what makes a card
+# useless is being too small to READ, and that is a size on the table. Below it the
+# hand is not drawn at all — the same refusal `_lane_ok` makes.
+const HAND_SCREEN := 0.125
+const HAND_MIN := 0.46
+# ...and the length at which the fit stops looking for somewhere better. Above this
+# a card reads cleanly at gameplay size, so a place that achieves it and is nearer
+# the middle beats a roomier one further out.
+const HAND_GOOD := 0.62
+# Extra room beyond CHIP_CLEAR that a hand card's CORNER must keep from a chip.
+const HAND_CLEAR := 0.06
+
+# ---------------------------------------------------------------------------
+# ...and how it is DEALT
+# ---------------------------------------------------------------------------
+# The cards are thrown by the croupier at the far side of the table (casino_dealer.gd)
+# and fly the whole way in. That is a change of kind from the first version, where
+# they ran in from a quarter of a card-length away inside the ring's own hole, and
+# the reason the old one did that is worth keeping written down: a card dealt from
+# behind the table crosses the ring of buttons, and a card over a button is a bug.
+#
+# WHAT MAKES IT LEGAL NOW IS THE FREEZE, not the geometry. `start_hand` returns a
+# duration and game.gd stops the round for it (see the note there), so for the whole
+# length of the flight there is no sequence playing and no press to obstruct — the
+# same exemption, and the only other one, the Royal Flush's confetti has. It is
+# still held to two things, both asserted by tools/casino_verify.tscn: the card is
+# ABOVE the chips (FLY_CLEAR) for every frame it is over one, and its contact shadow
+# is not drawn while it is up there.
+# THE DEAL'S BEATS ARE THE CLIP'S OWN. DEAL_CARD_QUICK is 28 frames at 30 fps and
+# the fingers open on frame 16, so the wind-up is 16/30 and the follow-through the
+# other 12/30 — write anything else here and the animation is played at a speed it
+# was not authored at. `casino_verify` holds these against the asset.
+const DEAL_WINDUP := 0.533        # reaching for the deck, taking the card, carrying
+const DEAL_FOLLOW := 0.400        # ...and his arm follows through for this long
+const HAND_FLIGHT := 0.54         # ...and the card is in the air this long
+# ONE CARD AT A TIME, and this is what enforces it: longer than the whole deal clip
+# (0.933 s), so the arm is back at rest before it reaches for the next card. Anything
+# shorter and one arm is dealing two cards at once — which is what a hand of three
+# used to do, and the reason a card appeared to come from nowhere.
+const HAND_STAGGER := 0.98
+# How far ABOVE the straight line from his hand to the slot a card arcs, in board
+# units — an arc on top of a descent, not a hop off the felt: the flight already
+# falls from the release height to the table, and this is what stops that fall being
+# a straight line.
+#
+# THIS IS A FLOOR, NOT THE ANSWER. How high a throw has to go is decided by the
+# chips it passes over, and that is a different question on every board and for
+# every one of the five slots — so it is SOLVED per card by `_fly_arc` and this is
+# only what a throw that crosses nothing settles for. A fixed number cannot do the
+# job: 0.55 cleared Hard's ring and left Medium's card at 0.60 over the last chip it
+# passes, against a floor of 0.62, which tools/casino_verify.tscn caught as a
+# contact shadow on a button.
+const FLY_ARC := 0.34
+# ...and the clearance the solve aims for above FLY_CLEAR, so the answer is not the
+# exact height at which the check would start failing.
+const FLY_MARGIN := 0.14
+# How high a card must be over a chip to be allowed over one at all: clear of the
+# chip's own top (CasinoWorld.CHIP_TOP is 0.324) by most of a chip again, so it
+# reads as a card passing OVER the table rather than through the button.
+const FLY_CLEAR := 0.62
+# ...and the height at which a card's contact shadow has gone completely. IT IS THE
+# SAME NUMBER, and that is what turns "the shadow does not land on a chip" from two
+# constants that happen to agree into a property: a card is only excused for being
+# over a chip when it is above FLY_CLEAR, and a card above FLY_CLEAR has no shadow.
+# One of them cannot be moved without the other.
+const SHADOW_GONE := FLY_CLEAR
+
+# How long a deal takes. Three cards need longer than one, and neither is long: this
+# is a card landing, not a cutscene. Both are DERIVED from the beats above rather
+# than typed, because a duration that does not cover the last card's flight is a
+# card that vanishes in mid-air — and the freeze game.gd takes is this number.
+const T_HAND_LOW := DEAL_WINDUP + HAND_STAGGER * 2.0 + HAND_FLIGHT + 0.38
+const T_HAND_KING := DEAL_WINDUP + HAND_FLIGHT + 0.38
 
 # ---------------------------------------------------------------------------
 # Spectacle tiers
@@ -168,6 +289,15 @@ const CARD_RED := Color8(206, 34, 48)        # hearts
 const CARD_GOLD := Color8(226, 188, 104)     # the inner border, and every gold edge
 const BALL_CORE := Color8(255, 252, 240)
 const BALL_GLOW := Color8(255, 226, 150)
+# The confetti's colours: the six chips' own hues, so the celebration is made of
+# the game's palette rather than of a seventh idea. Slightly lightened — a piece of
+# paper a centimetre across against green felt needs to be brighter than the object
+# it is celebrating to read at all.
+const CONFETTI := [
+	Color8(255, 128, 178), Color8(140, 200, 255), Color8(150, 240, 180),
+	Color8(255, 214, 122), Color8(206, 160, 255), Color8(255, 158, 140),
+	Color8(255, 248, 226),
+]
 const SPARK_GOLD := Color8(255, 214, 122)
 const SPARK_WHITE := Color8(255, 248, 226)
 const SHADOW_C := Color8(4, 14, 11)
@@ -188,6 +318,9 @@ const CASCADE_TINTS := [
 const MAX_CARDS := 12
 const MAX_CHIPS := 16
 const MAX_SPARKS := 72
+# Confetti only exists during the Royal Flush, so its cap is the only place on this
+# table where a number was chosen for spectacle rather than for restraint.
+const MAX_CONFETTI := 96
 const MAX_SHADOWS := MAX_CARDS + MAX_CHIPS
 
 # How high the contact shadows lie. Under the table's own dressing and under the
@@ -231,7 +364,14 @@ const T_CASCADE := 2.55
 const T_FLIP := 2.95
 const T_DEAL := 2.80
 const T_LIGHTS := 2.60
-const T_FLUSH := 4.35
+# THE ROYAL FLUSH, AND THE ONE HARD CEILING IN THIS FILE. The round is frozen for
+# this plus HOLD — 4.84 s — and it may not go past five: every second of it is a
+# second the player is watching rather than playing, and the whole celebration
+# (the ace's flight, the slam, the burst and the croupier's dance) is choreographed
+# to finish inside it. game.gd's CELEBRATION_MAX is the other half of that promise,
+# and tools/casino_verify.tscn asserts it against this number rather than trusting
+# either file to remember.
+const T_FLUSH := 4.72
 
 # ---------------------------------------------------------------------------
 # State
@@ -239,10 +379,12 @@ const T_FLUSH := 4.35
 var _cards_mm: MultiMeshInstance3D
 var _chips_mm: MultiMeshInstance3D
 var _sparks_mm: MultiMeshInstance3D
+var _conf_mm: MultiMeshInstance3D
 var _shadow_mm: MultiMeshInstance3D
 var _ball: MeshInstance3D
 var _ball_mat: ShaderMaterial
 var _felt: ShaderMaterial          # the table's own material, for the lighting events
+var _dealer: CasinoDealer          # the croupier, or null on a frame with no room for him
 
 var _kind := -1
 var _prev := -1
@@ -256,6 +398,29 @@ var _last_level := -1
 var _flush := false
 
 # Solved lane geometry
+# --- the hand. See THE HAND above.
+# `_hand` is the SETTLED cards — rank, position and yaw, already solved — and is
+# what gets drawn when nothing is running. `_deal` holds the ones currently flying
+# in; they move to `_hand` when their event ends.
+var _hand: Array = []
+var _hand_stage := 0               # how many of the five are down
+var _hand_cycle := -1              # which eight-level cycle they belong to
+var _hand_ok := false              # the middle had room for them
+var _hand_len := 0.0               # a hand card's length, in board units
+var _hand_at := Vector3.ZERO       # the middle of the row
+# When each card of the running deal leaves the croupier's hand. The dealer's arm is
+# driven off THESE and not off a schedule of its own, so the flick and the card
+# leaving are the same instant however the deal is retimed.
+var _deal_marks: Array[float] = []
+# ...and where each of them is going. The dealer's arm is aimed at the slot, so the
+# beat needs the target as well as the time; they are two arrays and not one array of
+# pairs because `_pose_dealer` walks them on every frame of a deal.
+var _deal_targets: Array[Vector3] = []
+# Which slots of the hand the running deal is filling. Carried across `_begin`,
+# which takes a kind and a length and nothing else.
+var _deal_lo := 0
+var _deal_hi := 0
+
 var _lane_ok := false
 var _lane_z := 0.0
 var _x_lo := 0.0
@@ -297,6 +462,7 @@ func construct() -> void:
 		CARD_LEN * CARD_ASPECT, CARD_LEN, CARD_LEN * 0.085, 4), _card_material())
 	_chips_mm = _multi("Chips", CasinoWorld._chip_prop_mesh(), _chip_material())
 	_sparks_mm = _multi("Sparks", _billboard_quad(), _spark_material())
+	_conf_mm = _multi("Confetti", _billboard_quad(), _confetti_material())
 	_shadow_mm = _multi("Shadows", _flat_quad(), _shadow_material())
 
 	_ball = MeshInstance3D.new()
@@ -327,6 +493,17 @@ func construct() -> void:
 func attach_felt(mat: ShaderMaterial) -> void:
 	_felt = mat
 	_push_felt(0.0, -99.0)
+
+
+# The croupier standing at the far side of the table (casino_dealer.gd). Handed over
+# by CasinoWorld for the same reason the felt is, and used for exactly two things:
+# WHERE a dealt card starts, and WHO is animated while it flies. Everything in here
+# still works with him absent — `_deal_from` falls back to the short run-in the hand
+# used before he existed — because he refuses to be placed on any camera whose frame
+# has no room for him, and a deal that stopped working on that camera would be a
+# celebration silently lost.
+func attach_dealer(d: CasinoDealer) -> void:
+	_dealer = d
 
 
 func _multi(nm: String, mesh: Mesh, mat: Material) -> MultiMeshInstance3D:
@@ -364,6 +541,14 @@ func set_layout(centres: PackedVector2Array, reach: float, cam: Camera3D,
 	_centres = centres
 	if cam == null or vp.x < 8.0 or vp.y < 8.0:
 		return
+
+	# THE HAND FIRST, and deliberately BEFORE the lane rather than after it. The
+	# lane solve below has half a dozen early returns in it — every one of them a
+	# pose this table refuses to put an event on — and the hand does not depend on
+	# any of them. Solved at the bottom it would be skipped on exactly the boards
+	# where the lane is tightest, which is the class of silent per-board failure
+	# this file has paid for three times already.
+	_solve_hand(cam, vp)
 
 	# Where the topmost chip's top edge lands. Screen y grows downward, so the
 	# smallest y is the highest button.
@@ -429,6 +614,163 @@ func set_layout(centres: PackedVector2Array, reach: float, cam: Camera3D,
 	_lane_ok = true
 
 
+# ---------------------------------------------------------------------------
+# The hand's place in the middle
+# ---------------------------------------------------------------------------
+# Five overlapping cards, centred on the ring of chips, as big as the hole in that
+# ring allows. Solved here rather than at deal time for the reason everything else
+# in this file is: the answer depends on the camera and on which board is being
+# played, and a deal is not the moment to find out there was no room.
+#
+# It is a FIT, not a test. As a pass/fail check at a fixed size this returns "no
+# hand" on whichever board has the tightest ring and does it silently — the failure
+# reads as a feature that never happens, which is the single most expensive kind of
+# bug in this codebase (the lake's reeds, the ice's far wall, this file's own lane).
+# So the row is shrunk until it fits, and only refused if it would have to go below
+# a size a player could read.
+func _solve_hand(cam: Camera3D, vp: Vector2) -> void:
+	_hand_ok = false
+	if _centres.is_empty():
+		return
+	# The middle of the ring is the chips' own centroid, not the world origin: the
+	# board is what defines "the middle", and three chips in a triangle do not have
+	# their middle where six in a ring do.
+	var mid := Vector2.ZERO
+	for c: Vector2 in _centres:
+		mid += c
+	mid /= float(_centres.size())
+
+	# THE PLACE IS FITTED TOO, NOT ONLY THE SIZE, and Easy is why.
+	#
+	# On Hard and Medium the ring has a real hole in it — the chips sit 2.1-2.5 out
+	# and keep 1.12 clear, so there is a metre of open felt in the middle and the
+	# row goes exactly where "the middle of the table" means. Easy has THREE chips
+	# at 1.41 from their own centroid: its hole is 0.29 across, and no row of five
+	# readable cards fits inside it at any angle. Measured, not guessed — the first
+	# version refused Easy outright and the refusal was correct.
+	#
+	# So the row slides along z until it finds room. dz = 0 is tried first and kept
+	# the moment it is good enough, so the two boards that HAVE a middle use it; the
+	# board that does not gets the widest open band behind its chips, which is the
+	# same place a real dealer would put the community cards on a three-seat table.
+	var best_len := 0.0
+	var best_dz := 0.0
+	var span := maxf(_reach, 1.0)
+	for step in 15:
+		# Outward from the centre, alternating back and forward: the nearest
+		# workable place wins over a roomier one further away.
+		var dz := float((step + 1) / 2) * span * 0.16
+		if step % 2 == 1:
+			dz = -dz
+		if step == 0:
+			dz = 0.0
+		var at := Vector3(mid.x, 0.0, mid.y + dz)
+		if not _hand_on_screen(at, cam, vp):
+			continue
+		var want := _fit_len(CARD_LEN, at.z, cam, vp, HAND_SCREEN)
+		if want < HAND_MIN or not _hand_fits(at, HAND_MIN):
+			continue
+		var got := _hand_best_len(at, want)
+		if got > best_len:
+			best_len = got
+			best_dz = dz
+		# Good enough, and closest to the middle: stop looking.
+		if got >= HAND_GOOD:
+			break
+	if best_len < HAND_MIN:
+		return                       # nowhere on this board: no hand, by design
+	_hand_len = best_len
+	_hand_at = Vector3(mid.x, 0.0, mid.y + best_dz)
+	_hand_ok = true
+	# The cards already on the table were solved against the OLD camera, so they are
+	# re-seated here. A resize or a difficulty change must not leave a hand at the
+	# size and place the previous board had room for.
+	_reseat_hand()
+
+
+# The largest length at which the row still clears every chip. Bisected: the
+# predicate is monotone in the length — a shorter row is strictly inside a longer
+# one — so twelve steps land within a millimetre.
+func _hand_best_len(at: Vector3, want: float) -> float:
+	if _hand_fits(at, want):
+		return want
+	var lo := HAND_MIN
+	var hi := want
+	for _i in 12:
+		var m := (lo + hi) * 0.5
+		if _hand_fits(at, m):
+			lo = m
+		else:
+			hi = m
+	return lo
+
+
+# Is the whole row inside the frame, with a margin? A hand half off the bottom of
+# the screen is worse than no hand: the player is told they are collecting
+# something and then shown four of it.
+func _hand_on_screen(at: Vector3, cam: Camera3D, vp: Vector2) -> bool:
+	var w := CARD_LEN * CARD_ASPECT
+	var half := w * HAND_STEP * 2.0 + w * 0.5
+	for p: Vector3 in [
+			Vector3(at.x - half, 0.0, at.z - CARD_LEN * 0.5),
+			Vector3(at.x + half, 0.0, at.z - CARD_LEN * 0.5),
+			Vector3(at.x - half, 0.0, at.z + CARD_LEN * 0.5),
+			Vector3(at.x + half, 0.0, at.z + CARD_LEN * 0.5)]:
+		if cam.is_position_behind(p):
+			return false
+		var sp := cam.unproject_position(p)
+		if sp.x < vp.x * 0.03 or sp.x > vp.x * 0.97 \
+				or sp.y < vp.y * 0.06 or sp.y > vp.y * 0.97:
+			return false
+	return true
+
+
+# Would a five-card row of this length, centred here, keep every corner of every
+# card clear of every chip?
+func _hand_fits(at: Vector3, len: float) -> bool:
+	var w := len * CARD_ASPECT
+	var step := w * HAND_STEP
+	for i in 5:
+		var p := _hand_pos(at, len, i)
+		var yaw := _hand_yaw(i)
+		var ca := cos(yaw)
+		var sa := sin(yaw)
+		# Four corners of a w x len rectangle, turned by the card's own yaw.
+		for sx: float in [-0.5, 0.5]:
+			for sz: float in [-0.5, 0.5]:
+				var ox := w * sx
+				var oz := len * sz
+				var q := Vector3(p.x + ox * ca - oz * sa, 0.0,
+					p.z + ox * sa + oz * ca)
+				if not _clear_of_chips(q, HAND_CLEAR):
+					return false
+	# ...and the row must not be so wide that it runs past the chips into the felt
+	# beyond the ring, which is where the dressing lives.
+	var half := step * 2.0 + w * 0.5
+	return half < _reach * 0.92
+
+
+# Where the i-th card of a five-card row sits, and how far it is turned. Both are
+# pure functions of the row, so the deal, the settled hand and the fit all agree
+# without any of them storing a position.
+func _hand_pos(at: Vector3, len: float, i: int) -> Vector3:
+	var step := len * CARD_ASPECT * HAND_STEP
+	return Vector3(at.x + (float(i) - 2.0) * step, 0.0, at.z)
+
+
+func _hand_yaw(i: int) -> float:
+	return (float(i) - 2.0) * HAND_TILT
+
+
+# Re-solve the settled cards' places after the row has moved or changed size.
+func _reseat_hand() -> void:
+	for i in _hand.size():
+		var c: Dictionary = _hand[i]
+		c["pos"] = _hand_pos(_hand_at, _hand_len, int(c["slot"]))
+		c["yaw"] = _hand_yaw(int(c["slot"]))
+	_push_idle()
+
+
 # The world z on the felt whose projection falls on screen row `py`. Bisected: the
 # closed form needs the camera's elevation, its lens and its slide, and the
 # projection is already the authority on all three.
@@ -480,7 +822,12 @@ func _x_at_screen_frac(frac: float, z: float, cam: Camera3D, vp: Vector2) -> flo
 
 # How long something lying flat at depth z may be before it covers more than
 # CARD_SCREEN of the frame's height.
-func _fit_len(want: float, z: float, cam: Camera3D, vp: Vector2) -> float:
+# `cap` is the fraction of the frame's height the object may take. It is a
+# parameter only because the HAND wants a smaller one than the lane: a card on the
+# lane is seen nearly edge on and reads small, while one lying in the middle of the
+# ring is close to the camera and square to it.
+func _fit_len(want: float, z: float, cam: Camera3D, vp: Vector2,
+		cap: float = CARD_SCREEN) -> float:
 	var a := Vector3(0.0, 0.0, z)
 	var b := Vector3(0.0, 0.0, z + want)
 	if cam.is_position_behind(a) or cam.is_position_behind(b):
@@ -488,7 +835,7 @@ func _fit_len(want: float, z: float, cam: Camera3D, vp: Vector2) -> float:
 	var px := absf(cam.unproject_position(b).y - cam.unproject_position(a).y)
 	if px <= 0.5:
 		return want
-	return want * minf(1.0, (vp.y * CARD_SCREEN) / px)
+	return want * minf(1.0, (vp.y * cap) / px)
 
 
 # ---------------------------------------------------------------------------
@@ -568,9 +915,259 @@ func _fill_bag() -> Array:
 	return bag
 
 
+# ---------------------------------------------------------------------------
+# Dealing into the hand
+# ---------------------------------------------------------------------------
+# The player has just completed level `level_no`. On the third of an eight-level
+# cycle the 10, J and Q go down; on the sixth the King joins them. The Ace is not
+# dealt here — it belongs to the Royal Flush (start_flush), which is the whole point
+# of the build-up.
+#
+# THIS ONE FREEZES, briefly, and it is the only small event on this table that does.
+# The rule the six lane events follow is that an event the player has to READ must
+# not run over the top of a live round, and it is the lane's position that lets them
+# off — nothing up there is addressed to the player. A card turning over in the
+# middle of the table IS addressed to the player: it is the thing the whole cycle is
+# building toward, and dealing it under a sequence the player is trying to memorise
+# would be the worst of both. A second and a half, and the round resumes.
+func start_hand(level_no: int) -> float:
+	if not _hand_ok or level_no <= 0:
+		return 0.0
+	var want := 0
+	match level_no % HAND_CYCLE:
+		HAND_AT_LOW: want = 3
+		HAND_AT_KING: want = 4
+		_: return 0.0
+	# A new cycle wipes the table. Keyed off the CYCLE rather than off the flush
+	# having run, so a player who joins mid-cycle (a contest, a restored session)
+	# still gets a coherent hand instead of one built on the last one's leftovers.
+	var cyc := int((level_no - 1) / HAND_CYCLE)
+	if cyc != _hand_cycle:
+		_hand_cycle = cyc
+		_hand.clear()
+		_hand_stage = 0
+	if _hand_stage >= want:
+		return 0.0
+	if _kind >= 0:
+		stop()
+	_tier = tier_for(level_no)
+	_rng.seed = 0x0ca5d0 + level_no * 389
+	# THROUGH `_begin`, like every other event on this table, and this is a FIX and
+	# not a tidy-up: the cards used to be appended here, before `_begin`, and
+	# `_begin` opens with `_clear_all()` — so the whole flight was thrown away on the
+	# frame it was created and the deal reduced to three cards that were absent for
+	# two seconds and then present. Which is exactly what "the cards just appear"
+	# looks like from the outside. Every `_lay_*` in this file is called BY `_begin`;
+	# the deal is now the same, with the slots it has to fill carried in two fields
+	# because `_begin` takes only a kind and a length.
+	_deal_lo = _hand_stage
+	_deal_hi = want
+	_hand_stage = want
+	_begin(EV_HAND, T_HAND_LOW if want == 3 else T_HAND_KING)
+	return _len + HOLD
+
+
+# Lay the cards for slots [from, to) flying in and turning over. They are appended
+# to `_cards` as ordinary event cards, so the whole existing pose pipeline animates
+# them; `_settle_hand` moves them into `_hand` when the event ends, which is what
+# makes them stay.
+func _deal_into_hand(from: int, to: int) -> void:
+	var stagger := HAND_STAGGER if to - from > 1 else 0.0
+	_deal_marks.clear()
+	_deal_targets.clear()
+	for i in range(from, to):
+		var at := _hand_pos(_hand_at, _hand_len, i)
+		var yaw := _hand_yaw(i)
+		var t0 := DEAL_WINDUP + stagger * float(i - from)
+		var start_at := _deal_from(at)
+		_deal_marks.append(t0)
+		_deal_targets.append(at)
+		_cards.append(_card({
+			"rank": ROYAL[i],
+			"up": false,
+			"size": _hand_len / _card_len if _card_len > 0.0 else 1.0,
+			# OUT OF THE CROUPIER'S HAND, across the table, into the slot. See the
+			# DEAL_WINDUP block above for why the flight is allowed to cross the
+			# ring at all, and `_deal_from` for what happens when there is no
+			# croupier to throw it.
+			"from": start_at,
+			"to": at,
+			# IT LEAVES AT THE ANGLE THE HAND LET GO AT. The card is drawn in the
+			# croupier's fingers for the whole wind-up (see _pose), so a flight
+			# that started at some fixed spin would snap the card to a new heading
+			# on the frame it is released — which is the one frame the player is
+			# looking straight at it. `_thrown_yaw` starts it aligned with the
+			# hand and spins it a half turn into its slot; a card is a rectangle,
+			# so half a turn ends where it started looking.
+			"yaw0": _thrown_yaw(at, yaw - 0.35 * float(i)),
+			"yaw1": yaw,
+			"in_at": t0,
+			"in_len": HAND_FLIGHT,
+			"fly": true,
+			# `_pose` scales every hop by the board's card scale, and this one is an
+			# ABSOLUTE height solved against chips that are the same size on every
+			# board — so it is divided back out here rather than solved twice.
+			"hop": _fly_arc(start_at, at) / _world(),
+			# It turns over IN THE AIR and lands face up, so the rank is readable
+			# before the card is down rather than after.
+			"flip_at": t0 + HAND_FLIGHT * 0.42,
+			"flip_len": 0.30,
+			"flip_lift": 0.06,
+			"glow_at": t0 + HAND_FLIGHT * 0.55,
+			"glow_len": 0.75,
+		}))
+
+
+# Where a card starts its flight, given where it is going to land.
+#
+# The croupier's hand when there is one. When there is not — a camera whose frame
+# has no room for him, which `place` answers by refusing to draw him — it is the
+# short run-in inside the ring's own hole that this table used before he existed:
+# no dealer, no flight over the buttons, and the hand still gets dealt.
+# HOW HIGH THIS PARTICULAR THROW HAS TO GO.
+#
+# The rule the flight has to satisfy is absolute and comes from the chips: a card
+# over one must be FLY_CLEAR above the felt, because CHIP_TOP is 0.324 on every
+# board and a card lower than that is a card drawn through a button. Where the
+# path crosses a chip is not absolute at all — Hard's ring has a chip dead ahead of
+# the croupier, Medium's pentagon has one just off it, and Easy's hand sits BEHIND
+# its triangle so its throw crosses nothing — so the arc is walked out of the path
+# rather than typed.
+#
+# Sample the flight, and for every sample that is over a chip ask what arc would
+# have lifted it clear; take the worst. `sin(PI * u)` is the arc's own shape, so
+# dividing by it turns "this point needs to be that high" into "the arc must be
+# this tall", which is the same inversion `_fit_len` and the rail's bisection do.
+#
+# The result is that a throw is exactly as big as the board makes it: a lob on Hard,
+# a shorter one on Medium, and a flick of the wrist on Easy — where a card lobbed
+# 0.7 units over a table whose croupier is only 0.49 tall would look ridiculous.
+# This board's scale for everything in `_pose` — the lane card's length against the
+# length it wants to be. One expression, because five functions used to spell it.
+func _world() -> float:
+	return maxf(_card_len / CARD_LEN, 0.001)
+
+
+func _fly_arc(from: Vector3, to: Vector3) -> float:
+	var need := 0.0
+	for i in range(1, 40):
+		var u := float(i) / 40.0
+		var s := sin(PI * u)
+		if s < 0.05:
+			continue
+		var p := from.lerp(to, _out_cubic(u))
+		if _clear_of_chips(p):
+			continue
+		need = maxf(need, (FLY_CLEAR + FLY_MARGIN - p.y) / s)
+	return maxf(FLY_ARC, need)
+
+
+# The heading a thrown card starts at: the direction the croupier's pinch is
+# pointing when he opens it, less a half turn of spin. Falls back to the old fixed
+# spin when there is no croupier to have thrown it.
+func _thrown_yaw(at: Vector3, fallback: float) -> float:
+	if _dealer == null or not _dealer.placed():
+		return fallback - 2.10
+	var d: Vector3 = _dealer.release_aim(at)
+	if Vector2(d.x, d.z).length_squared() < 1e-6:
+		return fallback - 2.10
+	return atan2(d.x, d.z) - PI
+
+
+func _deal_from(at: Vector3) -> Vector3:
+	if _dealer != null and _dealer.placed():
+		return _dealer.release_point(at)
+	return Vector3(_hand_at.x + (at.x - _hand_at.x) * 0.25, 0.0,
+		_hand_at.z - _hand_len * 0.5)
+
+
+# The dealt cards have landed: remember them so they are drawn from now on.
+func _settle_hand() -> void:
+	for i in _hand_stage:
+		if i < _hand.size():
+			continue
+		_hand.append({"slot": i, "rank": ROYAL[i],
+			"pos": _hand_pos(_hand_at, _hand_len, i), "yaw": _hand_yaw(i),
+			"gold": 0.0})
+
+
+# THE BOX THE HAND COVERS ON SCREEN, for whoever has to draw over this table.
+#
+# game.gd's "ROYAL FLUSH!" banner is the only caller, and it needs this because the
+# hand MOVED: when the five cards slid across the lane at the back, a phrase a little
+# above the middle of the frame was over empty felt; dealt into the middle, the same
+# phrase is over the top half of the thing it is announcing. And there is no single
+# number that fixes it — `_solve_hand` puts the row in the true middle on Hard and
+# Medium and in the open band BEHIND the triangle on Easy, which is most of the
+# frame's height apart.
+#
+# It is the FIVE slots and not the cards on the felt: the banner goes up before the
+# ace lands, and a banner that has to move when it does is a banner that jumps.
+func hand_screen_rect(cam: Camera3D, vp: Vector2) -> Rect2:
+	if not _hand_ok or cam == null or vp.y < 8.0:
+		return Rect2()
+	var r := Rect2()
+	var got := false
+	var h := _hand_len * 0.5
+	for i in 5:
+		var p := _hand_pos(_hand_at, _hand_len, i)
+		for dx: float in [-h, h]:
+			for dz: float in [-h, h]:
+				var q := Vector3(p.x + dx, CasinoWorld.CARD_Y, p.z + dz)
+				if cam.is_position_behind(q):
+					continue
+				var s := cam.unproject_position(q)
+				if got:
+					r = r.expand(s)
+				else:
+					r = Rect2(s, Vector2.ZERO)
+					got = true
+	return r if got else Rect2()
+
+
+# The settled hand, written straight into the card MultiMesh. This is what is on
+# screen whenever no event is running — the cards the player has earned, sitting on
+# the felt — and it costs one upload when the hand changes and nothing at all after.
+func _push_idle() -> void:
+	if _cards_mm == null:
+		return
+	var xf: Array[Transform3D] = []
+	var col: Array[Color] = []
+	var cd: Array[Color] = []
+	var sxf: Array[Transform3D] = []
+	var scol: Array[Color] = []
+	_hand_instances(xf, col, cd, sxf, scol, 0.0, 1.0)
+	_fill(_cards_mm.multimesh, xf, col, cd, MAX_CARDS)
+	_fill_shadows(sxf, scol)
+
+
+# Append the settled hand's instances. `glow` and `alpha` are what the Royal Flush
+# drives them with; everything else is drawing the hand exactly as it lies.
+func _hand_instances(xf: Array[Transform3D], col: Array[Color], cd: Array[Color],
+		sxf: Array[Transform3D], scol: Array[Color], glow: float,
+		alpha: float) -> void:
+	if _card_len <= 0.0:
+		return
+	var sc := _hand_len / CARD_LEN
+	for c: Dictionary in _hand:
+		var p: Vector3 = c["pos"]
+		var b := Basis(Vector3.UP, float(c["yaw"])).scaled(Vector3(sc, sc, sc))
+		var at := Vector3(p.x, CasinoWorld.CARD_Y, p.z)
+		xf.append(Transform3D(b, at))
+		col.append(Color(1.0, 1.0, 1.0, alpha))
+		# The GOLD edge rides the same curve as the glow, so the four cards already
+		# on the felt take the ace's gold at the instant it slams rather than
+		# sitting there plain beside it.
+		cd.append(Color(float(c["rank"]) / 8.0, 1.0, glow,
+			maxf(float(c["gold"]), glow)))
+		_shadow(sxf, scol, at, sc * 0.80, alpha)
+
+
 # The player has just completed level `level_no`. Every eighth is the ROYAL FLUSH.
 func start_flush(level_no: int) -> float:
-	if not _lane_ok or level_no <= 0 or level_no % FINALE_EVERY != 0:
+	# It answers to the HAND now, not to the lane: the five cards land in the middle
+	# of the table, so a pose with no room for a lane still gets its finale.
+	if not _hand_ok or level_no <= 0 or level_no % FINALE_EVERY != 0:
 		return 0.0
 	if level_no == _last_level:
 		return 0.0
@@ -582,6 +1179,18 @@ func start_flush(level_no: int) -> float:
 		stop()
 	_tier = 2
 	_rng.seed = 0x0ca5f1 + level_no * 613
+	# THE HAND MUST BE WHOLE BEFORE THE ACE LANDS ON IT. Normally it is — the player
+	# passed through the third and the sixth to get here — but a contest, a restored
+	# session or a player who reached level 8 by some other route would otherwise
+	# watch an ace complete a flush that is not on the table. The missing cards are
+	# put down instantly rather than dealt: they are not the moment.
+	var cyc := int((level_no - 1) / HAND_CYCLE)
+	if cyc != _hand_cycle:
+		_hand_cycle = cyc
+		_hand.clear()
+		_hand_stage = 0
+	_hand_stage = 4
+	_settle_hand()
 	_begin(EV_FLUSH, T_FLUSH)
 	return _len + HOLD
 
@@ -612,20 +1221,49 @@ func _begin(kind: int, secs: float) -> void:
 		EV_DEAL: _lay_deal()
 		EV_LIGHTS: _lay_lights()
 		EV_FLUSH: _lay_flush()
+		EV_HAND: _deal_into_hand(_deal_lo, _deal_hi)
 	_pose(0.0)
 
 
 # Drop everything, now. Called when a finale outranks a running event, and by the
 # board when the casino stops being the equipped background.
 func stop() -> void:
+	# A hand that has just finished being dealt SETTLES rather than disappearing —
+	# that is what makes it persistent — and the Royal Flush is the one event that
+	# takes the table back with it when it goes.
+	if _kind == EV_HAND:
+		_settle_hand()
+	elif _kind == EV_FLUSH:
+		_hand.clear()
+		_hand_stage = 0
 	_kind = -1
 	_flush = false
 	_t = 0.0
 	_clear_all()
+	# ...and the croupier stands up straight, whether the event ended or was
+	# cancelled mid-dance. A pose that has to be unwound is a pose that will one day
+	# be left half-unwound; this is the one line that makes sure it never is.
+	if _dealer != null:
+		_dealer.rest()
+	# ...and whatever is still on the felt is drawn again. `_clear_all` empties the
+	# MultiMeshes, so without this the hand vanishes the moment any lane event that
+	# happened to run on top of it ends.
+	_push_idle()
 
 
 func active() -> bool:
 	return _kind >= 0
+
+
+# True while what is running is one of the two events that STOP the round — the hand
+# being dealt and the Royal Flush. Everything else on this table plays over a live
+# round on the lane above the buttons (see start_event).
+#
+# tools/casino_verify.tscn asks, because the exemption that lets a dealt card fly
+# over a chip at all is precisely "the round is frozen while it does": the check has
+# to be able to tell the two cases apart rather than take the height on trust.
+func freezes() -> bool:
+	return _kind == EV_HAND or _kind == EV_FLUSH
 
 
 func _clear_all() -> void:
@@ -641,8 +1279,19 @@ func _clear_all() -> void:
 		_cards_mm.multimesh.instance_count = 0
 	if _chips_mm != null:
 		_chips_mm.multimesh.instance_count = 0
+	_cf_p.clear()
+	_cf_v.clear()
+	_cf_col.clear()
+	_cf_age.resize(0)
+	_cf_life.resize(0)
+	_cf_size.resize(0)
+	_cf_spin.resize(0)
+	_cf_rate.resize(0)
+	_cf_phase.resize(0)
 	if _sparks_mm != null:
 		_sparks_mm.multimesh.instance_count = 0
+	if _conf_mm != null:
+		_conf_mm.multimesh.instance_count = 0
 	if _shadow_mm != null:
 		_shadow_mm.multimesh.instance_count = 0
 	if _ball != null:
@@ -661,18 +1310,24 @@ func tick(dt: float) -> bool:
 	_prev_t = _t
 	_t += dt
 	_step_sparks(dt)
+	_step_confetti(dt, _t)
 	if _t >= _len:
-		# The sparks are allowed to outlive the timeline by their own life, so a
-		# burst at the end falls rather than vanishing. Nothing else is.
+		# The sparks and the confetti are allowed to outlive the timeline by their
+		# own life, so a burst at the end falls rather than vanishing. Nothing else
+		# is — and the cards are cleared here, which is why the HAND is settled by
+		# `stop()` below rather than left in `_cards` to be swept up with them.
 		_cards.clear()
 		_chips.clear()
 		if _ball != null:
 			_ball.visible = false
 		_push_felt(0.0, -99.0)
 		_pose(_len)
-		if _sp_age.is_empty():
-			_kind = -1
-			_clear_all()
+		if _sp_age.is_empty() and _cf_age.is_empty():
+			# THROUGH stop(), not by clearing directly. This is the path every
+			# event actually ends on, and settling the hand only in the other one
+			# would mean a dealt card stays exactly as long as nobody lets the
+			# event finish normally.
+			stop()
 			return false
 		return true
 	_pose(_t)
@@ -927,71 +1582,113 @@ func _lay_lights() -> void:
 #
 #   0.05 - 0.87   five cards slide on from the right, face down, in order
 #   1.00 - 1.84   the first four turn over one at a time: 10, J, Q, K
-#   1.90 - 2.42   the fifth does NOT. It glows, it shakes, and gold gathers on it
-#   2.42 - 2.62   it SLAMS open: A
-#   2.62          the burst — gold everywhere, every card bounces, the table lifts
-#   3.70 - 4.30   the five slide away and the table is a table again
+#   0.00 - 0.34   the croupier winds up
+#   0.34 - 0.96   the ACE flies out of his hand and lands on the row, face DOWN
+#   1.36 - 1.88   it does not turn over yet. It glows, it shakes, gold gathers
+#   1.88 - 2.08   it SLAMS open: A
+#   2.10          the burst — gold everywhere, every card bounces, the table lifts
+#   2.22 - 4.72   the croupier loses his composure completely (casino_dealer.dance)
+#   4.05 - 4.65   the five slide away and the table is a table again
 #
-# The camera never moves and the board is never covered: every card is on the lane,
-# which is above the top row of chips by construction.
-const RF_IN := 0.05
-const RF_IN_STAGGER := 0.11
-const RF_IN_LEN := 0.38
-const RF_FLIP0 := 1.00
-const RF_FLIP_STAGGER := 0.20
-const RF_FLIP_LEN := 0.24
-const RF_SHAKE := 1.90
-const RF_SHAKE_LEN := 0.52
-const RF_SLAM := 2.42
+# THE WHOLE THING IS 4.72, AND THE FREEZE IT ASKS FOR IS 4.84 (+ HOLD). That ceiling
+# is a requirement and not a taste: the round is stopped for every second of it, and
+# a celebration that outstays five seconds is a celebration the player starts waiting
+# out. Everything above was pulled EARLIER to buy the dance its two and a half
+# seconds rather than pushing the end out — the ace used to slam at 2.42 with the
+# event ending at 4.35, which left nothing after the burst but the cards leaving.
+#
+# game.gd's "ROYAL FLUSH!" banner is timed against RF_SLAM (it arrives as the ace
+# turns over); it was moved with these numbers, and _show_royal_flush_text says so.
+# RF_IN IS NOT ZERO AND MAY NOT BE. The croupier's arm starts its wind-up
+# DEAL_WINDUP before the card leaves his hand (see _pose_dealer); at 0.06 that put
+# the start of the throw a fifth of a second before the event existed, so the finale
+# opened on a man who had already thrown.
+const RF_IN := 0.58
+const RF_IN_LEN := 0.62           # the ace's flight, from the croupier's hand
+const RF_SHAKE := 1.36
+const RF_SHAKE_LEN := 0.46
+const RF_SLAM := 1.88
 const RF_SLAM_LEN := 0.20
-const RF_BURST := 2.62
-const RF_OUT := 3.70
+const RF_BURST := 2.10
+const RF_DANCE := 2.22
+const RF_OUT := 4.05
 const RF_OUT_LEN := 0.60
+
+# The dance runs from the burst to the last frame of the event. It is derived and
+# not typed for the reason the deal's length is: a dance that outlives the freeze is
+# a dealer who is still waving while the next sequence plays.
+const RF_DANCE_LEN := T_FLUSH - RF_DANCE
 
 # The hand, in the order it is laid down and read.
 const ROYAL := [RANK_10, RANK_J, RANK_Q, RANK_K, RANK_A]
 
 
 func _lay_flush() -> void:
-	var step := _card_len * CARD_ASPECT * 1.22
-	var x0 := (_x_lo + _x_hi) * 0.5 - step * 2.0
-	for i in 5:
-		var last := i == 4
-		var d := {
-			"rank": ROYAL[i],
-			"up": false,
-			"from": Vector3(_x_in + step * float(i) * 0.45, 0.0, _lane_z),
-			"to": Vector3(x0 + step * float(i), 0.0, _lane_z),
-			"yaw0": 0.52,
-			"yaw1": 0.0,
-			"in_at": RF_IN + RF_IN_STAGGER * float(i),
-			"in_len": RF_IN_LEN,
-			"hop": CARD_HOP,
-			"out_at": RF_OUT,
-			"out_len": RF_OUT_LEN,
-			"out_to": Vector3(_x_out - step * float(i) * 0.3, 0.0, _lane_z),
-			"gold": 1.0,
-			"bounce_at": RF_BURST,
-		}
-		if last:
-			# The fifth card is the whole event: it waits while the other four are
-			# read, gathers light, shakes, and then turns over harder and faster
-			# than any of them.
-			d["flip_at"] = RF_SLAM
-			d["flip_len"] = RF_SLAM_LEN
-			d["flip_lift"] = 0.30
-			d["slam"] = true
-			d["shake_at"] = RF_SHAKE
-			d["shake_len"] = RF_SHAKE_LEN
-			d["glow_at"] = RF_SHAKE
-			d["glow_len"] = RF_OUT - RF_SHAKE
-		else:
-			d["flip_at"] = RF_FLIP0 + RF_FLIP_STAGGER * float(i)
-			d["flip_len"] = RF_FLIP_LEN
-			d["flip_lift"] = 0.12
-			d["glow_at"] = RF_BURST
-			d["glow_len"] = 0.9
-		_cards.append(_card(d))
+	# THE ACE, and only the ace. The 10, J, Q and K are already lying in the middle
+	# of the table — the player put them there over the last five levels — so this
+	# event has one card to play and its whole job is to make that card land like
+	# the end of something.
+	#
+	# It was five cards sliding onto the LANE at the back before the hand existed,
+	# which is a fine flourish and the wrong one: a royal flush the player watched
+	# being assembled is worth more than a royal flush that is handed to them, and
+	# the four cards under it are the difference.
+	var at := _hand_pos(_hand_at, _hand_len, 4)
+	var ace_from := _deal_from(at)
+	var size := _hand_len / _card_len if _card_len > 0.0 else 1.0
+	_cards.append(_card({
+		"rank": RANK_A,
+		"up": false,
+		"size": size,
+		# OUT OF THE CROUPIER'S HAND, like the four before it. This card used to
+		# run in from half a card-length away inside the ring's hole, because a
+		# flight from behind the table crossed a chip and there was nothing back
+		# there to justify it anyway; there is now, and the freeze this event takes
+		# is what makes the crossing legal (see the DEAL_WINDUP block).
+		#
+		# It is the SLOWEST card this table throws and the highest: it is the one
+		# the whole eight-level cycle has been building to, and it arrives like it.
+		"from": ace_from,
+		"to": at,
+		"yaw0": _thrown_yaw(at, _hand_yaw(4) - 0.50),
+		"yaw1": _hand_yaw(4),
+		"in_at": RF_IN,
+		"in_len": RF_IN_LEN,
+		"fly": true,
+		# A tenth higher than it has to be. This is the last card of the cycle and
+		# the only one the player has waited eight levels for; everything else about
+		# it is bigger than the four before it, and so is the throw.
+		"hop": _fly_arc(ace_from, at) * 1.10 / _world(),
+		# It waits, gathers light, shakes, and then turns over harder and faster
+		# than any card this table deals.
+		"shake_at": RF_SHAKE,
+		"shake_len": RF_SHAKE_LEN,
+		"flip_at": RF_SLAM,
+		"flip_len": RF_SLAM_LEN,
+		"flip_lift": 0.30,
+		"slam": true,
+		"glow_at": RF_SHAKE,
+		"glow_len": RF_OUT - RF_SHAKE,
+		"gold": 1.0,
+		"bounce_at": RF_BURST,
+	}))
+	# ONE MARK, read by _pose_dealer exactly as the three-card deal's are: the
+	# finale is a deal of one card, and giving it its own arm animation is how the
+	# two would end up out of step the next time either is retimed.
+	_deal_marks.clear()
+	_deal_marks.append(RF_IN)
+	_deal_targets.clear()
+	_deal_targets.append(at)
+
+
+# What the four cards already on the felt do while the ace lands on them: they take
+# the gold edge at the slam and glow with it, so the row reads as ONE hand rather
+# than as four old cards and a new one.
+func _flush_hand_glow(t: float) -> float:
+	if t < RF_SLAM:
+		return 0.0
+	var g := clampf((t - RF_SLAM) / maxf(RF_OUT - RF_SLAM, 0.0001), 0.0, 1.0)
+	return sin(PI * pow(g, 0.5))
 
 
 # Fill in every field a card may have, so `_pose` never has to ask whether one is
@@ -1002,7 +1699,7 @@ func _card(d: Dictionary) -> Dictionary:
 		"rank": RANK_A, "up": true, "size": 1.0,
 		"from": Vector3.ZERO, "to": Vector3.ZERO, "out_to": Vector3.ZERO,
 		"yaw0": 0.0, "yaw1": 0.0,
-		"in_at": 0.0, "in_len": 0.4, "hop": CARD_HOP,
+		"in_at": 0.0, "in_len": 0.4, "hop": CARD_HOP, "fly": false,
 		"flip_at": -1.0, "flip_len": 0.3, "flip_lift": 0.0, "slam": false,
 		"shake_at": -1.0, "shake_len": 0.0,
 		"glow_at": -1.0, "glow_len": 0.0,
@@ -1043,6 +1740,11 @@ func _pose(t: float) -> void:
 	# Emission first, so a spark thrown on this beat is drawn on this frame rather
 	# than on the next one. `_push_sparks` at the bottom is what uploads them.
 	_emit(t)
+	# ...and the CROUPIER second, before any card is placed, because a card that has
+	# not been thrown yet is drawn IN HIS FINGERS and has to ask him where they are.
+	# This used to be the last thing in the function, which was fine while nothing
+	# read it back.
+	_pose_dealer(t)
 	var world := _card_len / CARD_LEN            # this board's scale for everything
 	var cxf: Array[Transform3D] = []
 	var ccol: Array[Color] = []
@@ -1053,12 +1755,56 @@ func _pose(t: float) -> void:
 	for c: Dictionary in _cards:
 		var in_at: float = c["in_at"]
 		if t < in_at:
+			# NOT YET THROWN — but for a card the croupier is about to deal that
+			# does not mean "not yet drawn". It is in his hand from the moment he
+			# picks it up, at the transform his own pinch is in
+			# (CasinoDealer.grip), so the player watches a card be TAKEN and then
+			# thrown rather than a card appear out of the air at the release. The
+			# flight starts from that same pinch, so there is nothing to line up.
+			if not bool(c["fly"]) or _dealer == null or not _dealer.placed():
+				continue
+			var lead: float = in_at - DEAL_WINDUP
+			if t < lead:
+				continue
+			# THE CARD BELONGS TO THE DECK UNTIL THE FINGERS CLOSE ON IT. It is
+			# drawn on the deck's top, eased out of it as the right hand comes down
+			# — the push a dealer's deck thumb gives the top card — and from the
+			# pickup frame onward it is simply wherever the pinch is. The two halves
+			# meet EXACTLY: `card_start` is the pinch on that frame, and the clip is
+			# authored so the pinch reaches the deck's top card there. Nothing is
+			# spawned in the hand and nothing jumps.
+			var pu: float = lead + DEAL_WINDUP * float(_dealer.pickup_frac())
+			var g: Transform3D
+			if t < pu:
+				var from_deck: Transform3D = _dealer.deck_card()
+				var in_hand: Transform3D = _dealer.card_start()
+				if in_hand.basis.determinant() < 0.0001:
+					continue
+				var u0 := clampf((t - lead) / maxf(pu - lead, 0.0001), 0.0, 1.0)
+				g = Transform3D(in_hand.basis,
+					from_deck.origin.lerp(in_hand.origin, _in_out(u0)))
+			else:
+				g = _dealer.grip()
+			if g.basis.determinant() < 0.0001:
+				continue
+			var hsc := world * float(c["size"])
+			cxf.append(Transform3D(g.basis.scaled(Vector3(hsc, hsc, hsc)), g.origin))
+			ccol.append(Color(1.0, 1.0, 1.0, 1.0))
+			# Face down and no glow: it is a card in a hand, not an event yet.
+			ccd.append(Color(float(c["rank"]) / 8.0, 0.0, 0.0, float(c["gold"])))
 			continue
 		var in_len: float = maxf(c["in_len"], 0.0001)
 		var u := clampf((t - in_at) / in_len, 0.0, 1.0)
 		var e := _out_cubic(u)
 		var pos: Vector3 = (c["from"] as Vector3).lerp(c["to"] as Vector3, e)
-		var y: float = float(c["hop"]) * sin(PI * u) * world
+		# THE PATH'S OWN HEIGHT, and then the arc on top of it. Every card this file
+		# had before the croupier existed travelled on the felt — from.y and to.y
+		# were both zero — so the height WAS the hop, and dropping pos.y cost
+		# nothing and was never noticed. A card thrown from a man's hand starts most
+		# of a metre up, and without this it left the table at his feet and the hop
+		# was the only thing holding it off the chips it crossed. (The chips' pose
+		# pass below has always used pos.y; this is the two of them agreeing.)
+		var y: float = pos.y + float(c["hop"]) * sin(PI * u) * world
 		var alpha := 1.0
 		var sc := world * float(c["size"])
 
@@ -1124,6 +1870,14 @@ func _pose(t: float) -> void:
 
 		var yaw: float = lerpf(float(c["yaw0"]), float(c["yaw1"]), e)
 		var b := Basis(Vector3.UP, yaw) * Basis(Vector3(0.0, 0.0, 1.0), ang)
+		# A THROWN card BANKS. It leaves the croupier's hand tilted, wobbles once on
+		# the way over, and is levelled out before it lands — so nothing has to
+		# flatten it afterwards and it still settles dead flat on the felt. Without
+		# this a dealt card is a rectangle sliding along a spline; with it, it is
+		# an object someone let go of.
+		if bool(c["fly"]):
+			var bank := (1.0 - smoothstep(0.55, 1.0, u)) * 0.34
+			b = b * Basis(Vector3(1.0, 0.0, 0.0), bank * (0.60 + 0.40 * sin(u * 9.0)))
 		b = b.scaled(Vector3(sc, sc, sc))
 		var p := Vector3(pos.x, CasinoWorld.CARD_Y + y, pos.z)
 		cxf.append(Transform3D(b, p))
@@ -1172,11 +1926,59 @@ func _pose(t: float) -> void:
 	if _kind == EV_ROULETTE:
 		_pose_ball(t)
 
+	# The settled hand is drawn on every frame of every event, not only when the
+	# table is idle: an event running over the top of it must not blank it.
+	#
+	# INCLUDING a deal, and that exception cost a render to see. `_cards` and
+	# `_hand` never hold the same card — `_settle_hand` only adds slots the hand
+	# does not already have, so the deal is always the NEW cards and the hand is
+	# always the old ones — but the first version skipped the hand during EV_HAND to
+	# avoid a double-draw that cannot happen. The result was that dealing the King
+	# made the 10, J and Q disappear for the length of the deal and reappear when it
+	# ended: the player watches three cards they earned blink out at the exact
+	# moment the table is drawing attention to that row.
+	var hg := _flush_hand_glow(t) if _flush else 0.0
+	_hand_instances(cxf, ccol, ccd, sxf, scol, hg, 1.0)
 	_fill(_cards_mm.multimesh, cxf, ccol, ccd, MAX_CARDS)
 	_fill(_chips_mm.multimesh, pxf, pcol, pcd, MAX_CHIPS)
 	_fill_shadows(sxf, scol)
 	_push_sparks()
+	_push_confetti(t)
 	_pose_lighting(t)
+
+
+# THE CROUPIER, on the same clock as every card. He has two things to do and both
+# are driven off marks that already exist: the arm follows the DEAL's own release
+# times, and the dance follows the finale's.
+#
+# Nothing here is a schedule of its own. That is the whole point — an arm animation
+# with its own timeline drifts away from the card the first time either is retimed,
+# and the one thing this sequence has to get right is that the card leaves on the
+# frame the hand flicks.
+func _pose_dealer(t: float) -> void:
+	if _dealer == null or not _dealer.placed():
+		return
+	if _kind == EV_FLUSH and t >= RF_DANCE:
+		_dealer.dance(t - RF_DANCE, RF_DANCE_LEN)
+		return
+	if _deal_marks.is_empty() or (_kind != EV_HAND and _kind != EV_FLUSH):
+		return
+	# The beat of whichever card is nearest to leaving his hand: -1 at the top of
+	# the wind-up, 0 at the release, 1 at the end of the follow-through. Taking the
+	# nearest is what hands the arm from one card to the next when a deal's cards
+	# overlap, without either beat knowing the other exists.
+	var best := 9.0
+	var target := Vector3.ZERO
+	for i in _deal_marks.size():
+		var m: float = _deal_marks[i]
+		var ph := (t - m) / DEAL_WINDUP if t < m else (t - m) / DEAL_FOLLOW
+		if absf(ph) < absf(best):
+			best = ph
+			target = _deal_targets[i] if i < _deal_targets.size() else Vector3.ZERO
+	if best < -1.0 or best > 1.0:
+		_dealer.rest()
+	else:
+		_dealer.deal(best, target)
 
 
 # One contact shadow, laid flat under whatever is above it. Generated rather than
@@ -1186,10 +1988,23 @@ func _shadow(xf: Array[Transform3D], col: Array[Color], p: Vector3, size: float,
 	if xf.size() >= MAX_SHADOWS:
 		return
 	var h := clampf(p.y / SHADOW_H, 0.0, 1.0)
+	# ...and GONE above SHADOW_GONE. A card thrown across the table from the
+	# croupier's hand is most of a card-length over the felt at the top of its arc
+	# and has no contact with anything to shade; below that it spreads and lifts as
+	# before, which is the only cue at this camera angle that says how high it is.
+	#
+	# This is also the half of the flight exemption that is NOT waived. The CARD is
+	# allowed over a chip while it is up there because the round is frozen; its
+	# shadow would be drawn ON the chip, at felt height, which is a mark on a button
+	# and not a card passing over one — so the shadow simply is not drawn.
+	var a := alpha * (0.62 - 0.42 * h) \
+		* (1.0 - smoothstep(SHADOW_H, SHADOW_GONE, p.y))
+	if a <= 0.004:
+		return
 	var spread := size * (1.0 + 0.75 * h)
 	xf.append(Transform3D(Basis().scaled(Vector3(spread, 1.0, spread)),
 		Vector3(p.x, SHADOW_Y, p.z)))
-	col.append(Color(1.0, 1.0, 1.0, alpha * (0.62 - 0.42 * h)))
+	col.append(Color(1.0, 1.0, 1.0, a))
 
 
 func _fill_shadows(xf: Array[Transform3D], col: Array[Color]) -> void:
@@ -1285,10 +2100,16 @@ func _pose_lighting(t: float) -> void:
 		if t > LIGHTS_SWEEP0 and t < LIGHTS_SWEEP1:
 			sweep = -PI + TAU * (t - LIGHTS_SWEEP0) / (LIGHTS_SWEEP1 - LIGHTS_SWEEP0)
 	elif _flush:
-		# A short, hard lift on the burst and a single sweep out of it. Deliberately
-		# briefer than the jackpot event's: this one is punctuation, not weather.
-		lift = smoothstep(RF_BURST - 0.10, RF_BURST + 0.16, t) \
-			* (1.0 - smoothstep(RF_BURST + 0.9, RF_OUT + 0.2, t))
+		# The house lights coming UP on a completed royal flush. It rises with the
+		# slam rather than with the burst so the table is already brightening as the
+		# ace turns over, holds through the confetti, and is taken down slowly — the
+		# one moment on this table that is allowed to be simply happy.
+		#
+		# It was a short hard spike on the burst alone, which is right for
+		# punctuation and wrong for a finale: the five cards the player spent eight
+		# levels assembling deserve to be lit while they are being looked at.
+		lift = smoothstep(RF_SLAM - 0.08, RF_BURST + 0.10, t) \
+			* (1.0 - smoothstep(RF_OUT - 0.15, RF_OUT + 0.55, t))
 		if t > RF_BURST and t < RF_BURST + 1.30:
 			sweep = -PI + TAU * (t - RF_BURST) / 1.30
 	_push_felt(lift, sweep)
@@ -1323,6 +2144,37 @@ func _spark(p: Vector3, v: Vector3, life: float, size: float, col: Color) -> voi
 	_sp_col.append(col)
 
 
+# A spark that refuses to be born where it could end up over a chip. `DRIFT` is the
+# margin the emitter has always had to leave; this is that rule made a function, so
+# the finale — which is the one event emitting from INSIDE the ring of chips — has
+# the same guarantee the jackpot lights have had since they were written.
+func _spark_clear(p: Vector3, v: Vector3, life: float, size: float,
+		col: Color) -> void:
+	# How far this one will actually travel: the drag is exponential at 1.6, so the
+	# distance is the speed over that, and it is what has to clear the chip — not
+	# the birth point alone.
+	if not _clear_of_chips(p, DRIFT + v.length() / 1.6):
+		return
+	_spark(p, v, life, size, col)
+
+
+# A burst that is SLOWED to fit the room rather than skipped for want of it, which
+# is the difference between a smaller celebration and no celebration. Refusing the
+# whole burst was the first version and it cut the finale's gold from thirty grains
+# to none on every board: inside the ring of chips there is nowhere with two board
+# units of clearance, so a fixed speed can only ever be rejected.
+func _burst_fit(at: Vector3, n: int, speed: float, life: float, size: float,
+		col: Color) -> void:
+	var room := 1e9
+	for c: Vector2 in _centres:
+		room = minf(room, Vector2(at.x, at.z).distance_to(c))
+	room -= CHIP_CLEAR + DRIFT
+	if room <= 0.02:
+		return
+	# The drag is exponential at 1.6, so a spark's travel is its speed over that.
+	_burst(at, n, minf(speed, room * 1.6), life, size, col)
+
+
 func _burst(at: Vector3, n: int, speed: float, life: float, size: float,
 		col: Color) -> void:
 	for _i in n:
@@ -1351,6 +2203,103 @@ func _step_sparks(dt: float) -> void:
 			_sp_v[i] = v
 			_sp_p[i] = (_sp_p[i] as Vector3) + v * dt
 		i -= 1
+
+
+# ---------------------------------------------------------------------------
+# Confetti
+# ---------------------------------------------------------------------------
+# Integrated on the CPU beside the sparks and for the same reason, plus one of its
+# own: paper does not fall ballistically. Each piece carries a FLUTTER — a sideways
+# drift on its own phase — which is most of what separates confetti from gravel.
+const CONF_G := 2.6
+const CONF_DRAG := 2.1
+
+var _cf_p: Array[Vector3] = []
+var _cf_v: Array[Vector3] = []
+var _cf_age: PackedFloat32Array = PackedFloat32Array()
+var _cf_life: PackedFloat32Array = PackedFloat32Array()
+var _cf_size: PackedFloat32Array = PackedFloat32Array()
+var _cf_spin: PackedFloat32Array = PackedFloat32Array()
+var _cf_rate: PackedFloat32Array = PackedFloat32Array()
+var _cf_phase: PackedFloat32Array = PackedFloat32Array()
+var _cf_col: Array[Color] = []
+
+
+func _confetti(at: Vector3, n: int, speed: float, size: float) -> void:
+	for _i in n:
+		if _cf_age.size() >= MAX_CONFETTI:
+			return
+		var a := _rng.randf() * TAU
+		var up := _rng.randf_range(0.75, 1.45)
+		var sp := speed * _rng.randf_range(0.5, 1.15)
+		_cf_p.append(at + Vector3(_rng.randf_range(-0.3, 0.3), 0.0,
+			_rng.randf_range(-0.2, 0.2)))
+		_cf_v.append(Vector3(cos(a) * sp * 0.9, up * speed, sin(a) * sp * 0.55))
+		_cf_age.append(0.0)
+		# SHORTER THAN THE FREEZE THAT COVERS IT. The Royal Flush stops the round
+		# for T_FLUSH + HOLD (4.84 s) and the burst is at RF_BURST (1.94), so a
+		# piece living 2.4 s is still falling half a second after the player has
+		# been given the board back — and confetti over a chip the player is trying
+		# to press is exactly the thing this file refuses to do. 1.7 s is the
+		# longest life that lands inside the freeze, and tools/casino_verify.tscn
+		# asserts that it does rather than trusting these two numbers to stay put.
+		_cf_life.append(_rng.randf_range(1.1, 1.7))
+		_cf_size.append(size * _rng.randf_range(0.72, 1.30))
+		_cf_spin.append(_rng.randf() * TAU)
+		_cf_rate.append(_rng.randf_range(-7.0, 7.0))
+		_cf_phase.append(_rng.randf() * TAU)
+		_cf_col.append(CONFETTI[_rng.randi() % CONFETTI.size()])
+
+
+func _step_confetti(dt: float, t: float) -> void:
+	var i := _cf_age.size() - 1
+	while i >= 0:
+		_cf_age[i] += dt
+		if _cf_age[i] >= _cf_life[i]:
+			_cf_p.remove_at(i)
+			_cf_v.remove_at(i)
+			_cf_col.remove_at(i)
+			_cf_age.remove_at(i)
+			_cf_life.remove_at(i)
+			_cf_size.remove_at(i)
+			_cf_spin.remove_at(i)
+			_cf_rate.remove_at(i)
+			_cf_phase.remove_at(i)
+		else:
+			var v: Vector3 = _cf_v[i]
+			v.y -= CONF_G * dt
+			v *= 1.0 - minf(dt * CONF_DRAG, 0.7)
+			# The flutter: a sideways push on the piece's own phase, strongest once
+			# it has stopped rising and is falling flat.
+			var f := sin(t * 5.0 + _cf_phase[i]) * 0.55 * dt
+			v.x += f
+			v.z += f * 0.4
+			_cf_v[i] = v
+			var p: Vector3 = _cf_p[i] + v * dt
+			# It lands on the felt rather than sinking through it.
+			p.y = maxf(p.y, CasinoWorld.CARD_Y)
+			_cf_p[i] = p
+		i -= 1
+
+
+func _push_confetti(t: float) -> void:
+	if _conf_mm == null:
+		return
+	var mm := _conf_mm.multimesh
+	var n := mini(_cf_age.size(), MAX_CONFETTI)
+	mm.instance_count = n
+	var world := _card_len / CARD_LEN
+	for i in n:
+		var u := _cf_age[i] / maxf(_cf_life[i], 0.0001)
+		mm.set_instance_transform(i, Transform3D(Basis(), _cf_p[i]))
+		var c: Color = _cf_col[i]
+		mm.set_instance_color(i, Color(c.r, c.g, c.b,
+			smoothstep(0.0, 0.06, u) * (1.0 - smoothstep(0.70, 1.0, u))))
+		# The tumble is a cosine of its own clock, so it passes through zero — the
+		# instant the piece is edge on and invisible — rather than flickering.
+		var tumble := cos(t * _cf_rate[i] + _cf_phase[i])
+		mm.set_instance_custom_data(i, Color(_cf_size[i] * world,
+			_cf_spin[i] + t * _cf_rate[i] * 0.35, tumble, 0.0))
 
 
 func _push_sparks() -> void:
@@ -1439,23 +2388,66 @@ func _emit(t: float) -> void:
 		# at it from a ring and given an inward velocity, because particles arriving
 		# read as pressure building and particles leaving read as something already
 		# over.
-		if t > RF_SHAKE and t < RF_SLAM and _cards.size() > 4:
-			var target: Vector3 = (_cards[4]["to"] as Vector3) + Vector3(0.0, 0.05, 0.0)
+		# `_cards` now holds exactly ONE card — the ace (see _lay_flush) — because
+		# the other four are already lying on the felt as the settled hand. It was
+		# five here, and the index it was reached by was 4.
+		if t > RF_SHAKE and t < RF_SLAM and not _cards.is_empty():
+			var target: Vector3 = (_cards[0]["to"] as Vector3) + Vector3(0.0, 0.05, 0.0)
+			# The ring is scaled to the HAND and not to the lane's card, and it is
+			# tighter than it was. Out on the lane a gather ring 1.1 card-lengths
+			# across sat in open felt; centred on the ace — which is the OUTERMOST
+			# card of a row that already reaches most of the way across the ring's
+			# hole — the same ring reaches 1.7 from the middle of the table and its
+			# far side lands on a chip. That is what
+			# tools/casino_verify.tscn's "NOTHING any event placed reached the
+			# chips" reported, and no amount of slowing the BURST fixed it, because
+			# the burst was never the thing out there.
+			var hw := _hand_len / CARD_LEN
 			_rate(t, 26.0 + 14.0 * float(_tier), func() -> void:
 				var a := _rng.randf() * TAU
-				var rr := _rng.randf_range(0.5, 1.1) * world
+				var rr := _rng.randf_range(0.30, 0.62) * hw
 				var from := target + Vector3(cos(a) * rr, _rng.randf_range(0.15, 0.5),
 					sin(a) * rr * 0.6)
-				_spark(from, (target - from) * 1.35, 0.42, 0.048 * world, gold))
-		if _cross(t, RF_BURST) and _cards.size() > 4:
-			var at: Vector3 = (_cards[4]["to"] as Vector3) + Vector3(0.0, 0.06, 0.0)
-			_burst(at, 30, 2.3, 0.95, 0.085 * world, gold)
-			_burst(at, 12, 1.4, 0.70, 0.062 * world, white)
+				_spark_clear(from, (target - from) * 1.35, 0.42, 0.048 * hw, gold))
+		if _cross(t, RF_BURST) and not _cards.is_empty():
+			var at: Vector3 = (_cards[0]["to"] as Vector3) + Vector3(0.0, 0.06, 0.0)
+			# THE CONFETTI, and it is thrown from over the whole ROW rather than
+			# from the ace alone: the hand is what completed, and a burst from one
+			# card reads as that card doing something on its own.
+			var span := _hand_len * CARD_ASPECT * HAND_STEP * 2.0
+			for k in 5:
+				var from := Vector3(_hand_at.x + (float(k) - 2.0) * span,
+					CasinoWorld.CARD_Y + 0.10, _hand_at.z)
+				_confetti(from, 11, 2.6, 0.165 * world)
+			# SLOWER THAN THE LANE'S BURST WAS, and that is a consequence of moving
+			# the finale into the middle of the table. Out on the lane the gold flew
+			# into open felt and its speed was free; thrown from the ring's centre,
+			# a burst at 2.3 carries about 1.4 board units against a hole that is
+			# 1.35 across, so the last of it lands ON the chips — which is the one
+			# thing every object on this table is held not to do
+			# (tools/casino_verify.tscn's "NOTHING any event placed reached the
+			# chips" caught it). Contained, it also reads better: the gold stays on
+			# the hand it is celebrating instead of spraying across the board.
+			#
+			# The CONFETTI is what goes everywhere now, and it is allowed to because
+			# it is gone before the freeze ends.
+			# From the ROW'S CENTRE, not from the ace. The ace is the outermost
+			# card of a row that nearly fills the ring's hole, so it has the least
+			# clearance of anywhere on the table — bursting there fits almost no
+			# speed at all. The middle of the hand has the most, and it is also
+			# where the eye is: the flush completed, not the ace arrived.
+			var hub := Vector3(_hand_at.x, CasinoWorld.CARD_Y + 0.08, _hand_at.z)
+			_burst_fit(hub, 30, 1.15, 0.95, 0.085 * world, gold)
+			_burst_fit(hub, 12, 0.80, 0.70, 0.062 * world, white)
 			# ...and a smaller one over every other card, so the whole hand fires
-			# rather than one corner of it.
-			for i in 4:
-				_burst((_cards[i]["to"] as Vector3) + Vector3(0.0, 0.05, 0.0),
-					5, 1.2, 0.65, 0.055 * world, gold)
+			# rather than one corner of it. Off the SETTLED hand, not off `_cards`:
+			# the other four are lying on the felt now and `_cards` holds only the
+			# ace, so the old loop over indices 0..3 ran off the end of it.
+			for c: Dictionary in _hand:
+				if int(c["slot"]) == 4:
+					continue
+				_burst_fit((c["pos"] as Vector3) + Vector3(0.0, 0.05, 0.0),
+					5, 0.62, 0.65, 0.055 * world, gold)
 
 
 # How far from a button's centre anything this system places IN the play area — which
@@ -1863,6 +2855,59 @@ void fragment() {
 """
 	m.shader = sh
 	m.render_priority = 4
+	return m
+
+
+# CONFETTI. The one thing on this table that is not gold, and the reason it is a
+# second draw call rather than more sparks: a spark is additive and round, and
+# additive is exactly wrong here. Confetti has to read as PAPER — opaque, coloured,
+# and lighter or darker than the felt depending on which way it is facing — and an
+# additive quad over green felt turns every colour into a pale wash of itself.
+#
+# It tumbles without any 3D geometry. The quad is camera-facing like a spark, but
+# INSTANCE_CUSTOM carries a rotation and a SQUASH: the squash is cos of the piece's
+# own tumble angle, so the rectangle narrows to a line and opens out again, which is
+# what a flake of paper turning over actually does on screen. One quad, two numbers,
+# and no per-piece mesh.
+static func _confetti_material() -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, shadows_disabled, fog_disabled,
+	depth_draw_never;
+varying vec2 quv;
+varying float shade;
+void vertex() {
+	// x: size, y: spin (radians), z: tumble (-1..1, its facing)
+	float sz = INSTANCE_CUSTOM.x;
+	float sp = INSTANCE_CUSTOM.y;
+	float tumble = INSTANCE_CUSTOM.z;
+	vec2 uv = UV;
+	// A rectangle, not a square: confetti is cut from a strip.
+	uv.x *= 0.58;
+	// Squashed by how far the piece has turned away from the camera, then spun.
+	uv.x *= abs(tumble);
+	vec2 r = vec2(uv.x * cos(sp) - uv.y * sin(sp), uv.x * sin(sp) + uv.y * cos(sp));
+	vec4 vp = MODELVIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0);
+	vp.xy += r * sz;
+	POSITION = PROJECTION_MATRIX * vp;
+	quv = UV;
+	// The face turned toward the light is brighter than its back, which is the only
+	// cue that says a flat piece of paper is rotating rather than flickering.
+	// The back of a piece is only a little darker than its front. At 0.62 half the
+	// confetti rendered as brown flecks: these are small, fast-moving shapes seen
+	// against green felt, and a shade that would be right on a large surface just
+	// makes them muddy.
+	shade = tumble > 0.0 ? 1.0 : 0.80;
+}
+void fragment() {
+	ALBEDO = COLOR.rgb * shade;
+	ALPHA = COLOR.a;
+}
+"""
+	m.shader = sh
+	m.render_priority = 3
 	return m
 
 

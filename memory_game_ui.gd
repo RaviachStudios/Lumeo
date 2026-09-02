@@ -96,15 +96,31 @@ const FAR_KEY := "Cyan"
 #
 # As authored, neighbouring frames are 2.15 apart centre-to-centre for a frame
 # DIAMETER of 2.0 — a 0.15 gap, which reads as five discs crowding each other.
-# Pushing the button PARENTS out by 15% (radius 1.83 -> 2.10) opens that to 0.47
+# Pushing the button PARENTS out by 32% (radius 1.83 -> 2.42) opens that to 0.84
 # without touching a single vertex: the buttons keep their authored size, shape,
 # proportions and orientation, and only their distance from the middle changes.
 #
-# This is the MEDIUM default and it is a board-spec value (`_spacing`): Hard's
-# hexagon is authored at the same crowded 2.15 and takes the same push, but Easy's
-# triangle is already authored 2.45 apart — the gap the other two only reach after
-# being pushed — so it overrides this to 1.0 and is used exactly as authored.
-const SPACING_SCALE := 1.15
+# THE NUMBER IS CHOSEN SO THAT ALL THREE BOARDS OPEN TO THE SAME GAP. Every board
+# is authored crowded and every board is pushed to a 0.82-0.84 clear space between
+# neighbouring frames — Medium and Hard from 2.15 at 1.32, Easy from 2.4501 at 1.15
+# (easy_game_ui.gd). One rule, three boards: five buttons, six buttons and three
+# buttons all read as separate playing positions rather than as one cluster, and a
+# player moving between difficulties sees the same spacing.
+#
+# IT IS PAID FOR IN ON-SCREEN BUTTON SIZE, and there is no way for it not to be.
+# `_fit_camera` frames the board's own span into the band the HUD leaves it, so
+# spreading the buttons over a wider board makes every button smaller in the frame:
+# each one loses about 9 % of its width, and the clear space between two of them
+# gains about 60 %. That is the trade this constant IS — nothing about it can be
+# had by scaling the buttons down instead, which would lose the size and gain
+# nothing, and the fit is what stops it costing anything else (see
+# tools/play_fit.tscn, which re-proves at every aspect that nothing is cropped or
+# covered at this spacing).
+#
+# It is a board-spec value (`_spacing`): this is the MEDIUM default, Hard's hexagon
+# is authored at the same crowded 2.15 and takes the same push, and Easy overrides
+# it because its triangle starts from somewhere else.
+const SPACING_SCALE := 1.32
 
 # ---------------------------------------------------------------------------
 # Jade
@@ -1553,6 +1569,25 @@ func background_milestone(round_no: int) -> float:
 # Same contract, same returned freeze in seconds.
 func background_celebration(level_no: int) -> float:
 	return BackgroundScenes.note_finale(_bg_scene, _bg_id, level_no)
+
+# ...and whether whatever that started is still on the screen. The freeze is
+# released on the longer of the duration it asked for and this, so a celebration
+# that runs a little past its own estimate is not cut off mid-animation by a clock
+# that was started before it began. False for every background that does not
+# animate past its own duration, which is all of them but the Royal Casino's.
+func background_busy() -> bool:
+	return BackgroundScenes.celebration_busy(_bg_scene, _bg_id)
+
+# The part of the screen the background asks a celebration banner to keep off — in
+# THIS CONTROL's coordinates, which are the game's, because the board's SubViewport
+# is the same size as the board and sits at its position. Empty for every background
+# that does not ask. See BackgroundScenes.focus_rect.
+func background_focus_rect() -> Rect2:
+	if _cam == null or _vp == null:
+		return Rect2()
+	var r := BackgroundScenes.focus_rect(_bg_scene, _bg_id, _cam, Vector2(_vp.size))
+	return r if not r.has_area() else Rect2(r.position + position, r.size)
+
 func set_overlay_compact(_numeral_scale: float, _show_dot: bool) -> void: pass
 func set_static_preview(_on: bool) -> void: pass
 func set_preview_paused(_paused: bool) -> void: pass

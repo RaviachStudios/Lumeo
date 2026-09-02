@@ -111,7 +111,11 @@ func _check_spacing() -> void:
 			even = false
 	_ok(even, "all six still on one circle (equal angular spacing kept)", "radii %s" % str(radii))
 	var grew := r / AUTHORED_RADIUS
-	_ok(grew >= 1.10 and grew <= 1.15, "radius grew 10-15%%", "%.1f%% (%.3f -> %.3f)" % [
+	# The push is chosen so that EVERY board — five buttons, six or three — opens to
+	# the same clear space between neighbouring frames, from three different authored
+	# starts. It was 10-15% while 0.47 was the target; the target is 0.84 now. The
+	# band below is the gap itself, which is the thing the number exists for.
+	_ok(grew >= 1.28 and grew <= 1.36, "radius grew ~32%%", "%.1f%% (%.3f -> %.3f)" % [
 		(grew - 1.0) * 100.0, AUTHORED_RADIUS, r])
 	var min_gap := INF
 	for i in ORDER.size():
@@ -122,6 +126,10 @@ func _check_spacing() -> void:
 	var authored_gap := AUTHORED_RADIUS - FRAME_RADIUS * 2.0    # hexagon: side = radius
 	_ok(min_gap > authored_gap * 2.0, "neighbouring frames have real breathing room",
 		"gap %.3f, was %.3f" % [min_gap, authored_gap])
+	# ...and it is the SAME breathing room every other board gets. One rule, three
+	# boards: see MemoryGameUI.SPACING_SCALE and EasyGameUI.EASY_SPACING.
+	_ok(min_gap > 0.78 and min_gap < 0.90, "...the same gap as every other board",
+		"gap %.3f" % min_gap)
 	for key: String in ORDER:
 		var aabb := _dev.surface_mesh(key).get_aabb()
 		_ok(absf(aabb.size.x - 1.49) < 0.001 and absf(aabb.size.y - 0.28) < 0.001,

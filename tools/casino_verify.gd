@@ -20,6 +20,8 @@ extends Node
 const CHIPS := preload("res://chip_buttons.gd")
 # shop_screen.gd carries no class_name, so its catalog is reached through a preload.
 const SHOP := preload("res://shop_screen.gd")
+# ...and neither does game.gd, which owns the ceiling the finale has to fit inside.
+const GAME := preload("res://game.gd")
 
 # The chip asset's own contract, from APP IDEAS/Simon/Skins/Chips/README.md.
 const CHIP_H := 0.324
@@ -203,7 +205,23 @@ func _wiring() -> void:
 	if scene != null:
 		_ok(scene.get_node_or_null("Felt") != null, "it has a felt")
 		_ok(scene.get_node_or_null("EventsRoot") != null, "...and an event system")
+		_ok(scene.get_node_or_null("Croupier") != null, "...and a croupier")
 		scene.free()
+
+	# THE FIVE-SECOND CEILING ON THE ROYAL FLUSH, asserted across the two files that
+	# have to agree about it. The round is frozen for every second of the finale —
+	# the ace's flight, the slam, the burst and the whole dance — and game.gd will
+	# not hold it past CELEBRATION_MAX whatever the table asks for, so a celebration
+	# longer than the cap is not a longer celebration: it is one that gets cut off.
+	var freeze := CasinoEvents.T_FLUSH + CasinoEvents.HOLD
+	_ok(freeze <= GAME.CELEBRATION_MAX,
+			"the Royal Flush fits inside the game's own ceiling",
+			"%.2f s of a %.2f s cap" % [freeze, GAME.CELEBRATION_MAX])
+	_ok(freeze > 3.0, "...and is long enough to be a celebration", "%.2f s" % freeze)
+	# The completion hook the freeze is actually released on. Every other background
+	# answers false — see BackgroundScenes.celebration_busy.
+	_ok(not BackgroundScenes.celebration_busy(null, THEME),
+			"an absent table is not busy")
 
 
 # --------------------------------------------------------------- the boards
@@ -342,6 +360,109 @@ func _events(dev: MemoryGameUI, board_name: String) -> void:
 	else:
 		_ok(true, "%s: no rail on this pose, and the felt runs to the dark" % board_name)
 
+	# ------------------------------------------------------- the croupier
+	# He is the one thing on this table that is neither temporary nor dressing: a
+	# pair of arms coming down into the top of the frame, close enough to the camera
+	# to be the size real hands would be. The rules they are held to are the table's
+	# own — clear of the chips at rest, entering from off the top edge, and BIG —
+	# and they refuse to be drawn at all on a pose that cannot give them those
+	# (CasinoDealer.place), which is why these are conditional on that refusal
+	# rather than on the hands always being there.
+	var dealer := world.get_node_or_null("Croupier")
+	_ok(dealer != null, "%s: the croupier exists" % board_name)
+	if dealer != null and bool(dealer.call("placed")):
+		var hl := float(dealer.call("hand_len"))
+		var box: Rect2 = dealer.call("screen_rect", cam, vps, 0.0)
+		var hands: Rect2 = dealer.call("hands_screen_rect", cam, vps, 0.0)
+		print("   (hands %.2f long -> arms span screen rows %.0f..%.0f, hand %.0f px)"
+				% [hl, box.position.y, box.end.y, hands.size.y])
+		# THE HANDS ARE THE RIGHT SIZE NEXT TO THE CARDS THEY DEAL. A real hand is
+		# a little over twice a playing card, and the card is the one object on this
+		# table whose real size the player already knows — get this wrong and the
+		# hand reads as a toy or as a giant whatever else is done to it.
+		var card := float(ev.get("_hand_len"))
+		# 2.1 is the real ratio; the floor is lower than that because the band caps
+		# the hand on the board whose cards are biggest (see HAND_MAX_CHIPS).
+		_ok(hl > card * 1.30 and hl < card * 3.4,
+				"%s: the hands are a hand's size against the cards" % board_name,
+				"%.2f against a %.2f card (%.1fx)" % [hl, card, hl / maxf(card, 0.01)])
+		# ...and BIG ON SCREEN, which is the whole reason this is a pair of hands
+		# and not the standing figure it replaced.
+		# The HAND's box and not the arms', which run off the top of the frame.
+		_ok(hands.size.y >= vps.y * CasinoDealer.MIN_HAND_SCREEN * 0.999,
+				"%s: ...and big enough to be a close-up" % board_name,
+				"%.0f px of %d" % [hands.size.y, int(vps.y)])
+		# THEY COME IN FROM THE TOP EDGE. The arms are cut by it, which is what says
+		# the dealer is sitting outside the frame rather than standing in it.
+		_ok(box.position.y < 1.0,
+				"%s: the arms enter from off the top of the frame" % board_name,
+				"highest row %.1f" % box.position.y)
+		# ...and at REST nothing of them reaches the chips. The deal is the one
+		# exemption and it is covered by the freeze; see _run's fourth clause.
+		_ok(box.end.y < top_px,
+				"%s: nothing of them reaches the chips at rest" % board_name,
+				"lowest %.1f vs chips %.1f" % [box.end.y, top_px])
+		# The cards have to come OUT of a hand: the release point is inside the box
+		# the hands cover, not a spot on the felt that happens to be nearby.
+		var slot: Vector3 = ev.call("_hand_pos", ev.get("_hand_at"), card, 0)
+		var rp: Vector3 = dealer.call("release_point", slot)
+		var rs := cam.unproject_position(rp)
+		_ok(rp.y > CasinoWorld.CHIP_TOP,
+				"%s: a card leaves the fingers above the table" % board_name,
+				"y %.2f" % rp.y)
+		_ok(rp.distance_to(slot) > card,
+				"%s: ...and far enough out for the card to travel" % board_name,
+				"%.2f from the slot" % rp.distance_to(slot))
+		_ok(rs.y < top_px + vps.y * 0.30,
+				"%s: ...from inside the frame" % board_name, "row %.0f" % rs.y)
+		# THE IDLE BREATH is the one animation that runs while the player is
+		# actually playing — the deal and the celebration both freeze the round —
+		# so it is the one that may never put a finger over a button. Four seconds
+		# of it at the rate the table redraws at, measured on every frame.
+		var idle_worst := -1e9
+		for _k in 60:
+			dealer.call("idle", 1.0 / 15.0)
+			for p: Vector3 in (dealer.call("silhouette") as PackedVector3Array):
+				if not cam.is_position_behind(p):
+					idle_worst = maxf(idle_worst, cam.unproject_position(p).y)
+		dealer.call("rest")
+		_ok(idle_worst < top_px,
+				"%s: ...and the idle breath never reaches the chips" % board_name,
+				"lowest %.1f vs chips %.1f" % [idle_worst, top_px])
+		# ...AND NEITHER DOES THE DEAL. The freeze excuses the CARD's flight across
+		# the ring; it does not excuse the hands, and a player watching a deal is
+		# looking at the buttons he is about to have to press. Every phase of the
+		# deal, aimed at every slot this board deals into, held to the same chip row
+		# the resting pose is. This is the check that decides how far forward the
+		# clip may reach — get it wrong in Blender and it fails here, not in a
+		# screenshot somebody happens to look at.
+		var deal_worst := -1e9
+		for si in 5:
+			var s3: Vector3 = ev.call("_hand_pos", ev.get("_hand_at"), card, si)
+			for k in 41:
+				dealer.call("deal", -1.0 + 2.0 * float(k) / 40.0, s3)
+				for p: Vector3 in (dealer.call("silhouette") as PackedVector3Array):
+					if not cam.is_position_behind(p):
+						deal_worst = maxf(deal_worst, cam.unproject_position(p).y)
+		dealer.call("rest")
+		_ok(deal_worst < top_px,
+				"%s: ...and the deal itself never reaches the chips" % board_name,
+				"lowest %.1f vs chips %.1f" % [deal_worst, top_px])
+		# THE PINCH MEETS THE DECK. The whole hand-off rests on this one number: the
+		# frame the card changes owner is the frame the fingers are ON the deck's top
+		# card, so there is nothing to interpolate across and nothing to hide. It is
+		# authored in Blender and asserted here, because a re-export that moved the
+		# arm a centimetre would otherwise show up only as a card twitching.
+		# The card is taken WHILE IT IS STILL ON THE DECK — the top card pushed out
+		# under the deck thumb, which is how a card leaves a deck. Held to under a
+		# card's length (a hand is 2.1 cards), so the fingers close on something
+		# that is still touching the deck rather than on a gap beside it.
+		var pg := float(dealer.call("pickup_gap"))
+		_ok(pg < 0.48,
+				"%s: the fingers close on the card while it is still on the deck"
+				% board_name,
+				"%.3f hand lengths from the deck, a card is 0.48" % pg)
+
 	# Every event, plus the finale, at 60 Hz.
 	var names := ["community", "roulette", "cascade", "flip", "deal", "lights"]
 	var worst := -1e9
@@ -386,21 +507,219 @@ func _events(dev: MemoryGameUI, board_name: String) -> void:
 			"%d of 6" % first_six.size())
 
 	# ...and the Royal Flush.
+	# THE HAND, built across the cycle before the flush completes it. Dealt here in
+	# the order the player would earn it, so what the finale lands on is what a real
+	# game would have put there.
+	var low: float = ev.call("start_hand", 3)
+	_ok(low > 0.0, "%s: level 3 deals the 10, J and Q" % board_name, "%.2f s" % low)
+	# IT IS A THROW, not a card appearing near where it will end up. The distance is
+	# measured against the play area's own radius, so "across the table" means the
+	# same thing on a three-chip triangle as on a six-chip ring.
+	#
+	# This is also the regression guard for the bug that made the whole deal
+	# invisible: the cards used to be appended by `start_hand` itself and then wiped
+	# by `_begin`'s `_clear_all`, so `_cards` was EMPTY here and every frame of the
+	# flight was thrown away. An empty list fails the first of these outright.
+	var deal_cards: Array = ev.get("_cards")
+	_ok(deal_cards.size() == 3,
+			"%s: ...and all three are on the table before it starts" % board_name,
+			"%d" % deal_cards.size())
+	if deal_cards.size() == 3:
+		var d0: Dictionary = deal_cards[0]
+		var start: Vector3 = d0["from"]
+		var trip := start.distance_to(d0["to"] as Vector3)
+		var reach := float(ev.get("_reach"))
+		# OUT OF HIS FINGERTIPS, exactly — the same point the arm is animated
+		# through, not a spot on the felt that happens to be near it. Identity and
+		# not proximity: `release_point` is evaluated twice, once here and once by
+		# the pose, or the check is worthless.
+		if dealer != null and bool(dealer.call("placed")):
+			_ok(start.is_equal_approx(dealer.call("release_point", d0["to"])),
+					"%s: ...out of the croupier's hand" % board_name, str(start))
+		# ...and from CLEAR of the play area, which for a card means one of the two
+		# things the flight rule means: outside the ring of buttons, or above the
+		# height a card has to be to pass over one. It cannot be the first alone —
+		# the hand reaches IN to deal, and on Easy and Medium the row it deals into
+		# is well inside the ring, so the fingers let go over the felt every time.
+		# What makes that legal is the height, and it is the same constant the
+		# flight itself is held to.
+		var out := Vector2(start.x, start.z).length()
+		_ok(out > reach or start.y > CasinoEvents.FLY_CLEAR,
+				"%s: ...from clear of the play area" % board_name,
+				"%.2f out of a %.2f reach, at y %.2f" % [out, reach, start.y])
+		_ok(trip > float(ev.get("_hand_len")),
+				"%s: ...and thrown, not placed" % board_name,
+				"%.2f units, card %.2f" % [trip, float(ev.get("_hand_len"))])
+		# One after another, and far enough apart to read as three throws.
+		# ONE CARD AT A TIME, and strictly: the gap between two cards has to be
+		# longer than the whole deal animation, or one arm is dealing two cards at
+		# once and the second appears from nowhere while the first is still in the
+		# air.
+		var gap := float(deal_cards[1]["in_at"]) - float(deal_cards[0]["in_at"])
+		_ok(gap >= CasinoEvents.DEAL_WINDUP + CasinoEvents.DEAL_FOLLOW,
+				"%s: ...one card at a time, the arm back before the next" % board_name,
+				"%.2f s apart, the deal is %.2f long"
+				% [gap, CasinoEvents.DEAL_WINDUP + CasinoEvents.DEAL_FOLLOW])
+	# ...and the deal counts toward THE ONE THAT MATTERS below, exactly as every
+	# other event does. Written without capturing this, the two deals were the only
+	# things on this table nothing checked — and the first version of the run-in
+	# flew both of them straight over a chip.
+	var lo_run := await _run(ev, cam, low, dev._centres)
+	if lo_run["worst"] > worst:
+		worst = lo_run["worst"]
+		worst_which = "hand deal (%s)" % lo_run["worst_mesh"]
+	_ok(_hand_ranks(ev) == [0, 1, 2],
+			"%s: ...and they stay on the table" % board_name, str(_hand_ranks(ev)))
+	_ok(float(lo_run["dealer_moved"]) > 0.01 or not bool(dealer.call("placed")),
+			"%s: the croupier's hand dealt them" % board_name,
+			"it moved %.3f" % float(lo_run["dealer_moved"]))
+	print("   (deal: %d card-frames crossed the ring, lowest at y %.2f of a %.2f floor)"
+			% [int(lo_run["flew"]), float(lo_run["low_fly"]),
+			CasinoEvents.FLY_CLEAR])
+	var king: float = ev.call("start_hand", 6)
+	_ok(king > 0.0, "%s: level 6 deals the King" % board_name, "%.2f s" % king)
+	var k_run := await _run(ev, cam, king, dev._centres)
+	if k_run["worst"] > worst:
+		worst = k_run["worst"]
+		worst_which = "king deal (%s)" % k_run["worst_mesh"]
+	_ok(_hand_ranks(ev) == [0, 1, 2, 3],
+			"%s: ...and the row is 10 J Q K" % board_name, str(_hand_ranks(ev)))
+	# Nothing happens on the levels between: the hand is a cycle, not a per-round
+	# flourish, and dealing twice for one milestone would put six cards in a row.
+	_ok(ev.call("start_hand", 4) == 0.0, "%s: level 4 deals nothing" % board_name)
+	_ok(ev.call("start_hand", 6) == 0.0, "%s: and level 6 does not deal twice" % board_name)
+
 	var fsecs: float = ev.call("start_flush", 8)
 	_ok(fsecs > 4.0, "%s: level 8 deals the Royal Flush" % board_name, "%.2f s" % fsecs)
-	var ranks := _ranks(ev)
+	# The ACE is the only card the finale itself plays — the other four are already
+	# lying on the felt — so the row it completes is the hand plus that one card.
+	var ranks := _hand_ranks(ev) + _ranks(ev)
 	_ok(ranks == [0, 1, 2, 3, 4],
 			"%s: the hand is 10 J Q K A, in order" % board_name, str(ranks))
-	_ok(int(ev.get("_cards")[4]["flip_at"] * 100) == int(CasinoEvents.RF_SLAM * 100),
-			"%s: the fifth card is held back to the slam" % board_name)
-	var rf := await _run(ev, cam, fsecs, dev._centres)
+	_ok(int(ev.get("_cards")[0]["flip_at"] * 100) == int(CasinoEvents.RF_SLAM * 100),
+			"%s: the ace is held back to the slam" % board_name)
+	var rf := await _run(ev, cam, fsecs, dev._centres, CasinoEvents.RF_DANCE)
 	if rf["worst"] > worst:
 		worst = rf["worst"]
-		worst_which = "royal flush"
+		worst_which = "royal flush (%s)" % rf["worst_mesh"]
 	_ok(rf["faces"] >= 5, "%s: all five cards were turned face up" % board_name,
 			"%d" % rf["faces"])
+	_ok(rf["confetti"] > 30, "%s: the royal flush threw confetti" % board_name,
+			"%d" % rf["confetti"])
+	# ...and it is all down before the player is given the board back. This is what
+	# makes confetti-over-a-chip acceptable at all; see the third clause in _run.
+	_ok(float(rf["conf_last"]) < fsecs,
+			"%s: the confetti is gone before the freeze ends" % board_name,
+			"last at %.2f s vs freeze %.2f s" % [float(rf["conf_last"]), fsecs])
+	_ok(_hand_ranks(ev).is_empty(),
+			"%s: and the table was cleared for the next hand" % board_name,
+			str(_hand_ranks(ev)))
 	_ok(rf["sparks"] > 20, "%s: the burst threw gold" % board_name, "%d" % rf["sparks"])
+	# THE DANCE. Two claims, and neither is "it is funny": that it HAPPENS — a
+	# celebration whose dancer stands still is the `_emit` bug again — and that it
+	# never puts any part of him over the play area, measured on his real poses.
+	if bool(dealer.call("placed")):
+		_ok(float(rf["dealer_moved"]) > 0.15,
+				"%s: the croupier's hands celebrated" % board_name,
+				"%.2f units of travel" % float(rf["dealer_moved"]))
+		# THE DANCE ONLY EVER GOES UP, and this is where that is proved rather than
+		# read off the code: through every frame of the celebration nothing on the
+		# dealer is drawn as low as the chips — so it can cover neither the six
+		# buttons nor the royal flush lying in the middle of the table.
+		_ok(float(rf["dealer_worst"]) < top_px,
+				"%s: ...without a hand reaching the chips" % board_name,
+				"lowest %.1f vs chips %.1f" % [float(rf["dealer_worst"]), top_px])
+		_ok(CasinoEvents.RF_DANCE + CasinoEvents.RF_DANCE_LEN
+				<= CasinoEvents.T_FLUSH + 0.0001,
+				"%s: ...and stopped before the freeze did" % board_name,
+				"dance ends %.2f, event ends %.2f" % [CasinoEvents.RF_DANCE
+				+ CasinoEvents.RF_DANCE_LEN, CasinoEvents.T_FLUSH])
 	_ok(not bool(ev.call("active")), "%s: the Royal Flush cleaned itself up" % board_name)
+
+	# THE CARD IS IN HIS HAND BEFORE IT IS THROWN, on a deal of its own — the flush
+	# has just cleared the table, so this starts a fresh cycle and nothing after it
+	# reads the hand. Stepped to just before the first release and read back out of
+	# the live MultiMesh: there has to be a card, and it has to be AT THE PINCH. A
+	# card that appears at the release, however good the throw is afterwards, is a
+	# card that came out of the air, and that is the thing the croupier exists to
+	# stop happening.
+	if dealer != null and bool(dealer.call("placed")):
+		ev.call("start_hand", 3)
+		var cards: Array = ev.get("_cards")
+		if not cards.is_empty():
+			# THE WHOLE LIFE OF ONE CARD, frame by frame out of the live MultiMesh:
+			# lying on the deck, drawn off it, carried in the fingers, thrown. The
+			# window stops before the second card's turn comes round, so exactly one
+			# card is on the table and instance 0 is unambiguously it.
+			var in0 := float(cards[0]["in_at"])
+			var mark := in0 + CasinoEvents.HAND_FLIGHT + 0.02
+			var cmm := ev.get_node_or_null("Cards") as MultiMeshInstance3D
+			var deck: Vector3 = dealer.call("deck_point")
+			var pin_t := in0 - CasinoEvents.DEAL_WINDUP 				+ CasinoEvents.DEAL_WINDUP * float(dealer.call("pickup_frac"))
+			# FOLLOW THE ONE CARD, nearest-neighbour, starting from the deck. The
+			# Cards mesh also carries whatever is already lying on the table, so
+			# instance 0 is not the dealt card and reading it was measuring a card
+			# that never moves.
+			var deck_xf: Transform3D = dealer.call("deck_card")
+			var first := Vector3.INF
+			var prev := Vector3.INF
+			var jump := 0.0
+			var at_pinch := -1.0
+			var frames := 0
+			var stepped := 0.0
+			while stepped < mark:
+				var step := minf(1.0 / 60.0, mark - stepped)
+				ev.call("tick", step)
+				stepped += step
+				if cmm == null or cmm.multimesh.instance_count < 1:
+					continue
+				var anchor := deck_xf.origin if prev == Vector3.INF else prev
+				var cp := Vector3.INF
+				var near := 1e9
+				for ii in cmm.multimesh.instance_count:
+					var q := cmm.multimesh.get_instance_transform(ii).origin
+					if q.distance_to(anchor) < near:
+						near = q.distance_to(anchor)
+						cp = q
+				if cp == Vector3.INF:
+					continue
+				frames += 1
+				if first == Vector3.INF:
+					first = cp
+				if prev != Vector3.INF:
+					jump = maxf(jump, prev.distance_to(cp))
+				prev = cp
+				if at_pinch < 0.0 and stepped >= pin_t:
+					at_pinch = cp.distance_to(
+						(dealer.call("grip") as Transform3D).origin)
+			var cl := float(ev.get("_hand_len"))
+			_ok(frames > 0, "%s: the card is drawn before it is thrown" % board_name)
+			if frames > 0:
+				# IT COMES OFF THE DECK. The first frame it exists it is on the deck
+				# in the other hand — not in the dealing hand, and not in the air.
+				_ok(first.distance_to(deck) < cl * 1.2,
+						"%s: ...starting on the deck in his other hand" % board_name,
+						"%.2f from the deck, card is %.2f" % [first.distance_to(deck), cl])
+				# ...AND IT NEVER JUMPS. One frame to the next, across the pickup and
+				# across the release: this is the check that "no teleportation" is,
+				# and it cannot be satisfied by a card that is re-parented anywhere.
+				_ok(jump < cl * 0.75,
+						"%s: ...and never teleports, deck to hand to table" % board_name,
+						"worst frame-to-frame %.3f of a %.2f card" % [jump, cl])
+				# ...and on the pickup frame it is IN THE PINCH, to the millimetre.
+				_ok(at_pinch >= 0.0 and at_pinch < cl * 0.35,
+						"%s: ...taken by the fingers, not met by them" % board_name,
+						"%.3f from the pinch at the pickup" % at_pinch)
+				# ...AND IT LANDED ON GAMEPLAY'S OWN MARK. This is what stops every
+				# check above being satisfied by a card that never left the deck,
+				# and it is the one that says the dealer is a visual layer: the slot
+				# is chosen by the game, and the hand delivers the card to it.
+				var mark_to: Vector3 = cards[0]["to"]
+				_ok(prev.distance_to(mark_to) < cl * 0.5,
+						"%s: ...and landed on the slot gameplay chose" % board_name,
+						"%.2f from the slot, card is %.2f"
+						% [prev.distance_to(mark_to), cl])
+		ev.call("stop")
 
 	# THE ONE THAT MATTERS.
 	_ok(worst < top_px, "%s: NOTHING any event placed reached the chips" % board_name,
@@ -431,23 +750,51 @@ func _clear_of_chips(p: Vector3, centres: PackedVector2Array) -> bool:
 	return true
 
 
-func _run(ev: Node, cam: Camera3D, secs: float, centres: PackedVector2Array) -> Dictionary:
+# `dance_from` is when the CELEBRATION starts, or -1 for a run that has none. The
+# croupier's clearance is only measured after it: during a deal his hand comes down
+# over the play area on purpose (that is the deal), and the claim being checked is
+# about the celebration, which may not.
+func _run(ev: Node, cam: Camera3D, secs: float, centres: PackedVector2Array,
+		dance_from: float = -1.0) -> Dictionary:
 	var worst := -1e9
 	var moved := false
 	var faces: Dictionary = {}
 	var sparks := 0
+	var confetti := 0
+	var conf_last := -1.0
+	# How many card-frames crossed the ring in the air, and the lowest any of them
+	# got while it was over a chip. See the fourth clause below.
+	var flew := 0
+	var low_fly := 1e9
+	# THE CROUPIER, watched exactly the way everything else here is: his transforms
+	# are read back out of his MultiMesh every frame, not recomputed. Two questions,
+	# and the first is the one that catches a whole class of bug this file has
+	# caught before (`_emit` was dead code for a build): DID HE ACTUALLY MOVE. The
+	# second is the table's own rule — nothing of him is ever drawn as low as the
+	# chips, through the DANCE's real poses and not through a bounding box.
+	var dnode := ev.get("_dealer") as Node3D
+	var d_home: PackedVector3Array = PackedVector3Array()
+	var d_moved := 0.0
+	var d_worst := -1e9
+	var worst_mesh := ""
+	var elapsed := 0.0
 	var first: Array[Vector3] = []
 	var steps := int(ceilf((secs + 1.2) * 60.0))
 	for _i in steps:
 		if not bool(ev.call("tick", 1.0 / 60.0)):
 			break
-		for nm: String in ["Cards", "Chips", "Sparks", "Shadows"]:
+		elapsed += 1.0 / 60.0
+		for nm: String in ["Cards", "Chips", "Sparks", "Shadows", "Confetti"]:
 			var mmi := ev.get_node_or_null(nm) as MultiMeshInstance3D
 			if mmi == null:
 				continue
 			var mm := mmi.multimesh
 			if nm == "Sparks":
 				sparks = maxi(sparks, mm.instance_count)
+			if nm == "Confetti":
+				confetti = maxi(confetti, mm.instance_count)
+				if mm.instance_count > 0:
+					moved = true
 			if nm == "Sparks" and mm.instance_count > 0:
 				moved = true              # the lighting event's only moving parts
 			for k in mm.instance_count:
@@ -458,9 +805,39 @@ func _run(ev: Node, cam: Camera3D, secs: float, centres: PackedVector2Array) -> 
 				# every card, chip and the ball are held to. The jackpot lights are
 				# deliberately all over the table, and are held instead to the WORLD
 				# rule they are emitted under: outside every button's hit disc.
-				if not _clear_of_chips(p, centres):
-					if not cam.is_position_behind(p):
-						worst = maxf(worst, cam.unproject_position(p).y)
+				# CONFETTI IS THE THIRD CLAUSE, and it is allowed over a chip for a
+				# reason the other two do not have: the Royal Flush FREEZES the
+				# round for its whole length, so while confetti is in the air there
+				# is no input for it to obstruct. That exemption is only worth
+				# anything if the confetti is actually gone by the time the player
+				# gets the board back, which is asserted separately below — not
+				# assumed from the two constants that happen to make it true.
+				# ...AND A FOURTH CLAUSE: a card IN FLIGHT during an event that
+				# FREEZES the round. The croupier throws from behind the table and
+				# the hand is in the middle of it, so a dealt card crosses the ring
+				# — and it is allowed to on exactly the terms the confetti is: for
+				# every frame of the flight `freezes()` is true, so there is no
+				# sequence playing and no press to obstruct.
+				#
+				# It is bounded where the confetti's exemption is not. The card must
+				# be FLY_CLEAR above the felt — most of a chip's own height above
+				# the chip it is over — so it reads as a card passing OVER a button
+				# rather than through one, and its contact shadow gets no exemption
+				# at all: SHADOW_GONE is FLY_CLEAR, so a card high enough to be
+				# excused here is a card whose shadow is not drawn.
+				if nm != "Confetti" and not _clear_of_chips(p, centres):
+					var flying: bool = nm == "Cards" \
+						and p.y > CasinoEvents.FLY_CLEAR and bool(ev.call("freezes"))
+					if flying:
+						flew += 1
+						low_fly = minf(low_fly, p.y)
+					elif not cam.is_position_behind(p):
+						var py := cam.unproject_position(p).y
+						if py > worst:
+							worst = py
+							worst_mesh = "%s at %s" % [nm, p]
+				if nm == "Confetti" and mm.instance_count > 0:
+					conf_last = maxf(conf_last, elapsed)
 				if nm == "Chips" and mm.instance_count > 0:
 					moved = true
 				if nm == "Cards":
@@ -470,6 +847,20 @@ func _run(ev: Node, cam: Camera3D, secs: float, centres: PackedVector2Array) -> 
 						first.append(p)
 					elif p.distance_to(first[k]) > 0.02:
 						moved = true
+		# THE CROUPIER, read back out of his own posed rig — every joint, knuckle
+		# and fingertip of both hands, in world space, on every frame.
+		if dnode != null and bool(dnode.call("placed")):
+			var pts: PackedVector3Array = dnode.call("silhouette")
+			for k in pts.size():
+				var q := pts[k]
+				if d_home.size() <= k:
+					d_home.append(q)
+				else:
+					d_moved = maxf(d_moved, q.distance_to(d_home[k]))
+				if dance_from < 0.0 or elapsed < dance_from:
+					continue
+				if not cam.is_position_behind(q):
+					d_worst = maxf(d_worst, cam.unproject_position(q).y)
 		var ball := ev.get_node_or_null("Ball") as MeshInstance3D
 		if ball != null and ball.visible:
 			moved = true
@@ -477,7 +868,18 @@ func _run(ev: Node, cam: Camera3D, secs: float, centres: PackedVector2Array) -> 
 			if not cam.is_position_behind(bp):
 				worst = maxf(worst, cam.unproject_position(bp).y)
 		await get_tree().process_frame
-	return {"worst": worst, "moved": moved, "faces": faces.size(), "sparks": sparks}
+	return {"worst": worst, "moved": moved, "faces": faces.size(), "sparks": sparks,
+		"confetti": confetti, "conf_last": conf_last, "worst_mesh": worst_mesh,
+		"flew": flew, "low_fly": low_fly, "dealer_moved": d_moved,
+		"dealer_worst": d_worst}
+
+
+# The SETTLED hand — the cards lying in the middle of the table between milestones.
+func _hand_ranks(ev: Node) -> Array:
+	var out: Array = []
+	for c in ev.get("_hand"):
+		out.append(int(c["rank"]))
+	return out
 
 
 func _ranks(ev: Node) -> Array:

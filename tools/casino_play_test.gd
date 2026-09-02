@@ -7,6 +7,9 @@ extends Node
 #   * every third completed round starts a casino event, and THE GAME IS NOT
 #     FROZEN — the sequence plays back, presses register, the round advances, all
 #     while cards are sliding across the back of the table;
+#   * EXCEPT rounds 3 and 6 of every eight, where the croupier deals into the hand
+#     in the MIDDLE of the table and the round is frozen for the length of the
+#     throw — the exception that lets those cards cross the ring at all;
 #   * level 8 IS frozen, for the whole Royal Flush, and taps during it do nothing;
 #   * and the "ROYAL FLUSH!" banner is game.gd's own, drawn over the whole screen,
 #     so nothing that photographs the board's own viewport can see it — this is the
@@ -113,6 +116,9 @@ func _ready() -> void:
 		# is what that hook did.
 		if round_no == 8:
 			await _watch_frozen()
+		elif round_no % CasinoEvents.HAND_CYCLE == CasinoEvents.HAND_AT_LOW \
+				or round_no % CasinoEvents.HAND_CYCLE == CasinoEvents.HAND_AT_KING:
+			await _watch_deal(round_no)
 		elif round_no % 3 == 0:
 			await _watch_free(round_no)
 		else:
@@ -146,6 +152,71 @@ func _watch_free(round_no: int) -> void:
 	_ok(_game.level > lvl or _game._state == "playback" or _game._state == "input",
 		"round %d: the game advanced while the event ran" % round_no,
 		"level %d -> %d, state %s" % [lvl, _game.level, _game._state])
+
+
+# ROUNDS 3 AND 6 — the croupier dealing into the hand, which is the OTHER thing on
+# this table that stops the round, and the reason the "every third round does not
+# freeze" claim above is not the whole story any more.
+#
+# The distinction is worth spelling out because it is the whole design: the six lane
+# events play ACROSS THE BACK of the table, above the buttons, so the next round is
+# free to start underneath them; the hand is dealt INTO THE MIDDLE, over the play
+# area, and a card thrown over a chip the player is trying to press would be exactly
+# the bug this skin refuses to have. So these two rounds freeze — briefly — and the
+# freeze is what buys the flight the right to cross the ring at all.
+func _watch_deal(round_no: int) -> void:
+	_ok(bool(_ev.call("active")), "round %d: the deal started" % round_no)
+	_ok(int(_ev.get("_kind")) == CasinoEvents.EV_HAND,
+		"round %d: ...and it is the HAND, not a lane event" % round_no,
+		"kind %d" % int(_ev.get("_kind")))
+	_ok(_game._state == "event",
+		"round %d: the round is frozen for it" % round_no, _game._state)
+	# THE CARDS EXIST AT THE START, IN THE AIR. This is the regression guard for the
+	# bug that made the whole deal invisible: they used to be created and then wiped
+	# by `_begin` on the same frame, so the milestone put three cards on the felt
+	# without ever showing one move.
+	var cards: Array = _ev.get("_cards")
+	_ok(cards.size() > 0, "round %d: ...with cards in flight" % round_no,
+		"%d" % cards.size())
+	var lvl: int = _game.level
+	# The round that just COMPLETED is still holding its own presses — player_seq is
+	# cleared by _next_round, which is exactly what the freeze is stopping — so the
+	# baseline is what is there now and not zero. (`> 0` here reported a press on the
+	# first frame of every deal.)
+	var pressed: int = _game.player_seq.size()
+	var seq: int = _game.sequence.size()
+	var taps := 0
+	var moved := ""
+	var t0 := Time.get_ticks_msec()
+	while _game._state == "event" and Time.get_ticks_msec() - t0 < 9000:
+		await _tap(taps % _dev._count)
+		taps += 1
+		if _game.level != lvl:
+			moved = "the level advanced"
+		elif _game.sequence.size() != seq:
+			moved = "the sequence grew"
+		elif _game.player_seq.size() != pressed:
+			moved = "a press registered"
+	var secs := float(Time.get_ticks_msec() - t0) / 1000.0
+	_ok(moved == "", "round %d: %d taps during it changed nothing" % [round_no, taps],
+		moved)
+	# ...for AS LONG AS THE DEAL ASKED FOR, and not a beat longer. Held against the
+	# event's own promised duration rather than a number typed here: a three-card
+	# deal is three complete animations end to end (the arm is back at rest before
+	# it reaches for the next card), so this moves whenever the clip is retimed and
+	# a fixed ceiling would only ever be a stale one.
+	var owed: float = CasinoEvents.T_HAND_LOW 		if round_no % CasinoEvents.HAND_CYCLE == CasinoEvents.HAND_AT_LOW 		else CasinoEvents.T_HAND_KING
+	_ok(secs > owed * 0.6 and secs < owed + 0.45,
+		"round %d: the freeze lasted the deal and no longer" % round_no,
+		"%.2f s, the deal asked for %.2f" % [secs, owed])
+	_ok(not bool(_ev.call("active")),
+		"round %d: nothing of the deal outlived it" % round_no)
+	# ...and what it left behind is the row the player is collecting.
+	var want := 3 if round_no % CasinoEvents.HAND_CYCLE == CasinoEvents.HAND_AT_LOW \
+		else 4
+	_ok(_ev.get("_hand").size() == want,
+		"round %d: the hand is %d cards" % [round_no, want],
+		"%d" % _ev.get("_hand").size())
 
 
 # ...and level 8, which is the one that DOES stop the game.
