@@ -1348,9 +1348,9 @@ const SKIN_FRAME_PAD := 26
 #   buttons (see BackgroundManager.make_preview / IceButtons.active_for).
 const SKIN_DEFS := [
 	# ICE KINGDOM: the `world_ice` background and the six snowflake buttons it wears,
-	# sold as one thing because that is how it plays. FREE — CoinsManager.THEMES prices
-	# it 0, and a 0-price card shows FREE instead of a coin, so the player claims it in
-	# one tap and equips it in the next (see _style_card_button).
+	# sold as one thing because that is how it plays. CoinsManager.THEMES prices it
+	# 4000, so the card shows a coin price rather than FREE and the buy tap goes
+	# through `can_afford` like any other priced item (see _style_card_button).
 	{"id": "world_ice", "label": "ICE KINGDOM", "theme": "world_ice",
 		"blurb": "Buttons carved from ice.", "chip": "SNOWFLAKE BUTTONS",
 		"released": true},

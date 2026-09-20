@@ -11,14 +11,16 @@ extends CanvasLayer
 
 signal answered(granted: bool)
 
-# Same URL as home_screen.gd and the Play Store listing.
-const PRIVACY_POLICY_URL := "https://raviachstudios.github.io/Raviach-policy/"
+# Same URL as home_screen.gd and the Play Store listing. Points at the Firebase
+# copy, which is the only maintained one — the old Raviach-policy page on GitHub
+# Pages is deprecated and still carried the pre-rebrand "Simon" text.
+const PRIVACY_POLICY_URL := "https://lumeo-game.web.app/"
 
 const TITLE_TEXT := "Ads in LUMEO"
 
 const BODY_TEXT := """LUMEO is free to play, and ads pay for it.
 
-We can show you ads chosen for you, which means sharing your device's advertising ID with our ad partner, Unity Ads, so it can pick more relevant ones. This earns more, so it keeps the game free.
+We can show you ads chosen for you, which means sharing your device's advertising ID with Unity LevelPlay and the ad networks it works with, so they can pick more relevant ones. This earns more, so it keeps the game free.
 
 You can say no. You'll still see ads, just generic ones instead — nothing about you is shared.
 

@@ -87,6 +87,12 @@ var _is_new_high: bool = false
 var _bg: ColorRect
 var _bg_mat: ShaderMaterial
 var _score_label: Label
+# Coins-earned pill + the rewarded "x4" offer beneath it. Both are held so the
+# reward callback can rewrite the pill in place and retire the button.
+var _coins_pill: Panel
+var _coins_lbl: Label
+var _multiply_btn: Button
+var _multiply_hint: Label
 var _rank_slot: Control               # placeholder; the rank pill is added here once Firestore returns
 var _rank_token := 0                  # bumped on free; awaited callbacks bail when stale
 
@@ -281,9 +287,10 @@ func _build_ui() -> void:
 	_rank_slot.size = Vector2(440, 48)
 	add_child(_rank_slot)
 
-	# --- Coins-earned pill (signed-in only) --------------------------------
+	# --- Coins-earned pill + the x4 offer (signed-in only) -----------------
 	if FirebaseManager.is_signed_in():
-		_build_coins_earned_pill(cx, sz.y * 0.73, CoinsManager.session_earned)
+		_build_coins_earned_pill(cx, sz.y * 0.70, CoinsManager.session_earned)
+		_build_multiply_offer(cx, sz.y * 0.80)
 
 	# --- Buttons (home / play again) --------------------------------------
 	# HOME is the calm secondary glass pill; PLAY AGAIN is the primary call to
@@ -398,8 +405,10 @@ func _build_coins_earned_pill(cx: float, y: float, earned: int) -> void:
 	const PW := 280.0
 	const PH := 48.0
 	var pill := Panel.new()
+	_coins_pill = pill
 	pill.position = Vector2(cx - PW * 0.5, y)
 	pill.size = Vector2(PW, PH)
+	pill.pivot_offset = Vector2(PW, PH) * 0.5   # so the x4 bloom scales about its centre
 	pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(0.06, 0.07, 0.18, 0.85)
@@ -412,6 +421,7 @@ func _build_coins_earned_pill(cx: float, y: float, earned: int) -> void:
 	add_child(pill)
 
 	var lbl := Label.new()
+	_coins_lbl = lbl
 	lbl.text = "Coins earned   + %d" % earned
 	lbl.add_theme_font_size_override("font_size", 20)
 	lbl.add_theme_color_override("font_color", Color(1.0, 0.92, 0.45))
@@ -420,6 +430,124 @@ func _build_coins_earned_pill(cx: float, y: float, earned: int) -> void:
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	pill.add_child(lbl)
+
+# ---------------- rewarded "x4 coins" offer ----------------
+
+# How much the rewarded ad multiplies the run's earnings by. The wallet credit is
+# the difference over the 1x already banked at game over — see
+# CoinsManager.credit_session_multiplier.
+const COIN_MULTIPLIER := 4
+
+# The opt-in offer under the coins pill: watch a video, take four times the coins
+# this run earned. Only built when there is actually something to multiply and an
+# ad is loaded — an offer that fails when pressed is worse than no offer, and a
+# "x4 of nothing" button on a zero-coin run is just noise.
+#
+# It is deliberately INERT: no pulse, no glow loop, nothing that moves to catch
+# the eye. Same rule as the in-game watch-ad button (see watch_ad_button.gd) —
+# animating an ad control to attract presses is the "encouraging clicks" behaviour
+# every network's policy prohibits, and LevelPlay mediates several of them at once.
+func _build_multiply_offer(cx: float, y: float) -> void:
+	if CoinsManager.session_earned <= 0:
+		return
+	if CoinsManager.session_multiplied:
+		return
+	if not AdManager.rewarded_ready:
+		return
+
+	# Reuses the in-game watch-ad button: an amber hard-plastic dome that already
+	# reads, everywhere else in this game, as "this one plays a video".
+	var btn := (load("res://watch_ad_button.gd") as GDScript).new() as Button
+	btn.text = "Watch a video for %d× coins" % COIN_MULTIPLIER
+	btn.focus_mode = Control.FOCUS_NONE
+	# The script sizes itself to its text in _ready, which has not run yet, so the
+	# centering has to wait a frame — see _center_multiply_btn.
+	btn.position = Vector2(cx - 150.0, y)
+	btn.pressed.connect(_on_multiply_pressed)
+	add_child(btn)
+	_multiply_btn = btn
+	_center_multiply_btn(cx, y)
+
+	var hint := Label.new()
+	hint.text = "+ %d coins" % (CoinsManager.session_earned * (COIN_MULTIPLIER - 1))
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", Color(0.659, 0.714, 1.0, 0.75))
+	hint.position = Vector2(cx - 200.0, y + 52.0)
+	hint.size = Vector2(400.0, 20.0)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(hint)
+	_multiply_hint = hint
+
+func _center_multiply_btn(cx: float, y: float) -> void:
+	await get_tree().process_frame
+	if not is_instance_valid(_multiply_btn):
+		return
+	_multiply_btn.position = Vector2(cx - _multiply_btn.size.x * 0.5, y)
+
+func _on_multiply_pressed() -> void:
+	if not AdManager.rewarded_ready or CoinsManager.session_multiplied:
+		return
+	# Hide rather than disable: the ad covers the screen immediately, and a button
+	# still sitting there when it closes invites a second press against a session
+	# that has already been paid.
+	if is_instance_valid(_multiply_btn):
+		_multiply_btn.visible = false
+	if is_instance_valid(_multiply_hint):
+		_multiply_hint.visible = false
+	# An ad that fails to display owes the player their offer back — they pressed a
+	# button and got nothing. ad_closed fires on every outcome (0.0 seconds when
+	# nothing appeared), so it is the one place that can tell "shown" from "never
+	# happened"; _on_multiply_reward has already run by then in the good case, and
+	# session_multiplied is what distinguishes them.
+	AdManager.ad_closed.connect(_on_multiply_ad_closed, CONNECT_ONE_SHOT)
+	AdManager.show_rewarded(_on_multiply_reward)
+
+func _on_multiply_ad_closed(seconds_shown: float) -> void:
+	if CoinsManager.session_multiplied or not is_inside_tree():
+		return
+	if seconds_shown > 0.0:
+		return                       # the ad played; a skip forfeits the offer
+	if is_instance_valid(_multiply_btn):
+		_multiply_btn.visible = true
+	if is_instance_valid(_multiply_hint):
+		_multiply_hint.visible = true
+
+# Reached ONLY when the ad was watched through to its reward — a skipped ad never
+# calls back, and the button stays hidden either way, so a skip costs the offer.
+# That is the deal the button states, and re-offering after a skip is how you
+# teach people to skip.
+func _on_multiply_reward() -> void:
+	var bonus := CoinsManager.credit_session_multiplier(COIN_MULTIPLIER)
+	if bonus <= 0:
+		return
+	if is_instance_valid(_multiply_btn):
+		_multiply_btn.queue_free()
+	if is_instance_valid(_multiply_hint):
+		_multiply_hint.queue_free()
+	_celebrate_multiplied(CoinsManager.session_earned * COIN_MULTIPLIER)
+
+# Rewrite the coins pill to the new total and give it one bloom, so the payout is
+# visibly the thing the ad just bought.
+func _celebrate_multiplied(total: int) -> void:
+	if not is_instance_valid(_coins_lbl) or not is_instance_valid(_coins_pill):
+		return
+	_coins_lbl.text = "Coins earned   + %d" % total
+	var st := _coins_pill.get_theme_stylebox("panel") as StyleBoxFlat
+	var tw := create_tween()
+	tw.tween_property(_coins_pill, "scale", Vector2(1.08, 1.08), 0.18) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(_coins_pill, "scale", Vector2.ONE, 0.35) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if st != null:
+		# Flare the gold rim up and let it settle back, rather than leaving the pill
+		# permanently louder than the rest of the screen.
+		var set_glow := func(v: float) -> void:
+			if is_instance_valid(_coins_pill):
+				st.shadow_size = int(v)
+		var glow := create_tween()
+		glow.tween_method(set_glow, 12.0, 34.0, 0.18).set_trans(Tween.TRANS_SINE)
+		glow.tween_method(set_glow, 34.0, 12.0, 0.45).set_trans(Tween.TRANS_SINE)
 
 # ---------------- pill buttons (home / play again) ----------------
 

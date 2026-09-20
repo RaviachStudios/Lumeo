@@ -1,0 +1,3 @@
+-keep class com.niquewrld.casino.unityads.** { *; }
+-keep class com.unity3d.ads.** { *; }
+-keep class com.unity3d.services.** { *; }

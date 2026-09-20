@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- LevelPlay cannot fill without these. ACCESS_NETWORK_STATE lets the SDK
+         hold off on requests while the device is offline instead of burning them.
+         (The mediation SDK's own AAR declares them too; they are repeated here so
+         the plugin is self-describing and survives a dependency swap.) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Advertising ID. Required on targetSdk 33+ for any mediated network to read
+         the ad ID at all; without it every network can only serve non-personalized
+         inventory, which fills worse and pays less. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
+    <application>
+        <!-- Godot v2 plugin registration -->
+        <meta-data
+            android:name="org.godotengine.plugin.v2.GodotLevelPlay"
+            android:value="com.raviachstudios.lumeo.levelplay.GodotLevelPlay" />
+    </application>
+
+</manifest>

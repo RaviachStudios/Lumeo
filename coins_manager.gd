@@ -117,19 +117,24 @@ const THEMES := {
 	# "inferno" and "rainbow" are shader themes, "bg_crystal" is Crystal Cave. These
 	# ids are what saved wallets contain, so they are frozen.
 	#
-	# Both are FREE. Price 0 is the same thing "default" above and the four
+	# LIVING FOREST is FREE. Price 0 is the same thing "default" above and the four
 	# skin-bound button frames are: the card still shows a buy button, the player
 	# still taps it once, and that tap is still what writes the id into owned_themes
 	# and makes the equip persist. Nothing about the ownership, purchase, equip or
-	# save path is special-cased for them — a free item is a priced item that costs
+	# save path is special-cased for it — a free item is a priced item that costs
 	# nothing, which is why `can_afford` and `purchase_theme` need no change.
 	#
-	# They are deliberately NOT pre-owned. Handing them out in `owned_themes`'
+	# The three SPECIAL SKINS below — Ice Kingdom, Magical Lake, Royal Casino — are
+	# that same item in every one of those respects and simply cost 4000. Nothing
+	# about the ownership, purchase, equip or save path knows the difference; the
+	# only thing their price changes is whether `can_afford` lets the tap through.
+	#
+	# None of them is pre-owned. Handing them out in `owned_themes`'
 	# default would rewrite the meaning of every wallet already on disk; leaving the
 	# tap in place means an existing player picks them up exactly the way they pick
 	# up anything else, and a player who never opens the shop is unaffected.
 	#
-	# Being free is also why they sit AFTER the eight priced floors rather than at
+	# They still sit AFTER the eight priced floors rather than at
 	# the front: the grid's order inside the pair is the authored one — the world
 	# with the least happening in frame to the most — not a price ladder. Keep this
 	# block, WorldScenes.ORDER and the shop's CATEGORIES["items"] in the same order.
@@ -138,13 +143,13 @@ const THEMES := {
 	# is sold on the SPECIAL SKINS shelf rather than in THEMES, because it dresses the
 	# gameplay BUTTONS as well as the ground (the snowflakes — see ice_buttons.gd),
 	# which makes it a complete look rather than a backdrop. Everything on this side
-	# of the shop is untouched by that: same entry, same price, same category, same
+	# of the shop is untouched by that: same entry, same category, same
 	# owned_themes / selected_theme. Only the card it is bought from moved.
 	"world_forest":  {"name": "Living Forest",  "price": 0, "category": "themes"},
-	"world_ice":     {"name": "Ice Kingdom",    "price": 0, "category": "themes"},
+	"world_ice":     {"name": "Ice Kingdom",    "price": 4000, "category": "themes"},
 	# MAGICAL LAKE is the second complete look and sits here for exactly the same
 	# reasons Ice Kingdom does: it is an ordinary theme on this side of the shop —
-	# same entry, same free price, same category, same owned_themes / selected_theme
+	# same entry, same 4000 price, same category, same owned_themes / selected_theme
 	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
 	# dresses the gameplay BUTTONS as well as the ground (the lily pads, see
 	# lily_buttons.gd). Only the card it is bought from is different.
@@ -152,10 +157,10 @@ const THEMES := {
 	# It is also the first background with no imported asset behind it at all: it is
 	# a plane, a shader and a scatter of generated props (lake_world.gd). Nothing
 	# about ownership can tell.
-	"world_lake":    {"name": "Magical Lake",   "price": 0, "category": "themes"},
+	"world_lake":    {"name": "Magical Lake",   "price": 4000, "category": "themes"},
 	# ROYAL CASINO is the third complete look and sits here for exactly the same
 	# reasons the two above do: it is an ordinary theme on this side of the shop —
-	# same entry, same free price, same category, same owned_themes / selected_theme
+	# same entry, same 4000 price, same category, same owned_themes / selected_theme
 	# — and it is sold from the SPECIAL SKINS shelf rather than THEMES because it
 	# dresses the gameplay BUTTONS as well as the ground (six moulded poker chips,
 	# see chip_buttons.gd). Only the card it is bought from is different.
@@ -163,7 +168,7 @@ const THEMES := {
 	# The id is "world_casino" and NOT "casino": that one has been spent since launch
 	# on the JACKPOT wheel skin, which is a different product with a different shelf
 	# and its own celebration (see game.gd's _is_casino_skin). Two ids, deliberately.
-	"world_casino":  {"name": "Royal Casino",   "price": 0, "category": "themes"},
+	"world_casino":  {"name": "Royal Casino",   "price": 4000, "category": "themes"},
 	# The eight LUMEO WORLDS (lume_worlds.gd). A third kind of background again, and
 	# the only one built entirely inside this project: no .blend, no .glb, no image
 	# — each is a pair of GLSL functions painted on BackgroundManager's canvas layer,
@@ -487,6 +492,11 @@ var equipped_simon: Dictionary = _default_equipped_simon()   # category -> color
 var owned_simon: Dictionary = _default_owned_simon()         # category -> Array[String]
 var selected_skin: String = ""           # equipped complete skin ("" = none yet)
 var owned_skins: Array[String] = []      # purchased complete skins (none yet)
+# The one-time rebrand receipt written by tools/rebrand_migrate.js: what was
+# refunded, the early-player gift, and (once seen) `shown`. Empty for every
+# account created after that migration ran, which is exactly what makes the
+# welcome popup fire for old players only — see has_unseen_rebrand_grant.
+var rebrand_receipt: Dictionary = {}
 var last_claim_date: String = ""         # "YYYY-MM-DD" UTC; "" = never claimed
 var streak_days: int = 0                 # consecutive days the user has opened the
 										  # app (1 on the first day, resets to 1 if
@@ -526,6 +536,12 @@ var tutorial_seen: bool = false
 # --- in-game session ---
 var session_earned: int = 0              # cleared in start_game_session()
 
+# Whether the game-over rewarded ad has already multiplied THIS session's
+# earnings. One boost per run: the offer is made once on the game-over screen,
+# and this is what stops a second show (a re-entered screen, a double-tap that
+# raced the first callback) from paying twice for one ad.
+var session_multiplied: bool = false
+
 func _ready() -> void:
 	FirebaseManager.signed_in.connect(_on_signed_in)
 	FirebaseManager.signed_out.connect(_on_signed_out)
@@ -542,6 +558,7 @@ func is_loaded() -> bool:
 
 func start_game_session() -> void:
 	session_earned = 0
+	session_multiplied = false
 	session_earned_changed.emit(session_earned)
 
 # Award coins for completing a level on this difficulty. Returns the amount
@@ -569,6 +586,34 @@ func commit_session() -> void:
 	earned_coins += session_earned
 	balance_changed.emit(balance)
 	_save_partial({"coins": balance, "earned_coins": earned_coins})
+
+# Pay the bonus for watching the game-over rewarded ad: the run's earnings, times
+# `multiplier`, instead of times one. commit_session() has already banked the 1x,
+# so what is credited here is the DIFFERENCE — (multiplier - 1) x session_earned.
+# Returns the extra coins credited, for the "+ N" animation; 0 if there was
+# nothing to multiply.
+#
+# WHY the guard is a flag on the session and not on the caller: the game-over
+# screen can be rebuilt (rotation, a resumed activity behind the ad), and the
+# reward callback arrives asynchronously from the ad SDK. A caller-side "I already
+# asked" bool would not survive either. This one is cleared only by
+# start_game_session(), so it is exactly as long-lived as the run it protects.
+#
+# Like every other credit path this writes the new absolute balance rather than a
+# delta, so a failed save leaves the player un-paid rather than double-paid, and
+# the worst case is one lost bonus rather than a corrupted wallet.
+func credit_session_multiplier(multiplier: int) -> int:
+	if multiplier <= 1 or session_multiplied:
+		return 0
+	if session_earned <= 0 or not FirebaseManager.is_signed_in():
+		return 0
+	var bonus := session_earned * (multiplier - 1)
+	session_multiplied = true
+	balance += bonus
+	earned_coins += bonus
+	balance_changed.emit(balance)
+	_save_partial({"coins": balance, "earned_coins": earned_coins})
+	return bonus
 
 # --- login-streak + daily-claim API ---
 
@@ -810,6 +855,42 @@ func set_remove_ads_owned(sku: String = "") -> void:
 		fields["purchase_history"] = purchase_history
 	remove_ads_changed.emit()
 	_save_partial(fields)
+
+# --- rebrand welcome receipt --------------------------------------------------
+
+# The wallet-doc field holding the rebrand refund receipt (see
+# rebrand_welcome_popup.gd and tools/rebrand_migrate.js), and the SEPARATE
+# top-level flag that says it has been seen.
+const REBRAND_FIELD := "rebrand_v1"
+const REBRAND_SHOWN_FIELD := "rebrand_v1_shown"
+
+# WHY the flag is its own scalar field and not a `shown` key inside the receipt:
+# marking it seen used to rewrite the whole receipt map (a merge write replaces a
+# map field wholesale, so every key has to ride along) — but the receipt carries
+# `items`, an ARRAY, and the Android Firestore SDK rejects raw arrays, same as
+# everywhere else in this file. Every launch the write was refused, `shown` never
+# landed, and the popup opened again. The editor's simulated store is a plain
+# Dictionary and took the array happily, which is exactly why the harness passed.
+# A bare bool cannot hit that class of failure.
+var rebrand_shown: bool = false
+
+# True while this account has a rebrand receipt it has never been shown. An
+# account created after the migration has no receipt at all, so it can never
+# qualify; the flag is what stops the popup replaying after a reinstall or on a
+# second device. The coins were credited by the migration itself — this only
+# gates the celebration.
+func has_unseen_rebrand_grant() -> bool:
+	return not rebrand_receipt.is_empty() and not rebrand_shown
+
+# Mark the receipt as seen. One boolean field, nothing else touched.
+func mark_rebrand_shown() -> void:
+	if not FirebaseManager.is_signed_in() or rebrand_receipt.is_empty():
+		return
+	if rebrand_shown:
+		return
+	rebrand_shown = true
+	raw_user_doc[REBRAND_SHOWN_FIELD] = true
+	_save_partial({REBRAND_SHOWN_FIELD: true})
 
 # Record that this account has seen the first-run home tour. Idempotent; a no-op
 # for guests (their "seen" flag is the local file, not the wallet doc).
@@ -1234,6 +1315,12 @@ func _emit_all() -> void:
 func _apply_doc(doc: Dictionary) -> void:
 	raw_user_doc = doc.duplicate(true)
 	balance = int(doc.get("coins", 0))
+	var rb: Variant = doc.get(REBRAND_FIELD, {})
+	rebrand_receipt = (rb as Dictionary).duplicate(true) if rb is Dictionary else {}
+	# `rebrand_v1.shown` is read too so the handful of docs an admin may have
+	# stamped by hand still count as seen; nothing writes that shape anymore.
+	rebrand_shown = bool(doc.get(REBRAND_SHOWN_FIELD, false)) \
+		or bool(rebrand_receipt.get("shown", false))
 	# "default" is always owned even if the doc somehow omits it.
 	owned_themes = [DEFAULT_THEME]
 	# owned_themes is stored as a map ({theme_id: true}) — see
@@ -1393,6 +1480,13 @@ func _save_partial(fields: Dictionary) -> void:
 	if uid.is_empty():
 		return
 	if _is_editor:
+		# The simulated store refuses what the device would refuse: the Android
+		# Firestore SDK rejects raw arrays (see purchase_history and
+		# _owned_themes_map_for_save, which is why everything here is stored as a
+		# map-of-maps). It used to accept them, which let a write that could only
+		# ever fail on a real phone pass every editor test.
+		if not _no_arrays(fields, ""):
+			return
 		var d: Dictionary = _sim_db.get(uid, {})
 		for k in fields:
 			d[k] = fields[k]
@@ -1401,6 +1495,19 @@ func _save_partial(fields: Dictionary) -> void:
 	# merge=true writes only the listed fields, so concurrent updates from
 	# different code paths don't clobber each other.
 	Firebase.firestore.set_document(_COLL, uid, fields, true)
+
+# Walks a would-be write for arrays at any depth, reporting the field path of the
+# first one. Editor-only: on device the SDK does this rejection for us, loudly.
+func _no_arrays(value: Variant, path: String) -> bool:
+	if value is Array:
+		push_error("CoinsManager: refusing to write an array at '%s' — the Android "
+			% path + "Firestore SDK rejects raw arrays; store it as a map instead.")
+		return false
+	if value is Dictionary:
+		for k in (value as Dictionary):
+			if not _no_arrays((value as Dictionary)[k], path + "/" + String(k)):
+				return false
+	return true
 
 # --- date helpers (UTC YYYY-MM-DD; one canonical day per real-world day,
 #     regardless of the player's local timezone) ---
