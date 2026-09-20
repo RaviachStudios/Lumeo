@@ -132,6 +132,19 @@ class GodotLevelPlay(godot: Godot) : GodotPlugin(godot) {
      * Child-directed treatment. Lumeo is not a children's app, so this is never
      * set today; it exists so the Play Console's target-audience answer and the ad
      * stack can be made to agree without a plugin rebuild if that ever changes.
+     *
+     * IF IT EVER IS CALLED, META NEEDS A SECOND CALL. setCOPPA is LevelPlay's own
+     * flag and most adapters read it, but the Meta Audience Network adapter does
+     * not: it reads the `meta_mixed_audience` metadata key and forwards it to
+     * AdSettings.setMixedAudience (verified in facebook-adapter 5.3.0's
+     * FacebookAdapter). So a child-directed build has to do BOTH:
+     *
+     *     setChildDirected(true)
+     *     setMetaData("meta_mixed_audience", "true")
+     *
+     * GDPR and CCPA need no such special case — setConsent below goes through
+     * LevelPlayPrivacySettings, which every mediated network including Meta
+     * receives. This is the one privacy flag that does not propagate on its own.
      */
     @UsedByGodot
     fun setChildDirected(isChild: Boolean) {
