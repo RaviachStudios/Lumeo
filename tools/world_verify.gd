@@ -23,8 +23,9 @@ const THEMES1 := {
 	"bg_darkmetal": 100, "bg_hexfloor": 200, "bg_neongrid": 300, "bg_circuit": 400,
 	"bg_deepspace": 500, "bg_volcanic": 600, "bg_crystal": 700, "bg_arcade": 800,
 }
-# Free. Kept as a table rather than a bare 0 so that pricing it later is a one-line
-# edit here and the checks below follow.
+# Priced. Kept as a table rather than a bare literal so that repricing is a
+# one-line edit here and the checks below follow — which is exactly what happened
+# on 2026-09-20, when Living Forest went from 0 to 650.
 #
 # ONE entry since Ice Kingdom moved: `world_ice` is still a shipping background at
 # the same id and the same price, but it is generated in Godot now (ice_world.gd)
@@ -32,7 +33,7 @@ const THEMES1 := {
 # and its wallet fields are still checked — by tools/lume_verify.tscn's BEFORE table
 # and tools/ice_verify.tscn.
 const WORLD_PRICES := {
-	"world_forest": 0,
+	"world_forest": 650,
 }
 
 var _fail := 0
@@ -327,10 +328,13 @@ func _shop() -> void:
 		_check(String(CoinsManager.THEMES[id]["name"]) == WorldScenes.display_name(id),
 			"%s: shop name matches the catalog" % id)
 		_check(not CoinsManager.owned_themes.has(id), "%s is not owned by default" % id)
-	# The PAID half of the grid still reads cheapest first — that ladder is what the
-	# eight Themes1 floors are ordered by and it must not drift. The worlds are all
-	# free, so their own order is the authored one (least happening in frame to
-	# most) and a price comparison across the two groups means nothing.
+	# The eight Themes1 floors still read cheapest first — that ladder is what THEY
+	# are ordered by and it must not drift. This loop walks BackgroundScenes.ORDER,
+	# which is those eight and only those eight; the worlds are in
+	# WorldScenes.ORDER and are not compared here. Their own order is the authored
+	# one (least happening in frame to most), and it stayed that way when Living
+	# Forest was priced at 650 on 2026-09-20 — so a price comparison across the two
+	# groups means nothing now in a way it did not even when the worlds were free.
 	var last := -1
 	for idv in BackgroundScenes.ORDER:
 		var id := String(idv)
@@ -408,16 +412,26 @@ func _purchase() -> void:
 	for idv in WorldScenes.ORDER:
 		var id := String(idv)
 		var cost := CoinsManager.theme_price(id)
-		_check(cost == int(WORLD_PRICES[id]), "%s is free (price %d)" % [id, cost])
+		_check(cost == int(WORLD_PRICES[id]), "%s costs %d" % [id, cost])
 		_check(not CoinsManager.owns(id), "%s starts unowned" % id)
-		# Free, so an empty wallet is no obstacle — but it is still a BUY, and the
-		# tap is still what puts the id in the wallet. Nothing is handed over until
-		# the player asks for it.
-		_check(CoinsManager.can_afford(id), "%s affordable at a zero balance" % id)
-		_check(CoinsManager.purchase_theme(id), "%s: the free unlock goes through" % id)
-		_check(CoinsManager.balance == 0, "%s: it charged nothing" % id)
-		_check(CoinsManager.owns(id), "%s owned after the unlock" % id)
-		_check(not CoinsManager.purchase_theme(id), "%s: unlocking it twice is refused" % id)
+		# A WALLET THAT CANNOT PAY. This was a free unlock until 2026-09-20, when
+		# Living Forest was priced at 650, and the refusal is the only part of the
+		# buy flow a price actually changes — so it is the part worth checking. One
+		# coin short rather than an empty wallet: it is the boundary that decides
+		# the tap, and an empty wallet would pass even if the comparison were wrong.
+		CoinsManager.balance = cost - 1
+		_check(not CoinsManager.can_afford(id), "%s is unaffordable one coin short" % id)
+		_check(not CoinsManager.purchase_theme(id), "%s: the buy is refused" % id)
+		_check(not CoinsManager.owns(id), "%s stays unowned after a refused buy" % id)
+		_check(CoinsManager.balance == cost - 1, "%s: a refused buy charges nothing" % id)
+		# ...and one that can. Exactly the price comes off and not a coin more, which
+		# is what the 25 left over is there to catch.
+		CoinsManager.balance = cost + 25
+		_check(CoinsManager.can_afford(id), "%s affordable with the price in hand" % id)
+		_check(CoinsManager.purchase_theme(id), "%s: the buy goes through" % id)
+		_check(CoinsManager.balance == 25, "%s: it charged exactly %d" % [id, cost])
+		_check(CoinsManager.owns(id), "%s owned after the buy" % id)
+		_check(not CoinsManager.purchase_theme(id), "%s: buying it twice is refused" % id)
 		# ...and equipping it is the ordinary theme path, with the button frame
 		# untouched on the way through.
 		_check(CoinsManager.select_theme(id), "%s equips" % id)

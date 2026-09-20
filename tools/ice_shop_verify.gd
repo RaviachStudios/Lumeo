@@ -1,6 +1,6 @@
 extends Node
 # Acceptance check for the SHOP half of ICE KINGDOM: that it is on the SPECIAL SKINS
-# shelf and only there, that it costs nothing, and that claiming it, equipping it,
+# shelf and only there, that it costs 4,000, and that claiming it, equipping it,
 # leaving it and coming back all go through the existing theme path rather than a
 # private one. The button half is tools/ice_buttons_verify.gd.
 #
@@ -13,6 +13,8 @@ extends Node
 const ShopScreen := preload("res://shop_screen.gd")
 const ICE := preload("res://ice_buttons.gd")
 const OTHER_THEME := "world_forest"     # what "switch back to another skin" means here
+const OTHER_PRICE := 650                # ...and what it costs since 2026-09-20
+const ICE_PRICE := 4000
 
 var _fails := 0
 
@@ -53,7 +55,7 @@ func _catalog() -> void:
 		if String(c.get("key", "")) == "themes":
 			_ok(not (c.get("items", []) as Array).has(id), "NOT also listed in the THEMES tab")
 	_ok(CoinsManager.THEMES.has(id), "still an ordinary CoinsManager.THEMES entry")
-	_ok(CoinsManager.theme_price(id) == 0, "costs 0 coins",
+	_ok(CoinsManager.theme_price(id) == ICE_PRICE, "costs %d coins" % ICE_PRICE,
 			"%d" % CoinsManager.theme_price(id))
 	# Through the FAÇADE, not through one catalog. Ice Kingdom's ground moved from an
 	# imported Themes2 world to a background generated in Godot (ice_world.gd) at the
@@ -69,9 +71,12 @@ func _flow() -> void:
 	for _i in 30:
 		await get_tree().process_frame
 	var id := ICE.THEME_ID
-	# A brand-new wallet: nothing owned, and a balance small enough that a card which
-	# actually charged for this would be unable to complete.
-	CoinsManager._apply_doc({"coins": 0})
+	# A brand-new wallet: nothing owned, and funded with exactly enough for this
+	# card plus the other world the "switch away and back" leg buys further down.
+	# It used to be deliberately EMPTY, because this shelf was free; both prices
+	# moved (Ice Kingdom to 4,000, Living Forest to 650) and an empty wallet now
+	# tests the refusal path rather than the flow this harness is about.
+	CoinsManager._apply_doc({"coins": ICE_PRICE + OTHER_PRICE})
 	_ok(not CoinsManager.owns(id), "a new wallet does not own it")
 
 	var stub := StubManager.new()
@@ -94,14 +99,19 @@ func _flow() -> void:
 		return
 	var btn: Button = card["btn"]
 	_ok(card.get("preview") == null, "no wheel is built for a theme-backed card")
-	_ok(btn.text == "FREE", "the button says FREE", btn.text)
-	_ok(not (card["price_box"] as Control).visible, "and shows no coin price beside it")
+	# Priced, so the button carries no word at all and the coin price block beside it
+	# is what the player reads. (A FREE card is the other way round — see
+	# ShopScreen._style_card_button, which keys off `price == 0` and nothing else.)
+	_ok(btn.text == "", "the button carries no word, the price block does", btn.text)
+	_ok((card["price_box"] as Control).visible, "and the coin price is shown")
+	_ok((card["price_label"] as Label).text == str(ICE_PRICE),
+			"reading %d" % ICE_PRICE, (card["price_label"] as Label).text)
 
 	print("-- claim --")
 	var before := CoinsManager.balance
 	btn.emit_signal("pressed")
 	await get_tree().process_frame
-	# Free or not, a buy is a buy: the same confirm dialog every other card raises.
+	# Priced or not, a buy is a buy: the same confirm dialog every other card raises.
 	var popup: Node = null
 	for c in shop.get_children():
 		if c.has_signal("confirmed"):
@@ -111,7 +121,8 @@ func _flow() -> void:
 		popup.emit_signal("confirmed")
 		await get_tree().process_frame
 	_ok(CoinsManager.owns(id), "claiming puts it in owned_themes")
-	_ok(CoinsManager.balance == before, "and costs nothing", "%d -> %d" % [before, CoinsManager.balance])
+	_ok(CoinsManager.balance == before - ICE_PRICE, "and charges exactly %d" % ICE_PRICE,
+			"%d -> %d" % [before, CoinsManager.balance])
 	_ok(CoinsManager.selected_theme == id, "a fresh claim auto-equips")
 	# Not refreshed by hand: the card is expected to follow CoinsManager.themes_changed
 	# on its own, which is what keeps it honest while the player is looking at it.
@@ -125,9 +136,12 @@ func _flow() -> void:
 	dev.get_parent().queue_free()
 
 	print("-- switch away and back --")
-	# select_theme refuses a world the wallet does not hold, so claim the other one
-	# first — it is free too, and this is exactly the tap a player would make.
-	CoinsManager.purchase_theme(OTHER_THEME)
+	# select_theme refuses a world the wallet does not hold, so buy the other one
+	# first — this is exactly the tap a player would make. It cost nothing until
+	# 2026-09-20; the wallet above is funded for it, so the buy still goes through.
+	_ok(CoinsManager.theme_price(OTHER_THEME) == OTHER_PRICE,
+			"the other world costs %d" % OTHER_PRICE, "%d" % CoinsManager.theme_price(OTHER_THEME))
+	_ok(CoinsManager.purchase_theme(OTHER_THEME), "and the other world buys")
 	CoinsManager.select_theme(OTHER_THEME)
 	_ok(CoinsManager.selected_theme == OTHER_THEME, "another world equips over it",
 			CoinsManager.selected_theme)
@@ -137,11 +151,16 @@ func _flow() -> void:
 	var dev2 := await _board()
 	_ok(dev2.button_skin_id() == "", "and that board wears the STOCK buttons")
 	dev2.get_parent().queue_free()
-	# Re-equipping is a tap on the same button, not a second purchase.
+	# Re-equipping is a tap on the same button, not a second purchase. Measured from
+	# HERE rather than from the balance at the top of the flow: two real purchases
+	# have been made since, so the only meaningful question is whether THIS tap
+	# charges, and comparing against the opening balance would ask a different one.
+	var before_reequip := CoinsManager.balance
 	btn.emit_signal("pressed")
 	await get_tree().process_frame
 	_ok(CoinsManager.selected_theme == id, "tapping EQUIP puts it back on")
-	_ok(CoinsManager.balance == before, "and still costs nothing")
+	_ok(CoinsManager.balance == before_reequip, "and still costs nothing",
+			"%d -> %d" % [before_reequip, CoinsManager.balance])
 
 	print("-- persistence --")
 	# What the save path would write, read back the way a fresh launch reads it.

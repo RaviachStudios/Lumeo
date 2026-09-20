@@ -72,11 +72,14 @@ those ids.
 The ids carry a `world_` prefix because both other namespaces are taken: "inferno"
 and "rainbow" are shader themes and "bg_crystal" is Crystal Cave.
 
-**Both are free.** Price 0 is the same thing Default and the four skin-bound
-button frames are: the card still shows a buy button and the player still taps it
-once, and that tap is still what writes the id into `owned_themes` and makes the
-equip persist. They are deliberately not pre-owned — handing them out in the
-default wallet would change the meaning of every save already on disk.
+**Living Forest costs 650.** It was free until 2026-09-20. Nothing in the
+ownership, purchase, equip or save path was special-cased for that, so nothing had
+to change when it stopped being free: the card still shows a buy button, the player
+still taps it once, and that tap is still what writes the id into `owned_themes`
+and makes the equip persist. The price decides two things and no others — whether
+`can_afford` lets the tap through, and whether the card draws a coin price or the
+word FREE. It is deliberately not pre-owned — handing it out in the default wallet
+would change the meaning of every save already on disk.
 
 They still sit after the eight priced floors rather than at the front of the grid:
 their order is the authored one, from the world with the least happening in frame to
@@ -84,7 +87,7 @@ the most, not a price ladder.
 
 | Item | Id | Price | Shelf |
 |---|---|---|---|
-| Living Forest | `world_forest` | Free | THEMES |
+| Living Forest | `world_forest` | 650 | THEMES |
 | Ice Kingdom | `world_ice` | 4,000 | **SPECIAL SKINS** |
 | Magical Lake | `world_lake` | 4,000 | **SPECIAL SKINS** |
 | Royal Casino | `world_casino` | 4,000 | **SPECIAL SKINS** |
@@ -162,25 +165,35 @@ deliberately distinct from neighbours on the same tab — "Magical Forest" again
 "Rainbow" — because the buy flow has no way to disambiguate two cards with one
 name.
 
-Priced 0 – 1,500 on their own ladder, cheapest first, which is also their shop
-order. **Rainbow Skyway and Deep Ocean are free**, so they lead the block — which
-is what keeps it reading cheapest-first. Price 0 is the same thing Default, the
-two Themes2 worlds and the four skin-bound frames are: the card shows a buy button
-reading FREE, the player still taps it once, and that tap is still what writes the
-id into `owned_themes` and makes the equip persist. Nothing in the ownership,
-purchase, equip or save path is special-cased for them.
+Priced 500 – 1,500 on their own ladder. **The block no longer reads
+cheapest-first.** Rainbow Skyway and Deep Ocean were free and led it, which is what
+made the shop order and the price ladder the same list; both were priced at 650 on
+2026-09-20 and **kept their place**, so the row now reads 650, 650, 500, 600, 800,
+900, 1,000, 1,500.
+
+That was the deliberate choice: the order is the authored one — least world in
+frame to most, an open sky first — and it is the cards' order on the tab that was
+worth preserving, not the coincidence that it used to sort by price. Moving the two
+would have reshuffled the tab for every player who already knows where they sit.
+`tools/lume_verify.tscn` checks each price individually and pins the ascending
+ladder across the six that were never free, rather than across all eight.
+
+Nothing in the ownership, purchase, equip or save path is special-cased for price:
+the card shows a buy button, the player taps it once, and that tap is what writes
+the id into `owned_themes` and makes the equip persist — exactly as it did when the
+first two cost nothing.
 
 They are deliberately not pre-owned, for the same reason nothing else here is:
 handing them out in the default wallet would change the meaning of every save
-already on disk. No existing price moved. They are illustrated scenes of the same class as the older shader themes
+already on disk. They are illustrated scenes of the same class as the older shader themes
 (80 – 1,600), so the ladder is set against THAT one rather than against the 3D
 floors' 100 – 800, and the rung each sits on is how much world it has: an open sky
 at the bottom, a whole button kingdom at the top.
 
 | Item | Id | Price |
 |---|---|---|
-| Rainbow Skyway | `lume_rainbow` | Free |
-| Deep Ocean | `lume_ocean` | Free |
+| Rainbow Skyway | `lume_rainbow` | 650 |
+| Deep Ocean | `lume_ocean` | 650 |
 | Candy World | `lume_candy` | 500 |
 | Space Pets | `lume_space` | 600 |
 | Magical Forest | `lume_forest` | 800 |

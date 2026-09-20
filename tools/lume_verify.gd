@@ -30,7 +30,7 @@ const BEFORE := {
 	"deepspace": 1600,
 	"bg_darkmetal": 100, "bg_hexfloor": 200, "bg_neongrid": 300, "bg_circuit": 400,
 	"bg_deepspace": 500, "bg_volcanic": 600, "bg_crystal": 700, "bg_arcade": 800,
-	"world_forest": 0, "world_ice": 0,
+	"world_forest": 650, "world_ice": 4000,
 }
 
 # The shop's THEMES tab exactly as it stood before, in order.
@@ -54,9 +54,9 @@ const NEW := {
 	"lume_candy": 500, "lume_space": 600,
 	"lume_forest": 800, "lume_volcano": 900, "lume_arcade": 1000,
 	"lume_kingdom": 1500,
-	# The two free ones. Price 0 is a real price here, not "unset": the card shows a
-	# FREE buy button and the tap is still what puts the id in the wallet.
-	"lume_rainbow": 0, "lume_ocean": 0,
+	# The two that led the block while they were FREE. Priced at 650 on 2026-09-20;
+	# they kept their place, so this pair is no longer the cheapest of the eight.
+	"lume_rainbow": 650, "lume_ocean": 650,
 }
 
 var _fail := 0
@@ -161,15 +161,31 @@ func _catalog() -> void:
 			if String(CoinsManager.THEMES[other].get("name", "")) == name:
 				dupes += 1
 		_check(dupes == 1, "the name %s is unique in the catalog" % name)
-	# The ladder is ascending, which is what the shop's order means. NON-STRICTLY:
-	# the two free worlds lead the block and 0 is not dearer than 0. What the shop
-	# order has to mean is that nothing cheaper ever comes after something dearer,
-	# not that no two items may cost the same.
+	# THE LADDER IS NO LONGER ASCENDING, and this check is deliberately not the one
+	# that used to be here.
+	#
+	# It asserted `p >= last` across LumeWorlds.ORDER — nothing cheaper ever comes
+	# after something dearer — which held only because the two FREE worlds led the
+	# block. They were priced at 650 on 2026-09-20 and KEPT THEIR PLACE, so the row
+	# now reads 650, 650, 500, 600, 800, 900, 1000, 1500 and the old assertion fails
+	# on Candy World by design, not by drift.
+	#
+	# What is still worth pinning is the SIX that were never free: they are a real
+	# price ladder, they are contiguous at the back of the block, and a card slipping
+	# out of rung order among them would be the actual bug this check exists to
+	# catch. The two repriced ones are checked individually above, against NEW.
 	var last := -1
 	for id in LumeWorlds.ORDER:
-		var p := CoinsManager.theme_price(String(id))
-		_check(p >= last, "%s (%d) is not cheaper than the one before it" % [id, p])
+		var sid := String(id)
+		if sid == "lume_rainbow" or sid == "lume_ocean":
+			continue
+		var p := CoinsManager.theme_price(sid)
+		_check(p >= last, "%s (%d) is not cheaper than the one before it" % [sid, p])
 		last = p
+	# ...and the pair that leads the block is a pair: same price, so neither is
+	# offered above the other for no visible reason.
+	_check(CoinsManager.theme_price("lume_rainbow") == CoinsManager.theme_price("lume_ocean"),
+		"the two worlds leading the block cost the same")
 	_check(not LumeWorlds.has_world("lume_nope"), "has_world rejects an unknown id")
 
 func _shop() -> void:

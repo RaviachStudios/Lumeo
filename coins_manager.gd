@@ -117,17 +117,17 @@ const THEMES := {
 	# "inferno" and "rainbow" are shader themes, "bg_crystal" is Crystal Cave. These
 	# ids are what saved wallets contain, so they are frozen.
 	#
-	# LIVING FOREST is FREE. Price 0 is the same thing "default" above and the four
-	# skin-bound button frames are: the card still shows a buy button, the player
-	# still taps it once, and that tap is still what writes the id into owned_themes
-	# and makes the equip persist. Nothing about the ownership, purchase, equip or
-	# save path is special-cased for it — a free item is a priced item that costs
-	# nothing, which is why `can_afford` and `purchase_theme` need no change.
+	# LIVING FOREST costs 650. It was FREE until 2026-09-20; nothing about the
+	# ownership, purchase, equip or save path was special-cased for that and so
+	# nothing had to change when it stopped being free — a free item was always just
+	# a priced item that costs nothing, which is why `can_afford` and
+	# `purchase_theme` need no change in either direction. The only thing the price
+	# decides is whether `can_afford` lets the tap through, and whether the card
+	# draws a coin price or the word FREE (see ShopScreen._style_card_button, which
+	# keys off `price == 0` and nothing else).
 	#
 	# The three SPECIAL SKINS below — Ice Kingdom, Magical Lake, Royal Casino — are
-	# that same item in every one of those respects and simply cost 4000. Nothing
-	# about the ownership, purchase, equip or save path knows the difference; the
-	# only thing their price changes is whether `can_afford` lets the tap through.
+	# that same item in every one of those respects and simply cost 4000.
 	#
 	# None of them is pre-owned. Handing them out in `owned_themes`'
 	# default would rewrite the meaning of every wallet already on disk; leaving the
@@ -145,7 +145,7 @@ const THEMES := {
 	# which makes it a complete look rather than a backdrop. Everything on this side
 	# of the shop is untouched by that: same entry, same category, same
 	# owned_themes / selected_theme. Only the card it is bought from moved.
-	"world_forest":  {"name": "Living Forest",  "price": 0, "category": "themes"},
+	"world_forest":  {"name": "Living Forest",  "price": 650, "category": "themes"},
 	"world_ice":     {"name": "Ice Kingdom",    "price": 4000, "category": "themes"},
 	# MAGICAL LAKE is the second complete look and sits here for exactly the same
 	# reasons Ice Kingdom does: it is an ordinary theme on this side of the shop —
@@ -181,31 +181,32 @@ const THEMES := {
 	# "bg_volcanic" are Themes1 floors, "world_forest" is a Themes2 world. These ids
 	# are what saved wallets contain, so they are frozen.
 	#
-	# Priced 0 .. 1500 on their own ladder, cheapest first, which is also their
-	# shop order. They are illustrated scenes of the same class as the older shader
-	# themes above (80 .. 1600), so they are priced against THAT ladder rather than
-	# against the 3D floors' 100 .. 800 one, and the rung each sits on is how much
-	# world it has: an open sky at the bottom, a whole button kingdom at the top.
-	# No price above this block is touched.
+	# Priced 500 .. 1500 on their own ladder. They are illustrated scenes of the same
+	# class as the older shader themes above (80 .. 1600), so they are priced against
+	# THAT ladder rather than against the 3D floors' 100 .. 800 one, and the rung each
+	# sits on is how much world it has: an open sky at the bottom, a whole button
+	# kingdom at the top. No price above this block is touched.
+	#
+	# THE BLOCK IS NO LONGER CHEAPEST-FIRST, and that is deliberate. Rainbow Skyway
+	# and Deep Ocean led it while they were FREE, which is what kept the order and
+	# the ladder the same list. They were priced at 650 on 2026-09-20 and KEPT THEIR
+	# PLACE, so the shop row now reads 650, 650, 500, 600, 800, 900, 1000, 1500.
+	# The order is the authored one — least world in frame to most, an open sky
+	# first — and it is the cards' order on the tab that was worth preserving, not
+	# the coincidence that it used to sort by price. tools/lume_verify.tscn checks
+	# the prices individually and no longer asserts a monotonic ladder.
 	#
 	# Not pre-owned, for the same reason nothing else here is: handing them out in
 	# `owned_themes`' default would rewrite the meaning of every wallet on disk.
-	# The two FREE ones lead the block, which is what keeps it cheapest-first. Price 0
-	# is the same thing "default", the two Themes2 worlds and the four skin-bound
-	# frames are: the card shows a buy button reading FREE, the player still taps it
-	# once, and that tap is still what writes the id into `owned_themes`. Nothing in
-	# the ownership, purchase, equip or save path is special-cased — a free item is a
-	# priced item that costs nothing.
-	#
-	# Not pre-owned, for the same reason nothing else here is: handing them out in
-	# `owned_themes`' default would rewrite the meaning of every wallet on disk.
+	# The tap on the card is what writes the id into `owned_themes`, exactly as it
+	# did when the first two cost nothing — no path here is special-cased for price.
 	#
 	# Not "Rainbow Sky": that was the name of a Themes2 world that has since been
 	# cut, and it is still distinct from "Rainbow" (a shader theme) — two cards with
 	# one name is not something the buy flow can disambiguate, the same reason Deep
 	# Void is not called Deep Space.
-	"lume_rainbow":  {"name": "Rainbow Skyway",    "price": 0,    "category": "themes"},
-	"lume_ocean":    {"name": "Deep Ocean",        "price": 0,    "category": "themes"},
+	"lume_rainbow":  {"name": "Rainbow Skyway",    "price": 650,  "category": "themes"},
+	"lume_ocean":    {"name": "Deep Ocean",        "price": 650,  "category": "themes"},
 	"lume_candy":    {"name": "Candy World",       "price": 500,  "category": "themes"},
 	"lume_space":    {"name": "Space Pets",        "price": 600,  "category": "themes"},
 	# Not just "Magical Forest" colliding with anything, but note the two neighbours
