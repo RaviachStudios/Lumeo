@@ -27,6 +27,7 @@ const ShopScreen := preload("res://shop_screen.gd")
 var game_manager: Node
 
 const GOLD := Color(1.0, 0.85, 0.2)
+const ClassArt := preload("res://class_art.gd")
 
 # Orbit orb colors - a soft reference to the button colors (premium, not neon).
 const ORB_COLORS := [
@@ -122,6 +123,14 @@ var _play_cap_rest := 0.0
 # the center. The Shop / Leaderboard / How-to navigation are premium cards
 # ({wrap} dicts) flanking it.
 var _start_lm: Dictionary = {}
+# Teachers only: the hero CREATE CLASS GAME chalkboard, which takes the START orb's
+# centre spot (START shrinks and steps to its right). Built once the wallet doc —
+# which carries users/{uid}.role — has loaded. See ClassManager.is_teacher().
+var _class_hero: Button
+var _class_hero_lbl: Label
+var _class_hero_busy := false
+const CLASS_HERO_SIZE := Vector2(330.0, 250.0)
+const START_TEACHER_SCALE := 0.56
 var _shop_card: Dictionary = {}
 var _ranks_card: Dictionary = {}
 var _arena_card: Dictionary = {}   # bottom-center: opens the Arena (multiplayer contests)
@@ -208,6 +217,7 @@ func _ready() -> void:
 	_build_logo()
 	_build_cards()
 	_build_start()
+	_maybe_build_class_hero()
 	_build_account_hud()
 	_build_credits()
 	if FirebaseManager.is_signed_in():
@@ -2491,7 +2501,12 @@ func _layout() -> void:
 	_place_card(_ranks_card, Vector2(sz.x - sz.x * 0.035 - CARD_SIZE.x, side_cy - CARD_SIZE.y * 0.5))
 	_place_card(_arena_card, Vector2(cx - ARENA_SIZE.x * 0.5, sz.y - ARENA_SIZE.y - sz.y * 0.03))
 
-	_place_lm(_start_lm, Vector2(cx, sz.y * 0.50))
+	if _class_hero:
+		# Teacher layout: the class chalkboard is the hero, START sits beside it, small.
+		_class_hero.position = Vector2(cx - 95.0, sz.y * 0.52) - CLASS_HERO_SIZE * 0.5
+		_place_lm(_start_lm, Vector2(cx + 165.0, sz.y * 0.53))
+	else:
+		_place_lm(_start_lm, Vector2(cx, sz.y * 0.50))
 
 	# Account row hugs the right edge, on the same baseline as the top-left coin
 	# pill so the two HUD corners sit level.
@@ -4326,6 +4341,122 @@ func _style(btn: Button, col: Color) -> void:
 	sp.bg_color = col.darkened(0.2)
 	btn.add_theme_stylebox_override("pressed", sp)
 	btn.add_theme_color_override("font_color", Color.WHITE)
+
+# ---------------- class games (teachers) ----------------
+
+# Build the teacher hero once we know the player is a teacher. The role rides on the
+# wallet doc CoinsManager already reads, so this costs nothing; if that read hasn't
+# landed yet we try again when it does.
+func _maybe_build_class_hero() -> void:
+	if _class_hero != null:
+		return
+	if not FirebaseManager.is_signed_in():
+		return
+	if not CoinsManager.is_loaded():
+		if not CoinsManager.loaded.is_connected(_on_class_role_loaded):
+			CoinsManager.loaded.connect(_on_class_role_loaded, CONNECT_ONE_SHOT)
+		return
+	if not ClassManager.is_teacher():
+		return
+	_build_class_hero()
+
+func _on_class_role_loaded() -> void:
+	if not is_inside_tree():
+		return
+	_maybe_build_class_hero()
+	_layout()
+
+func _build_class_hero() -> void:
+	var b := Button.new()
+	b.size = CLASS_HERO_SIZE
+	b.pivot_offset = CLASS_HERO_SIZE * 0.5
+	b.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(st, empty)
+	add_child(b)
+	var art := Control.new()
+	art.size = CLASS_HERO_SIZE
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	art.draw.connect(func() -> void:
+		var t := Time.get_ticks_msec() / 1000.0
+		var board := Rect2(Vector2(6, 10), Vector2(CLASS_HERO_SIZE.x - 12, CLASS_HERO_SIZE.y - 28))
+		ClassArt.draw_chalkboard(art, board, t, true)
+		ClassArt.draw_apple(art, Vector2(CLASS_HERO_SIZE.x - 34, CLASS_HERO_SIZE.y - 30), 34.0))
+	b.add_child(art)
+	var tick := Timer.new()
+	tick.wait_time = 0.1
+	tick.autostart = true
+	tick.timeout.connect(art.queue_redraw)
+	art.add_child(tick)
+	var returning := ClassManager.has_pointer()
+	var top := Label.new()
+	top.text = "RETURN TO" if returning else "CREATE A"
+	top.add_theme_font_size_override("font_size", 22)
+	top.add_theme_color_override("font_color", Color(0.95, 0.96, 0.90, 0.8))
+	top.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	top.position = Vector2(0, 62)
+	top.size = Vector2(CLASS_HERO_SIZE.x, 30)
+	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(top)
+	_class_hero_lbl = Label.new()
+	_class_hero_lbl.text = "YOUR CLASS" if returning else "CLASS GAME"
+	_class_hero_lbl.add_theme_font_size_override("font_size", 42)
+	_class_hero_lbl.add_theme_color_override("font_color", Color(0.98, 0.98, 0.92))
+	_class_hero_lbl.add_theme_color_override("font_shadow_color", Color(1.0, 1.0, 1.0, 0.18))
+	_class_hero_lbl.add_theme_constant_override("shadow_offset_x", 2)
+	_class_hero_lbl.add_theme_constant_override("shadow_offset_y", 2)
+	_class_hero_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_class_hero_lbl.position = Vector2(0, 92)
+	_class_hero_lbl.size = Vector2(CLASS_HERO_SIZE.x, 56)
+	_class_hero_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(_class_hero_lbl)
+	var sub := Label.new()
+	sub.text = "Hard · up to 45 students"
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", Color(0.95, 0.96, 0.90, 0.6))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.position = Vector2(0, 150)
+	sub.size = Vector2(CLASS_HERO_SIZE.x, 22)
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(sub)
+	b.button_down.connect(func() -> void:
+		b.create_tween().tween_property(b, "scale", Vector2.ONE * 0.96, 0.08))
+	b.button_up.connect(func() -> void:
+		b.create_tween().tween_property(b, "scale", Vector2.ONE, 0.14) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
+	b.pressed.connect(_on_class_hero)
+	_class_hero = b
+	# START steps aside, smaller.
+	if not _start_lm.is_empty():
+		var wrap: Control = _start_lm["wrap"]
+		wrap.pivot_offset = wrap.size * 0.5
+		wrap.scale = Vector2.ONE * START_TEACHER_SCALE
+
+func _on_class_hero() -> void:
+	if _class_hero_busy:
+		return
+	if ClassManager.has_pointer():
+		game_manager.show_class()
+		return
+	_class_hero_busy = true
+	_class_hero_lbl.text = "OPENING..."
+	var res := await ClassManager.create_class()
+	_class_hero_busy = false
+	if not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		AudioManager.stop_bg_music()
+		game_manager.show_class()
+		return
+	if String(res.get("error", "")) == "in_class":
+		game_manager.show_class()
+		return
+	_class_hero_lbl.text = {
+		"in_room": "LEAVE ARENA FIRST",
+		"network": "NO CONNECTION",
+		"not_teacher": "TEACHERS ONLY",
+	}.get(String(res.get("error", "")), "TRY AGAIN")
 
 # ---------------- actions ----------------
 func _on_start() -> void:

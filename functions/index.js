@@ -550,7 +550,34 @@ exports.sweepExpiredRooms = onSchedule({schedule: "every 15 minutes"}, async () 
   }
   await sweepOrphanState();
   await pruneLobbyIndex();
+  await sweepExpiredClasses();
 });
+
+// ---- Class Games -----------------------------------------------------------
+// classes/{pid} is written only by its teacher's device and class_reports/{pid}_{k}
+// (k = 0..4) only by its students (see class_manager.gd). Clients can delete
+// neither, so this is the ONLY cleanup: once a class's expires_unix passes (a lobby
+// nobody started, a game whose teacher never came back, or a finished/cancelled
+// class that has lingered long enough for everyone to see the podium), delete it and
+// its five report shards. Deleting a shard that was never created is a no-op.
+const CLASS_SHARDS = 5;
+const CLASS_SWEEP_LIMIT = 40;
+
+async function sweepExpiredClasses() {
+  const snap = await db.collection("classes")
+      .where("expires_unix", "<", nowUnix())
+      .limit(CLASS_SWEEP_LIMIT)
+      .get();
+  if (snap.empty) return;
+  const batch = db.batch();
+  snap.forEach((doc) => {
+    batch.delete(doc.ref);
+    for (let k = 0; k < CLASS_SHARDS; k++) {
+      batch.delete(db.collection("class_reports").doc(`${doc.id}_${k}`));
+    }
+  });
+  await batch.commit();
+}
 
 // A room write and the delete that follows it are two SEPARATE trigger invocations
 // with NO ordering guarantee, so the delete's cleanup can run first and the earlier

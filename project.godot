@@ -31,6 +31,7 @@ CoinsManager="*res://coins_manager.gd"
 BadgeManager="*res://badge_manager.gd"
 DailyTasks="*res://daily_tasks_manager.gd"
 ContestManager="*res://contest_manager.gd"
+ClassManager="*res://class_manager.gd"
 BackgroundManager="*res://background_manager.gd"
 PurchaseManager="*res://purchase_manager.gd"
 

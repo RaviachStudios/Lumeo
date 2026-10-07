@@ -124,12 +124,27 @@ var _press_active := false          # is the per-press timer currently counting?
 var _press_deadline := 0.0          # ticks-seconds by which the next press must land
 var _countdown_lbl: Label           # big side 3-2-1 shown in the final seconds
 
+# Class Game mode (GameState.class_context). The teacher's referee paces the rounds:
+# this screen plays a round when ClassManager says it has started, reports the result,
+# then WAITS for the next one instead of advancing on its own. Hard only, one timer for
+# the whole sequence (ClassRules.limit), no replays / ads, no skin freeze events (they
+# would eat into everyone's shared round clock), and only coins count.
+const ClassRules := preload("res://class_rules.gd")
+var _is_class: bool = false
+var _class_token := 0               # bumps per round; a stale await bails out on mismatch
+var _class_input_start := 0.0       # ticks-seconds the input clock started
+var _class_banner: Label            # "ROUND 4" / 3-2-1, centred over the board
+var _class_wait_text := ""          # last waiting text set (avoid re-laying the pill per frame)
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_is_contest = GameState.contest_context.has("id")
+	_is_class = not _is_contest and GameState.class_context.has("id")
 	# Seed the sequence RNG from the room so every racer sees the identical pattern.
 	if _is_contest:
 		_rng.seed = int(GameState.contest_context.get("seed", 0))
+	elif _is_class:
+		_rng.seed = int(GameState.class_context.get("seed", 0))
 	num_buttons = GameState.num_colors
 	flash_time = GameState.flash_time
 	flash_gap = GameState.flash_gap
@@ -165,7 +180,10 @@ func _ready() -> void:
 	# the instant it closed. Credit the lost time back instead.
 	AdManager.ad_closed.connect(_on_ad_closed)
 	await get_tree().process_frame
-	_start_game()
+	if _is_class:
+		_class_begin()
+	else:
+		_start_game()
 
 # An ad just came down after `seconds_shown` on screen. Nothing about the game
 # advanced while it was up, so neither should the deadlines that measure it.
@@ -185,7 +203,13 @@ func _process(_dt: float) -> void:
 
 	# Ad loads asynchronously — update button visibility whenever it becomes ready
 	if _watch_ad_btn and _state == "input":
-		_watch_ad_btn.visible = AdManager.rewarded_ready
+		_watch_ad_btn.visible = AdManager.rewarded_ready and not _is_class
+
+	# Class Game: one clock for the whole sequence, always on screen; and while
+	# waiting for classmates, a countdown to when the round should be over.
+	if _is_class:
+		_class_process()
+		return
 
 	# Arena race: per-press 10s window with a 3-2-1 side countdown; miss it -> over.
 	if _is_contest and _press_active and _state == "input":
@@ -337,6 +361,14 @@ func _layout_countdown(sz: Vector2) -> void:
 		return
 	_countdown_lbl.size = Vector2(140, 140)
 	_countdown_lbl.position = Vector2(sz.x - 160.0, sz.y * 0.5 - 70.0)
+	_layout_class_banner(sz)
+
+func _layout_class_banner(sz: Vector2) -> void:
+	if _class_banner == null:
+		return
+	_class_banner.size = Vector2(sz.x, 160)
+	_class_banner.position = Vector2(0, sz.y * 0.5 - 80.0)
+	_class_banner.pivot_offset = _class_banner.size * 0.5
 
 # Apply the player's equipped board customization (the retired per-part colours, or
 # the SPECIAL SKINS tab) to the play device. CoinsManager is already loaded by the time a game
@@ -438,8 +470,9 @@ func _build_hud() -> void:
 	_layout_hud()
 
 	# Arena race: a big glowing 3-2-1 that appears on the side in the last 3s of a
-	# press window. Hidden by default; _process toggles + updates it.
-	if _is_contest:
+	# press window. Hidden by default; _process toggles + updates it. Class Games use
+	# the same label for their whole-sequence clock.
+	if _is_contest or _is_class:
 		_countdown_lbl = Label.new()
 		_countdown_lbl.add_theme_font_size_override("font_size", 96)
 		_countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
@@ -451,6 +484,20 @@ func _build_hud() -> void:
 		_countdown_lbl.visible = false
 		add_child(_countdown_lbl)
 		_layout_countdown(sz)
+	if _is_class:
+		_class_banner = Label.new()
+		_class_banner.add_theme_font_size_override("font_size", 88)
+		_class_banner.add_theme_color_override("font_color", Color(1.0, 0.95, 0.75))
+		_class_banner.add_theme_color_override("font_outline_color", Color(0.12, 0.06, 0.25))
+		_class_banner.add_theme_constant_override("outline_size", 14)
+		_class_banner.add_theme_color_override("font_shadow_color", Color(0.55, 0.40, 1.0, 0.6))
+		_class_banner.add_theme_constant_override("shadow_outline_size", 22)
+		_class_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_class_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_class_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_class_banner.visible = false
+		add_child(_class_banner)
+		_layout_class_banner(sz)
 
 # A raised, glossy 3D button. The face is `base`; a thick darker bottom border acts
 # as the button's "side", a bright top border is the highlight, and a drop shadow
@@ -627,7 +674,7 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	add_child(overlay)
 
 	var lbl := Label.new()
-	lbl.text = "Forfeit game?" if _is_contest else "Quit to Home?"
+	lbl.text = "Leave class?" if _is_class else ("Forfeit game?" if _is_contest else "Quit to Home?")
 	lbl.add_theme_font_size_override("font_size", 30)
 	lbl.add_theme_color_override("font_color", Color.WHITE)
 	lbl.position = Vector2(0, 28)
@@ -636,7 +683,8 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	overlay.add_child(lbl)
 
 	var sub := Label.new()
-	sub.text = "Your current score will count." if _is_contest else "Your progress will be lost."
+	sub.text = "You'll be out of the game." if _is_class \
+		else ("Your current score will count." if _is_contest else "Your progress will be lost.")
 	sub.add_theme_font_size_override("font_size", 15)
 	sub.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	sub.position = Vector2(0, 72)
@@ -651,7 +699,7 @@ func _build_quit_dialog(sz: Vector2) -> void:
 	yes.size = Vector2(155, 52)
 	yes.focus_mode = Control.FOCUS_NONE
 	yes.call("setup", Color(0.62, 0.11, 0.12), "cross",
-		"Yes, Forfeit" if _is_contest else "Yes, Quit")
+		"Yes, Leave" if _is_class else ("Yes, Forfeit" if _is_contest else "Yes, Quit"))
 	yes.pressed.connect(_on_quit_confirmed)
 	overlay.add_child(yes)
 
@@ -675,7 +723,7 @@ func _start_game() -> void:
 # Next colour in the sequence. Arena races draw from a room-seeded RNG so every
 # player sees the identical pattern; solo play stays fully random.
 func _next_color() -> int:
-	if _is_contest:
+	if _is_contest or _is_class:
 		return _rng.randi() % num_buttons
 	return randi() % num_buttons
 
@@ -1536,6 +1584,9 @@ func _player_pressed(idx: int) -> void:
 		_arm_press_timer()
 	if player_seq.size() == sequence.size():
 		_disarm_press_timer()
+		if _is_class:
+			_class_round_done()
+			return
 		_state = "idle"
 		_set_status("Correct! Get ready...")
 		# Award coins for this completed level and float a "+ N" indicator
@@ -1655,7 +1706,7 @@ func _player_pressed(idx: int) -> void:
 		_next_round()
 
 func _on_replay() -> void:
-	if _state != "input" or replays <= 0:
+	if _state != "input" or replays <= 0 or _is_class:
 		return
 	replays -= 1
 	_update_hud()
@@ -1678,7 +1729,7 @@ func _on_quit() -> void:
 # Back therefore raises the same forfeit prompt as the on-screen quit button (and
 # closes it if it's already up). A normal solo game keeps the old behaviour.
 func handle_back() -> bool:
-	if not _is_contest:
+	if not _is_contest and not _is_class:
 		return false
 	var dlg := get_node_or_null("QuitDialog")
 	if dlg == null:
@@ -1693,14 +1744,16 @@ func handle_back() -> bool:
 # back to the live room (see _game_over's _is_contest branch).
 func _on_quit_confirmed() -> void:
 	get_node("QuitDialog").visible = false
-	if _is_contest:
+	if _is_class:
+		_class_leave()
+	elif _is_contest:
 		if _state != "gameover":
 			_game_over()
 	else:
 		game_manager.show_home()
 
 func _on_watch_ad() -> void:
-	if _state != "input":
+	if _state != "input" or _is_class:
 		return
 	AdManager.show_rewarded(_replay_after_countdown)
 
@@ -1797,6 +1850,9 @@ func _game_over() -> void:
 	# Bank the coins earned this session into the persistent wallet. session_earned
 	# survives the commit, so the task board can count what the run paid out — and
 	# so the game-over screen can offer to multiply it (see game_over.gd).
+	if _is_class:
+		_class_out()
+		return
 	CoinsManager.commit_session()
 	DailyTasks.note_coins_earned(CoinsManager.session_earned)
 	# Advance the interstitial's per-N-games counter. Counted here rather than at
@@ -1863,7 +1919,7 @@ func _update_hud() -> void:
 		# is no round zero to roll away from.
 		_wheel.set_level(maxi(level, 1))
 	if _watch_ad_btn:
-		_watch_ad_btn.visible = AdManager.rewarded_ready
+		_watch_ad_btn.visible = AdManager.rewarded_ready and not _is_class
 
 # Float a gold "+ N" beside the coin pill, drifting up and fading out. Replaces
 # any indicator still in flight (rapid awards shouldn't pile up).
@@ -1903,3 +1959,225 @@ func _show_earn_indicator(amount: int) -> void:
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw.tween_property(lbl, "modulate:a", 0.0, 0.85).set_delay(0.25)
 	tw.chain().tween_callback(lbl.queue_free)
+
+# ---------------------------------------------------------------------------
+# Class Game mode
+# ---------------------------------------------------------------------------
+# The screen stays up for the whole class: it plays each round when ClassManager
+# hands it one, reports the result, and waits. It leaves for the class screen when
+# this student is out (failed, too late, counted out by the referee, removed) or the
+# class ends.
+
+func _class_begin() -> void:
+	ClassManager.round_started.connect(_class_on_round)
+	ClassManager.changed.connect(_class_on_changed)
+	_state = "waiting"
+	_set_status("Get ready...")
+	_update_hud()
+	if ClassManager.has_pending_round():
+		_class_on_round(0)
+	else:
+		# Opened without a round to play (e.g. the round was already lost to a slow
+		# start): let the phase check route us.
+		_class_on_changed()
+
+func _class_on_round(_r: int) -> void:
+	if _state == "gameover":
+		return
+	var pr := ClassManager.take_pending_round()
+	if pr.is_empty():
+		return
+	_class_play_round(int(pr["r"]), int(pr["recv_ms"]))
+
+func _class_play_round(r: int, recv_ms: int) -> void:
+	_class_token += 1
+	var tok := _class_token
+	_disarm_press_timer()
+	level = r
+	player_seq = []
+	while sequence.size() < r:
+		sequence.append(_next_color())
+	flash_time = ClassRules.flash_time(r)
+	flash_gap = ClassRules.flash_gap(r)
+	_update_hud()
+	_state = "showing"
+	_class_wait_text = ""
+	# The banner is part of the shared round clock: it started when the update reached
+	# us, not when this screen got round to it (the game screen itself can take a
+	# moment to build for round 1).
+	var elapsed := float(Time.get_ticks_msec() - recv_ms) / 1000.0
+	await _class_show_banner(r, maxf(0.3, ClassRules.banner(r) - elapsed), tok)
+	if not _class_round_live(tok):
+		return
+	_set_status("Watch carefully...")
+	await get_tree().create_timer(ClassRules.PRE_SEQUENCE).timeout
+	if not _class_round_live(tok):
+		return
+	await _play_sequence()
+	if not _class_round_live(tok):
+		return
+	_state = "input"
+	_set_status("Your turn!")
+	_class_input_start = _now_secs()
+	_press_active = true
+	_press_deadline = _class_input_start + ClassRules.limit(r)
+
+func _class_round_live(tok: int) -> bool:
+	return tok == _class_token and is_inside_tree() and _state != "gameover"
+
+# "ROUND 4" (or, before round 1, the 3-2-1) for `hold` seconds.
+func _class_show_banner(r: int, hold: float, tok: int) -> void:
+	if _class_banner == null:
+		await get_tree().create_timer(hold).timeout
+		return
+	_set_status("")
+	var steps: Array = []
+	if r == 1:
+		var per := minf(1.0, hold / 4.0)
+		steps.append(["ROUND 1", maxf(0.3, hold - per * 3.0)])
+		for n in ["3", "2", "1"]:
+			steps.append([n, per])
+	else:
+		steps.append(["ROUND %d" % r, hold])
+	for st: Array in steps:
+		if not _class_round_live(tok):
+			break
+		_class_banner.text = String(st[0])
+		_class_banner.visible = true
+		_class_banner.scale = Vector2.ONE * 1.25
+		_class_banner.modulate.a = 0.0
+		var tw := _class_banner.create_tween().set_parallel(true)
+		tw.tween_property(_class_banner, "scale", Vector2.ONE, 0.22) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_class_banner, "modulate:a", 1.0, 0.14)
+		await get_tree().create_timer(float(st[1])).timeout
+	if _class_banner and is_instance_valid(_class_banner):
+		_class_banner.visible = false
+
+func _class_process() -> void:
+	if _state == "input" and _press_active:
+		var remaining := _press_deadline - _now_secs()
+		if remaining <= 0.0:
+			_on_press_timeout()
+			return
+		if _countdown_lbl:
+			_countdown_lbl.visible = true
+			_countdown_lbl.text = str(int(ceil(remaining)))
+			_countdown_lbl.add_theme_color_override("font_color",
+				Color(1.0, 0.35, 0.3) if remaining <= 3.0 else Color(1.0, 0.85, 0.3))
+	elif _state == "waiting":
+		var txt := "Waiting for classmates..."
+		if ClassManager.teacher_late:
+			txt = "Waiting for your teacher..."
+		else:
+			var left := int(ceil(float(ClassManager.round_expected_end_ms() - ClassManager.server_ms()) / 1000.0))
+			if left > 0 and ClassManager.offset_known():
+				txt = "Waiting for classmates... %ds" % left
+		if txt != _class_wait_text:
+			_class_wait_text = txt
+			_set_status(txt)
+
+# The whole sequence is in. Score it, bank the coins for it, report, and wait.
+func _class_round_done() -> void:
+	var used := _now_secs() - _class_input_start
+	var lim := ClassRules.limit(level)
+	var pts := ClassRules.points(lim - used, lim)
+	_state = "waiting"
+	_class_wait_text = ""
+	CoinsManager.award_for_level("hard", level)
+	BackgroundManager.notify_level_complete(level)   # cosmetic only, never awaited
+	ClassManager.report_round(level, pts, int(used * 1000.0))
+	_class_flash_points(pts)
+	_set_status("+%d points!" % pts)
+
+func _class_flash_points(pts: int) -> void:
+	if _class_banner == null:
+		return
+	_class_banner.text = "+%d" % pts
+	_class_banner.visible = true
+	_class_banner.modulate = Color(0.6, 1.0, 0.65, 1.0)
+	_class_banner.scale = Vector2.ONE * 0.7
+	var tw := _class_banner.create_tween()
+	tw.tween_property(_class_banner, "scale", Vector2.ONE, 0.25) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.6)
+	tw.tween_property(_class_banner, "modulate:a", 0.0, 0.35)
+	tw.tween_callback(func() -> void:
+		_class_banner.visible = false
+		_class_banner.modulate = Color.WHITE)
+
+# Something about the class changed while we're in the game.
+func _class_on_changed() -> void:
+	if _state == "gameover" or not is_inside_tree():
+		return
+	match ClassManager.student_phase():
+		"playing", "lobby":
+			return
+		"out":
+			match ClassManager.my_out_reason():
+				"late":
+					_class_end("Your connection was too slow - you're out!")
+				"closed":
+					_class_end("The app was closed during this round - you're out!")
+				"kicked":
+					_class_end("Your teacher removed you from the class.")
+				_:
+					_class_end("Time's up - you're out in round %d!" % ClassManager.my_out_round())
+		"finished":
+			var won := false
+			for e: Dictionary in ClassManager.standings():
+				if bool(e["is_me"]) and int(e["p"]) == 1:
+					won = true
+			if won:
+				AudioManager.play_win_sound()
+				_class_end("YOU WIN!")
+			elif bool(ClassManager.doc.get("ended_early", false)):
+				_class_end("Your teacher ended the game.")
+			else:
+				_class_end("Game over!")
+		"kicked":
+			_class_end("Your teacher removed you from the class.")
+		"cancelled", "gone":
+			_class_end("Your teacher ended the class.")
+		"other_device":
+			_class_end("You're playing on another device.")
+		_:
+			_class_end("")
+
+func _class_end(msg: String) -> void:
+	if _state == "gameover":
+		return
+	_class_token += 1
+	_state = "gameover"
+	_disarm_press_timer()
+	ClassManager.commit_coins()
+	GameState.class_context = {}
+	if not msg.is_empty():
+		_set_status(msg)
+	await get_tree().create_timer(1.8).timeout
+	if is_inside_tree():
+		game_manager.show_class()
+
+# A wrong press or the clock ran out (from _game_over).
+func _class_out() -> void:
+	_class_token += 1
+	ClassManager.report_out(level, "failed")
+	ClassManager.commit_coins()
+	GameState.class_context = {}
+	AudioManager.play_lose_sound()
+	_set_status("You're out in round %d!" % level)
+	await get_tree().create_timer(1.8).timeout
+	if is_inside_tree():
+		game_manager.show_class()
+
+# "Yes, Leave" in the quit dialog.
+func _class_leave() -> void:
+	if _state == "gameover":
+		return
+	_class_token += 1
+	_state = "gameover"
+	_disarm_press_timer()
+	ClassManager.commit_coins()
+	ClassManager.leave_class()
+	GameState.class_context = {}
+	game_manager.show_home()

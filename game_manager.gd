@@ -12,6 +12,7 @@ const ShopScreen := preload("res://shop_screen.gd")
 const ArenaScreen := preload("res://arena_screen.gd")
 const ContestCreateScreen := preload("res://contest_create_screen.gd")
 const ContestDetailScreen := preload("res://contest_detail_screen.gd")
+const ClassScreen := preload("res://class_screen.gd")
 
 var _current: Control = null
 var _canvas: CanvasLayer
@@ -110,6 +111,21 @@ func show_contest_detail(contest_id: String) -> void:
 	s.contest_id = contest_id
 	_swap(s)
 
+# The Class Game screen (teacher lobby / live board / podium, or the student's
+# lobby / spectator / podium). Which face it shows comes from ClassManager.
+func show_class() -> void:
+	GameState.class_context = {}
+	_swap(ClassScreen.new())
+
+# What kind of screen is up, for ClassManager's "bring a wandering student back to
+# their class when it starts" check.
+func current_screen_kind() -> String:
+	if _current is GameScreen:
+		return "game"
+	if _current is ClassScreen:
+		return "class"
+	return "other"
+
 func show_loading() -> void:
 	_swap(LoadingScreen.new())
 
@@ -117,11 +133,13 @@ func show_home() -> void:
 	# Any return home ends a contest game context (an abandoned contest game must
 	# never leak into a later normal game).
 	GameState.contest_context = {}
+	GameState.class_context = {}
 	_swap(HomeScreen.new())
 
 func show_difficulty() -> void:
-	# Normal-play entry point: guarantee no stale contest context.
+	# Normal-play entry point: guarantee no stale contest / class context.
 	GameState.contest_context = {}
+	GameState.class_context = {}
 	_swap(DifficultyScreen.new())
 
 func show_how_to_play() -> void:

@@ -444,6 +444,9 @@ func create_contest(difficulty: String, title: String = "",
 	var busy := await active_room()
 	if not busy.is_empty():
 		return {"ok": false, "error": "in_room", "id": String(busy.get("id", ""))}
+	# ...and not while in a Class Game either (one read, only if a class pointer exists).
+	if await ClassManager.busy():
+		return {"ok": false, "error": "in_class"}
 
 	# Claim a lobby slot BEFORE creating anything, so a full lobby can't leave an
 	# orphan room behind.
@@ -519,6 +522,8 @@ func join_contest(raw_id: String) -> Dictionary:
 	var busy := await active_room()
 	if not busy.is_empty() and String(busy.get("id", "")) != cid:
 		return {"ok": false, "error": "in_room", "id": String(busy.get("id", ""))}
+	if await ClassManager.busy():
+		return {"ok": false, "error": "in_class"}
 
 	var room := await _load_room(cid)
 	if room.is_empty():

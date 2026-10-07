@@ -179,6 +179,12 @@ service cloud.firestore {
     // (streak_days + first_login_at), display name, last claim date.
     // Owner-only. Fields are validated only when present so partial (merge)
     // writes don't have to set every field at once.
+    // Class Games: users/{uid}.role is granted by hand and read-only to clients.
+    function roleUnchanged() {
+      return (resource == null && !('role' in request.resource.data))
+          || (resource != null
+              && request.resource.data.get('role', '') == resource.data.get('role', ''));
+    }
     match /users/{uid} {
       allow read:   if isUser(uid);
       allow delete: if isUser(uid);
@@ -291,7 +297,12 @@ service cloud.firestore {
             || (request.resource.data.current_room_title is string
                 && request.resource.data.current_room_title.size() <= 32))
         && (!('current_room_host' in request.resource.data)
-            || request.resource.data.current_room_host is bool);
+            || request.resource.data.current_room_host is bool)
+        // Class Games: `role` ("teacher") is granted BY HAND in the console and is
+        // read-only to the player — a create may not carry it, and an update must
+        // leave it exactly as it was. Every client write to this doc is a merge, so
+        // an unchanged role rides through untouched. (classes/{pid} create checks it.)
+        && roleUnchanged();
     }
 
     // ---- Arena rooms -------------------------------------------------------
@@ -469,6 +480,82 @@ service cloud.firestore {
     match /lobby_index/{docId} {
       allow read: if true;
       allow write: if false;   // server-only (Admin SDK bypasses rules)
+    }
+
+    // ---- Class Games (teacher mode) ----------------------------------------
+    // See class_manager.gd / CLASS_GAMES_PLAN.md.
+    //
+    //   classes/{pid}            written ONLY by its teacher; every student
+    //                            listens. Create requires users/{uid}.role ==
+    //                            "teacher" (one rule read, on create only).
+    //   class_reports/{pid}_{k}  k = 0..4; each student merge-writes ONLY their
+    //                            own key; the teacher listens.
+    //
+    // Both are world-readable (names + scores only), matching contests: clients
+    // read over unauthenticated REST. Neither is deletable by clients — the
+    // sweepExpiredRooms function deletes a class and its shards once expires_unix
+    // passes. Standings are client-trusted, same posture as the Arena: rules bound
+    // structure and who may write what, not the numbers' honesty.
+    function classShapeOk() {
+      let d = request.resource.data;
+      return d.teacher_uid is string
+          && d.status in ['lobby', 'playing', 'finished', 'cancelled']
+          && (!('round' in d) || (d.round is int && d.round >= 0 && d.round <= 15))
+          && (!('roster' in d) || (d.roster is map && d.roster.size() <= 45))
+          && (!('out' in d) || (d.out is map && d.out.size() <= 45))
+          && (!('kicked' in d) || (d.kicked is map && d.kicked.size() <= 200))
+          && (!('results' in d) || (d.results is map && d.results.size() <= 45))
+          && (!('teacher_name' in d)
+              || (d.teacher_name is string && d.teacher_name.size() <= 32))
+          && expiresFutureOk();
+    }
+    match /classes/{pid} {
+      allow read: if true;
+      allow create: if request.auth != null
+          && pid.matches('^[0-9]{6}$')
+          && request.resource.data.teacher_uid == request.auth.uid
+          && request.resource.data.status == 'lobby'
+          && classShapeOk()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'teacher';
+      allow update: if request.auth != null
+          && resource.data.teacher_uid == request.auth.uid
+          && request.resource.data.teacher_uid == resource.data.teacher_uid
+          && classShapeOk();
+      allow delete: if false;
+    }
+
+    function reportRowOk(uid) {
+      let row = request.resource.data.players[uid];
+      return row is map
+          && row.n is string && row.n.size() <= 32
+          && row.st in ['lobby', 'in', 'out', 'left']
+          && (!('r' in row) || (row.r is int && row.r >= 0 && row.r <= 15))
+          && (!('s' in row) || (row.s is int && row.s >= 0 && row.s <= 1500))
+          && (!('t' in row) || (row.t is int && row.t >= 0 && row.t <= 400000))
+          && (!('f' in row) || (row.f is int && row.f >= 0 && row.f <= 15));
+    }
+    // Joining (a NEW key in a shard) is only allowed while the class is still in
+    // its lobby — one rule read, paid only on join, never on a round report.
+    function classInLobby(sid) {
+      return get(/databases/$(database)/documents/classes/$(sid.split('_')[0])).data.status == 'lobby';
+    }
+    match /class_reports/{sid} {
+      allow read: if true;
+      allow create: if request.auth != null
+          && sid.matches('^[0-9]{6}_[0-4]$')
+          && request.resource.data.keys().hasOnly(['players'])
+          && request.resource.data.players is map
+          && request.resource.data.players.keys().hasOnly([request.auth.uid])
+          && reportRowOk(request.auth.uid)
+          && classInLobby(sid);
+      allow update: if request.auth != null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
+          && request.resource.data.players.diff(resource.data.players).affectedKeys()
+                 .hasOnly([request.auth.uid])
+          && request.resource.data.players.size() <= 15
+          && reportRowOk(request.auth.uid)
+          && (request.auth.uid in resource.data.players || classInLobby(sid));
+      allow delete: if false;
     }
   }
 }

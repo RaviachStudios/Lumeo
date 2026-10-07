@@ -82,6 +82,7 @@ func delete_account() -> Dictionary:
 	if not is_signed_in():
 		return {"ok": false, "error": "not_signed_in"}
 	await ContestManager.leave_all()
+	await ClassManager.leave_all()
 	await LeaderboardManager.delete_all_my_rows()
 	await CoinsManager.delete_wallet_doc()
 

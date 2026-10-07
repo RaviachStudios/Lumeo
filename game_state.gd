@@ -7,6 +7,11 @@ extends Node
 # back to the live room (instead of the solo game-over screen). Cleared on any
 # return to home / difficulty so a stale context can't make a normal game count.
 var contest_context: Dictionary = {}
+# Set by ClassManager.prepare_game when a Class Game round is played; empty {} for
+# normal play. Shape: {id, seed}. game.gd switches to class mode off it (hard only,
+# rounds paced by the teacher, whole-sequence timer, coins only). Cleared the same
+# way as contest_context.
+var class_context: Dictionary = {}
 
 var difficulty: String = "easy"
 # How many buttons the play device has on this difficulty, and therefore how many

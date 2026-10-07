@@ -90,6 +90,17 @@ var _choice_modal_shift := 0.0   # current upward lift so the field clears the k
 
 var _busy := false
 
+# Class Games: a JOIN YOUR CLASS sign in the top-right corner (RETURN TO CLASS when
+# this player is already in one) and the class-code popup it opens.
+const CLASS_GREEN := Color(0.35, 0.80, 0.50)
+const CLASS_CARD_SCALE := 1.45
+var _class_btn: Button
+var _class_scrim: ColorRect
+var _class_modal: Panel
+var _class_edit: LineEdit
+var _class_msg: Label
+var _class_join_btn: Button
+
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -124,6 +135,7 @@ func _ready() -> void:
 	_join_btn.pressed.connect(_on_join)
 	add_child(_join_btn)
 
+	_build_class_card()
 	_build_toast()
 
 	_layout()
@@ -177,6 +189,13 @@ func _layout() -> void:
 		ArenaUI.layout_action_card(_create_btn, ArenaFX.side_slot_pos(sz, -1.0), Vector2(cw, ch))
 		ArenaUI.layout_action_card(_join_btn, ArenaFX.side_slot_pos(sz, 1.0), Vector2(cw, ch))
 
+	if _class_btn:
+		var cps: Vector2 = _class_btn.get_meta("plaque_size")
+		var ccrest: float = _class_btn.get_meta("crest")
+		var csz := Vector2(cps.x + 40.0, cps.y + ccrest + 60.0)
+		# layout_action_card plants the board 150px above `ground`.
+		ArenaUI.layout_action_card(_class_btn, Vector2(sz.x - csz.x * 0.5 - 18.0, 150.0 + 96.0), csz)
+	_layout_class_modal(sz)
 	if _toast:
 		_toast.size = Vector2(sz.x, 30)
 		_toast.position = Vector2(0, sz.y - 40)
@@ -316,6 +335,8 @@ func _set_action_cards_visible(on: bool) -> void:
 		_create_btn.visible = show
 	if _join_btn:
 		_join_btn.visible = show
+	if _class_btn:
+		_class_btn.visible = on
 
 const CREATE_MODAL_W := 440.0
 const CREATE_MODAL_H := 452.0
@@ -857,10 +878,147 @@ func _do_create() -> void:
 	match String(res.get("error", "")):
 		"auth":         _cmsg.text = "Sign in and pick a name first."
 		"in_room":      _cmsg.text = "You already have a room open."
+		"in_class":     _cmsg.text = "Finish your class game first."
 		"id_collision": _cmsg.text = "Couldn't allocate an ID. Try again."
 		# One line: _cmsg is a fixed 22px row with no autowrap.
 		"lobby_full":   _cmsg.text = "Public lobby is full (%d rooms) — try again shortly." % ContestManager.LOBBY_MAX
 		_:              _cmsg.text = "Couldn't create the room. Try again."
+
+# ---------------- class games ----------------
+
+func _build_class_card() -> void:
+	var returning := ClassManager.has_pointer()
+	_class_btn = ArenaUI.action_card("RETURN TO CLASS" if returning else "JOIN YOUR CLASS", "",
+		"door", CLASS_GREEN, false, Color(0.55, 1.0, 0.70), CLASS_CARD_SCALE)
+	_class_btn.pressed.connect(_on_class_card)
+	add_child(_class_btn)
+
+func _on_class_card() -> void:
+	if not FirebaseManager.is_signed_in() or not FirebaseManager.has_display_name():
+		_show_toast("Sign in and pick a name to join your class.")
+		return
+	if ClassManager.has_pointer():
+		game_manager.show_class()
+		return
+	if _class_modal == null:
+		_build_class_modal()
+	_class_edit.text = ""
+	_class_msg.text = ""
+	_class_scrim.visible = true
+	_class_modal.visible = true
+	_layout_class_modal(get_viewport_rect().size)
+	_class_edit.grab_focus()
+
+func _build_class_modal() -> void:
+	_class_scrim = ColorRect.new()
+	_class_scrim.color = Color(0, 0, 0, 0.55)
+	_class_scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_class_scrim.visible = false
+	_class_scrim.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
+			_close_class_modal())
+	add_child(_class_scrim)
+	_class_modal = _make_premium_panel(CLASS_GREEN)
+	_class_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_class_modal.size = Vector2(420, 300)
+	_class_modal.visible = false
+	add_child(_class_modal)
+	var t := Label.new()
+	t.text = "JOIN YOUR CLASS"
+	t.add_theme_font_size_override("font_size", 28)
+	t.add_theme_color_override("font_color", ArenaUI.GOLD)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.position = Vector2(0, 22)
+	t.size = Vector2(420, 36)
+	_class_modal.add_child(t)
+	var sub := Label.new()
+	sub.text = "Type the class code your teacher is showing"
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", ArenaUI.MUTED)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.position = Vector2(0, 62)
+	sub.size = Vector2(420, 22)
+	_class_modal.add_child(sub)
+	_class_edit = LineEdit.new()
+	_class_edit.placeholder_text = "000000"
+	_class_edit.max_length = 6
+	_class_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_class_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
+	_class_edit.add_theme_font_size_override("font_size", 40)
+	_class_edit.position = Vector2(70, 98)
+	_class_edit.size = Vector2(280, 64)
+	_class_edit.text_submitted.connect(func(_t: String) -> void: _do_join_class())
+	_class_modal.add_child(_class_edit)
+	_class_msg = Label.new()
+	_class_msg.add_theme_font_size_override("font_size", 15)
+	_class_msg.add_theme_color_override("font_color", Color(1.0, 0.7, 0.6))
+	_class_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_class_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_class_msg.position = Vector2(20, 168)
+	_class_msg.size = Vector2(380, 40)
+	_class_modal.add_child(_class_msg)
+	var cancel := _sculpt_button("Cancel", ArenaUI.SAND)
+	cancel.position = Vector2(30, 222)
+	cancel.size = Vector2(170, 56)
+	cancel.pressed.connect(_close_class_modal)
+	_class_modal.add_child(cancel)
+	_class_join_btn = _sculpt_button("Join", CLASS_GREEN, true)
+	_class_join_btn.position = Vector2(220, 222)
+	_class_join_btn.size = Vector2(170, 56)
+	_class_join_btn.pressed.connect(_do_join_class)
+	_class_modal.add_child(_class_join_btn)
+
+func _layout_class_modal(sz: Vector2) -> void:
+	if _class_modal == null:
+		return
+	_class_scrim.position = Vector2.ZERO
+	_class_scrim.size = sz
+	# Sit high so the on-screen number pad doesn't cover the field.
+	_class_modal.position = Vector2(sz.x * 0.5 - _class_modal.size.x * 0.5, maxf(10.0, sz.y * 0.10))
+
+func _close_class_modal() -> void:
+	if _busy:
+		return
+	if _class_edit:
+		_class_edit.release_focus()
+	if _class_modal:
+		_class_modal.visible = false
+	if _class_scrim:
+		_class_scrim.visible = false
+
+func _do_join_class() -> void:
+	if _busy:
+		return
+	var code := _class_edit.text.strip_edges()
+	if code.length() != 6 or not code.is_valid_int():
+		_class_msg.text = "The class code is 6 numbers."
+		return
+	_busy = true
+	_class_msg.add_theme_color_override("font_color", ArenaUI.MUTED)
+	_class_msg.text = "Joining..."
+	var res: Dictionary = await ClassManager.join_class(code)
+	_busy = false
+	if not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		_close_class_modal()
+		game_manager.show_class()
+		return
+	_class_msg.add_theme_color_override("font_color", Color(1.0, 0.7, 0.6))
+	_class_msg.text = {
+		"bad_pid": "The class code is 6 numbers.",
+		"not_found": "No class with that code.",
+		"network": "No connection. Check your internet and try again.",
+		"started": "This class game already started.",
+		"ended": "This class game has ended.",
+		"full": "This class is full.",
+		"kicked": "Your teacher removed you from this class.",
+		"update_app": "Please update the app to join this class.",
+		"teacher_update": "Your teacher needs to update the app.",
+		"in_room": "Leave your Arena room first.",
+		"in_class": "You're already in another class game.",
+		"auth": "Sign in and pick a name first.",
+	}.get(String(res.get("error", "")), "Couldn't join. Try again.")
 
 # Both create and join need a signed-in player with a chosen name.
 func _require_account() -> bool:
@@ -919,6 +1077,7 @@ func _do_join() -> void:
 		"closed":    _id_msg.text = "That room has closed."
 		"full":      _id_msg.text = "That room is full."
 		"in_room":   _id_msg.text = "Leave your current room first."
+		"in_class":  _id_msg.text = "Finish your class game first."
 		"auth":      _id_msg.text = "Sign in and pick a name first."
 		_:           _id_msg.text = "Couldn't join. Try again."
 
@@ -1518,6 +1677,7 @@ func _on_lobby_join(cid: String) -> void:
 		"closed":        _show_toast("That room just closed.")
 		"full":          _show_toast("That room is full.")
 		"in_room":       _show_toast("Leave your current room first.")
+		"in_class":      _show_toast("Finish your class game first.")
 		"auth":          _show_toast("Sign in and pick a name first.")
 		_:               _show_toast("Couldn't join. Try again.")
 	# Drop the stale row immediately; the index listener catches up a beat later.

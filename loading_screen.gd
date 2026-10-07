@@ -170,6 +170,13 @@ func _run_boot() -> void:
 	if FirebaseManager.is_signed_in() and ContestManager.has_cached_room():
 		arena_done[0] = false
 		_warm_arena_room(arena_done)
+	# Same for a Class Game pointer: if this player (teacher or student) was in a live
+	# class when the app closed, validate it (one read) and route straight back into it
+	# instead of home — a teacher's referee resumes, a student sees where they stand.
+	var class_state := [true, {}]
+	if FirebaseManager.is_signed_in() and ClassManager.has_pointer():
+		class_state[0] = false
+		_warm_class(class_state)
 	# Warm Google Play Billing here, while the loading screen is already up, so
 	# the coin-pack popup opens with prices in place instead of flashing
 	# "LOADING…" buttons. On devices without the billing plugin (editor,
@@ -186,7 +193,7 @@ func _run_boot() -> void:
 	# MAX_SEC caps a stalled one.
 	if FirebaseManager.is_signed_in():
 		while ((LeaderboardManager.is_warming() and not LeaderboardManager.warm_ready()) \
-				or not arena_done[0]) and _elapsed(start) < MAX_SEC:
+				or not arena_done[0] or not class_state[0]) and _elapsed(start) < MAX_SEC:
 			await get_tree().process_frame
 	_set_progress(P_BOARDS)
 	# Pre-bake the Arena crowd sprites while the loading screen is still up. Each body is
@@ -219,7 +226,12 @@ func _run_boot() -> void:
 	if not is_inside_tree():
 		return
 	if game_manager:
-		game_manager.show_home()
+		var cdoc: Dictionary = class_state[1]
+		var cst := String(cdoc.get("status", ""))
+		if not cdoc.is_empty() and (cst == "lobby" or cst == "playing" or bool(cdoc.get("_unknown", false))):
+			game_manager.show_class()
+		else:
+			game_manager.show_home()
 
 func _elapsed(start_ms: int) -> float:
 	return float(Time.get_ticks_msec() - start_ms) / 1000.0
@@ -232,3 +244,8 @@ func _elapsed(start_ms: int) -> float:
 func _warm_arena_room(flag: Array) -> void:
 	await ContestManager.active_room()
 	flag[0] = true
+
+# Validates the Class Game pointer (see _run_boot). `state` = [done, class_doc].
+func _warm_class(state: Array) -> void:
+	state[1] = await ClassManager.validate_pointer()
+	state[0] = true
