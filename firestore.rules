@@ -505,6 +505,10 @@ service cloud.firestore {
           && (!('out' in d) || (d.out is map && d.out.size() <= 45))
           && (!('kicked' in d) || (d.kicked is map && d.kicked.size() <= 200))
           && (!('results' in d) || (d.results is map && d.results.size() <= 45))
+          && (!('bank' in d) || (d.bank is map && d.bank.size() <= 45))
+          && (!('max_rounds' in d) || d.max_rounds in [10, 15])
+          && (!('end_reason' in d)
+              || d.end_reason in ['max', 'none_completed', 'teacher', 'empty'])
           && (!('teacher_name' in d)
               || (d.teacher_name is string && d.teacher_name.size() <= 32))
           && expiresFutureOk();
@@ -532,7 +536,10 @@ service cloud.firestore {
           && (!('r' in row) || (row.r is int && row.r >= 0 && row.r <= 15))
           && (!('s' in row) || (row.s is int && row.s >= 0 && row.s <= 1500))
           && (!('t' in row) || (row.t is int && row.t >= 0 && row.t <= 400000))
-          && (!('f' in row) || (row.f is int && row.f >= 0 && row.f <= 15));
+          && (!('f' in row) || (row.f is int && row.f >= 0 && row.f <= 15))
+          && (!('w' in row) || (row.w is int && row.w >= 0 && row.w <= 15))
+          && (!('c' in row) || (row.c is int && row.c >= 0 && row.c <= 15))
+          && (!('ls' in row) || (row.ls is int && row.ls >= 0 && row.ls <= 100));
     }
     // Joining (a NEW key in a shard) is only allowed while the class is still in
     // its lobby — one rule read, paid only on join, never on a round report.

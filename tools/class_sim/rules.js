@@ -3,8 +3,11 @@
 // will (correctly) count them out. Change a number in class_rules.gd -> change it here.
 "use strict";
 
-const VERSION = 1;
+const VERSION = 2;
 const MAX_ROUNDS = 15;
+const ROUND_CHOICES = [10, 15];
+const DEFAULT_ROUNDS = 15;
+const validRounds = (n) => (ROUND_CHOICES.includes(n) ? n : DEFAULT_ROUNDS);
 const MAX_STUDENTS = 45;
 const MIN_STUDENTS = 2;
 const SHARDS = 5;
@@ -47,19 +50,20 @@ function shardOf(uid) {
 }
 const shardId = (pid, k) => `${pid}_${k}`;
 
-// rows: [{uid, n, r, s, t}] -> sorted with p (shared place on exact ties).
+// rows: [{uid, n, s, c, t}] -> sorted by score, then rounds completed, then time;
+// adds p (shared place on exact ties).
 function rank(rows) {
   const out = rows.map((e) => ({...e}));
-  out.sort((a, b) => (b.r - a.r) || (b.s - a.s) || (a.t - b.t) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
+  out.sort((a, b) => (b.s - a.s) || (b.c - a.c) || (a.t - b.t) || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
   out.forEach((e, i) => {
     const prev = out[i - 1];
-    e.p = (i > 0 && prev.r === e.r && prev.s === e.s && prev.t === e.t) ? prev.p : i + 1;
+    e.p = (i > 0 && prev.c === e.c && prev.s === e.s && prev.t === e.t) ? prev.p : i + 1;
   });
   return out;
 }
 
 module.exports = {
-  VERSION, MAX_ROUNDS, MAX_STUDENTS, MIN_STUDENTS, SHARDS, SLACK, LATE_LIMIT,
+  VERSION, MAX_ROUNDS, ROUND_CHOICES, DEFAULT_ROUNDS, validRounds, MAX_POINTS, MAX_STUDENTS, MIN_STUDENTS, SHARDS, SLACK, LATE_LIMIT,
   LOBBY_TTL, LOBBY_REFRESH_BELOW, PLAY_TTL, DONE_TTL,
   limit, banner, playback, deadlineMs, expectedEndMs, points, shardOf, shardId, rank,
 };

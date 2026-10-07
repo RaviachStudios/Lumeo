@@ -17,8 +17,8 @@
 //
 // Bot options (students / teacher)
 //   --count N        bot students (default 8; teacher mode: --students N)
-//   --fail P         chance a normal bot fails a round (default 0.12)
-//   --perfect N      N bots never fail (keeps a game alive to round 15)
+//   --fail P         chance a normal bot misses a round (0 points, plays on; default 0.12)
+//   --perfect N      N bots never miss (keeps a game alive to the last round)
 //   --ghost N        N bots go silent from round 2 (app killed / lost connection)
 //   --late N         N bots report round 2 AFTER the deadline (reconnect too late)
 //   --quit N         N bots leave mid-game in round 3
@@ -26,7 +26,9 @@
 //   --burst          all bots join within one second (shard contention)
 //   --join-secs S    spread joins over S seconds (default 6)
 // Teacher-only options
+//   --rounds N       the teacher's pick: 10 or 15 (default 15)
 //   --auto-start S   start S seconds after a non-bot student joins (default: press Enter)
+//   --start-after S  start S seconds after the class opens, phone or not (bots-only runs)
 //   --pause-at R --pause-for S   the teacher "drops" when round R starts, for S seconds
 //   --cancel-at R    cancel the class when round R starts (0 = in the lobby)
 //   --end-at R       press End Game 3 s into round R
@@ -155,7 +157,7 @@ class BotStudents {
           b.joined = true;
           await this.write(b, {n: b.n, d: "bot", j: Math.floor(nowMs / 1000), st: "lobby",
             r: 0, s: 0, t: 0, ls: 0, lt: 0, f: 0});
-        } else if (b.kind === "lobby_leave" && b.joined && !b.left && nowMs >= b.joinAt + 4000) {
+        } else if (b.kind === "lobby_leave" && b.joined && !b.left && nowMs >= b.joinAt + 2000) {
           b.left = true;
           await this.write(b, {n: b.n, st: "left"});
           this.log(`  ${b.n} left the lobby`);
@@ -183,12 +185,14 @@ class BotStudents {
         await this.write(b, {n: b.n, st: "left", f: r, r: b.r, s: b.s, t: b.t});
         this.log(`  ${b.n} left mid-game (round ${r})`);
       } else if (b.plan.fail) {
-        b.out = true;
-        await this.write(b, {n: b.n, st: "out", f: r, r: b.r, s: b.s, t: b.t});
+        // A miss: 0 points for this round, and the bot plays on.
+        b.r = r;
+        await this.write(b, {n: b.n, d: "bot", st: "in", r, ls: 0, lt: 0});
       } else {
         const ms = Math.trunc(b.plan.used * 1000);
-        b.r = r; b.s += b.plan.pts; b.t += ms;
-        await this.write(b, {n: b.n, d: "bot", st: "in", r, s: b.s, t: b.t, ls: b.plan.pts, lt: ms, f: 0});
+        b.r = r; b.s += b.plan.pts; b.t += ms; b.c = (b.c || 0) + 1;
+        await this.write(b, {n: b.n, d: "bot", st: "in", r, w: r, c: b.c, s: b.s, t: b.t,
+          ls: b.plan.pts, lt: ms, f: 0});
         if (b.kind === "late" && r === 2) this.log(`  ${b.n} reported round 2 late (after the deadline)`);
       }
     }
@@ -206,6 +210,7 @@ class BotTeacher {
     this.humanJoinedAt = 0; this.startRequested = false; this.endAt = 0; this.kicked = false;
   }
   async create(nowMs) {
+    this.createdMs = nowMs;
     const now = Math.floor(nowMs / 1000);
     const doc = {
       v: R.VERSION, teacher_uid: `simteacher_${this.pid}`, teacher_name: "Sim Teacher",
@@ -247,9 +252,11 @@ class BotTeacher {
       if (h.length && !this.humanJoinedAt) { this.humanJoinedAt = nowMs; this.log(`phone student joined: ${h.map((x) => x.n).join(", ")}`); }
       await this.write(this.ref.lobbyUpkeep(now));
       const auto = this.opts.autoStart >= 0 && this.humanJoinedAt && nowMs >= this.humanJoinedAt + this.opts.autoStart * 1000;
-      if (auto || this.startRequested) {
+      const timed = this.opts.startAfter >= 0 && nowMs >= this.createdMs + this.opts.startAfter * 1000;
+      if (auto || timed || this.startRequested) {
         this.startRequested = false;
-        const w = this.ref.start(nowMs, now, 1 + Math.floor(Math.random() * 2147483646));
+        this.opts.startAfter = -1;
+        const w = this.ref.start(nowMs, now, 1 + Math.floor(Math.random() * 2147483646), this.opts.rounds);
         if (w.error) this.log(`can't start: ${w.error}`);
         else { await this.write(w); this.log(`STARTED with ${Object.keys(w.roster).length} students`); }
       }
@@ -281,7 +288,8 @@ class BotTeacher {
 function printResults(doc, log) {
   const res = Object.entries(doc.results || {}).map(([uid, e]) => ({uid, ...e})).sort((a, b) => a.p - b.p);
   log(`\nRESULTS${doc.ended_early ? " (ended early)" : ""}:`);
-  for (const e of res) log(`  #${String(e.p).padEnd(3)} ${e.n.padEnd(20)} ${String(e.r).padStart(2)} rounds  ${String(e.s).padStart(4)} pts  ${(e.t / 1000).toFixed(1)}s  ${e.uid.startsWith("bot_") ? "" : "<- phone"}`);
+  log(`(ended: ${doc.end_reason || "?"} after round ${doc.round} of ${doc.max_rounds || 15})`);
+  for (const e of res) log(`  #${String(e.p).padEnd(3)} ${e.n.padEnd(20)} ${String(e.s).padStart(4)} pts  ${String(e.c).padStart(2)} rounds  ${(e.t / 1000).toFixed(1)}s  ${e.uid.startsWith("bot_") ? "" : "<- phone"}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +298,7 @@ function printResults(doc, log) {
 
 function parseOpts(argv) {
   const o = {count: 8, fail: 0.12, perfect: 0, ghost: 0, late: 0, quit: 0, lobbyLeave: 0, burst: false,
-    joinSecs: 6, autoStart: -1, pauseAt: -1, pauseFor: 45, cancelAt: -1, endAt: -1, kickPhoneAt: -1};
+    joinSecs: 6, autoStart: -1, startAfter: -1, rounds: 15, pauseAt: -1, pauseFor: 45, cancelAt: -1, endAt: -1, kickPhoneAt: -1};
   const pos = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -306,6 +314,8 @@ function parseOpts(argv) {
       case "--burst": o.burst = true; break;
       case "--join-secs": o.joinSecs = num(); break;
       case "--auto-start": o.autoStart = num(); break;
+      case "--start-after": o.startAfter = num(); break;
+      case "--rounds": o.rounds = num(); break;
       case "--pause-at": o.pauseAt = num(); break;
       case "--pause-for": o.pauseFor = num(); break;
       case "--cancel-at": o.cancelAt = num(); break;
@@ -387,11 +397,12 @@ async function cmdTeacher(o) {
   const t = new BotTeacher(store, pid, o, (m) => console.log(m));
   await t.create(Date.now());
   console.log(`\n   CLASS CODE:  ${pid}\n\nOn the phone: ARENA > JOIN YOUR CLASS > ${pid}`);
-  console.log(o.autoStart >= 0 ? `Auto-start ${o.autoStart}s after the phone joins.` : "Press ENTER to start the game.");
+  console.log(o.startAfter >= 0 ? `Starting ${o.startAfter}s after opening.`
+    : o.autoStart >= 0 ? `Auto-start ${o.autoStart}s after the phone joins.` : "Press ENTER to start the game.");
   const bots = makeBots(o, Math.random().toString(36).slice(2, 6));
   const bs = new BotStudents(store, pid, bots, o, console.log);
   bs.start(Date.now());
-  if (o.autoStart < 0) {
+  if (o.autoStart < 0 && o.startAfter < 0) {
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", () => { t.startRequested = true; });
   }
@@ -462,13 +473,16 @@ async function selftest() {
   check(R.limit(1) === 10 && R.limit(6) === 14 && R.limit(15) === 18, "limits");
   check(R.points(10, 10) === 100 && R.points(0, 10) === 1 && R.points(5, 10) === 50, "points");
   check(R.shardOf("u00") === shardOfGd("u00") && R.shardOf("bot_ab_07") === shardOfGd("bot_ab_07"), "shard hash");
-  const rk = R.rank([{uid: "a", n: "A", r: 10, s: 300, t: 5}, {uid: "b", n: "B", r: 8, s: 410, t: 5}]);
-  check(rk[0].uid === "a", "10 rounds/300 beats 8 rounds/410");
+  const rk = R.rank([{uid: "a", n: "A", c: 10, s: 300, t: 5}, {uid: "b", n: "B", c: 8, s: 410, t: 5},
+    {uid: "c", n: "C", c: 9, s: 300, t: 1}]);
+  check(rk[0].uid === "b" && rk[1].uid === "a" && rk[2].uid === "c", "score first (410 > 300), then rounds completed");
 
   for (const scenario of [
-    {name: "mixed class", o: {count: 20, fail: 0.15, perfect: 0, ghost: 2, late: 1, quit: 1, lobbyLeave: 1}},
+    {name: "mixed class, 15 rounds", o: {count: 20, fail: 0.15, perfect: 2, ghost: 2, late: 1, quit: 1, lobbyLeave: 1}},
+    {name: "10 rounds chosen", o: {count: 6, fail: 0.3, perfect: 1, rounds: 10}},
     {name: "perfect pair reaches round 15", o: {count: 2, fail: 0, perfect: 2}},
-    {name: "full class + overflow (47 join)", o: {count: 47, fail: 0.2, burst: true}},
+    {name: "full class + overflow (47 join)", o: {count: 47, fail: 0.2, perfect: 1, burst: true}},
+    {name: "nobody completes round 1", o: {count: 5, fail: 1.0}},
     {name: "teacher drops mid-game", o: {count: 10, fail: 0.1, perfect: 3, pauseAt: 3, pauseFor: 60}},
     {name: "teacher ends early", o: {count: 6, fail: 0, perfect: 6, endAt: 4}},
   ]) {
@@ -504,22 +518,28 @@ async function selftest() {
     check(Object.keys(results).length === roster.length, `results for every rostered student (${roster.length})`);
     check(roster.length <= R.MAX_STUDENTS, "roster within 45");
     const byKind = (k) => bots.filter((b) => b.kind === k && roster.includes(b.uid));
-    for (const b of byKind("ghost")) check(doc.out[b.uid] !== undefined && doc.out[b.uid] <= 2, `ghost ${b.n} timed out by round 2`);
-    for (const b of byKind("late")) {
-      if (doc.out[b.uid] === 2) check(results[b.uid].r === 1, `late ${b.n}: counted out at 2, credited 1 round, late points removed (${results[b.uid].s})`);
-    }
+    const bank = doc.bank || {};
+    const outs = Object.keys(doc.out);
+    const quitters = byKind("quit").map((b) => b.uid);
+    check(outs.every((u) => quitters.includes(u)), `only leavers are out (${outs.length} out, ${quitters.length} quit)`);
+    for (const b of byKind("ghost")) check(((bank[b.uid] || {}).c || 0) <= 1 && !(b.uid in doc.out), `ghost ${b.n}: still in, completed <= 1 round`);
+    for (const b of byKind("late")) check(results[b.uid].c <= doc.round - 1 || doc.round < 2, `late ${b.n}: late round 2 not credited (c=${results[b.uid].c})`);
     for (const b of bots.filter((x) => x.kind === "lobby_leave")) check(!roster.includes(b.uid), `lobby leaver ${b.n} not rostered`);
     const sorted = Object.values(results).sort((a, b) => a.p - b.p);
     let mono = true;
-    for (let i = 1; i < sorted.length; i++) {
-      const a = sorted[i - 1]; const b = sorted[i];
-      if (a.r < b.r || (a.r === b.r && a.s < b.s)) mono = false;
+    for (let i = 1; i < sorted.length; i++) if (sorted[i].s > sorted[i - 1].s) mono = false;
+    check(mono, "ranked by score");
+    const maxR = scenario.o.rounds || 15;
+    check((doc.max_rounds || 15) === maxR, `max_rounds ${maxR}`);
+    if (doc.end_reason === "max") check(doc.round === maxR, `stopped exactly at round ${maxR}`);
+    if (doc.end_reason === "none_completed") {
+      const r = doc.round;
+      check(Object.keys(bank).every((u) => (bank[u].c || 0) < r || (bank[u].a || 0) < r), `nobody completed round ${r}`);
     }
-    check(mono, "ranked by rounds then score");
-    if (scenario.o.perfect === 2 && scenario.o.count === 2) check(doc.round === 15 && sorted[0].r === 15, "both reached round 15");
-    if (scenario.o.endAt) check(doc.ended_early === true, "ended_early flag");
-    const alive = roster.filter((u) => doc.out[u] === undefined);
-    if (!doc.ended_early && doc.round < 15) check(alive.length <= 1, `stopped with ${alive.length} survivor(s)`);
+    if (scenario.o.perfect === 2 && scenario.o.count === 2) check(doc.round === 15 && sorted[0].c === 15 && sorted[1].c === 15, "both completed all 15");
+    if (scenario.o.fail === 1.0 && !scenario.o.perfect) check(doc.end_reason === "none_completed" && doc.round === 1, "ends after round 1 (nobody completed it)");
+    if (scenario.o.endAt) check(doc.ended_early === true && doc.end_reason === "teacher", "ended_early flag");
+    console.log(`     ended: ${doc.end_reason} at round ${doc.round}/${maxR}`);
     console.log(`     writes=${store.writes} listener-reads=${store.reads}`);
   }
   console.log(`\nRESULT: ${fails ? "FAIL" : "PASS"} (${fails} failures)`);

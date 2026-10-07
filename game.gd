@@ -135,6 +135,7 @@ var _class_token := 0               # bumps per round; a stale await bails out o
 var _class_input_start := 0.0       # ticks-seconds the input clock started
 var _class_banner: Label            # "ROUND 4" / 3-2-1, centred over the board
 var _class_wait_text := ""          # last waiting text set (avoid re-laying the pill per frame)
+var _class_hold_until := 0.0        # keep a notice on the status pill until this time
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -1845,14 +1846,16 @@ func _on_press_timeout() -> void:
 	_game_over()
 
 func _game_over() -> void:
+	# Class Games knock nobody out: a wrong press or the clock running out scores 0 for
+	# this round and the student plays on.
+	if _is_class:
+		_class_missed()
+		return
 	_state = "gameover"
 	_disarm_press_timer()
 	# Bank the coins earned this session into the persistent wallet. session_earned
 	# survives the commit, so the task board can count what the run paid out — and
 	# so the game-over screen can offer to multiply it (see game_over.gd).
-	if _is_class:
-		_class_out()
-		return
 	CoinsManager.commit_session()
 	DailyTasks.note_coins_earned(CoinsManager.session_earned)
 	# Advance the interstitial's per-N-games counter. Counted here rather than at
@@ -1971,6 +1974,7 @@ func _show_earn_indicator(amount: int) -> void:
 func _class_begin() -> void:
 	ClassManager.round_started.connect(_class_on_round)
 	ClassManager.changed.connect(_class_on_changed)
+	ClassManager.notice.connect(_class_on_notice)
 	_state = "waiting"
 	_set_status("Get ready...")
 	_update_hud()
@@ -2038,7 +2042,7 @@ func _class_show_banner(r: int, hold: float, tok: int) -> void:
 		for n in ["3", "2", "1"]:
 			steps.append([n, per])
 	else:
-		steps.append(["ROUND %d" % r, hold])
+		steps.append(["ROUND %d / %d" % [r, ClassManager.max_rounds()], hold])
 	for st: Array in steps:
 		if not _class_round_live(tok):
 			break
@@ -2066,6 +2070,8 @@ func _class_process() -> void:
 			_countdown_lbl.add_theme_color_override("font_color",
 				Color(1.0, 0.35, 0.3) if remaining <= 3.0 else Color(1.0, 0.85, 0.3))
 	elif _state == "waiting":
+		if _now_secs() < _class_hold_until:
+			return
 		var txt := "Waiting for classmates..."
 		if ClassManager.teacher_late:
 			txt = "Waiting for your teacher..."
@@ -2093,9 +2099,9 @@ func _class_round_done() -> void:
 func _class_flash_points(pts: int) -> void:
 	if _class_banner == null:
 		return
-	_class_banner.text = "+%d" % pts
+	_class_banner.text = "+%d" % pts if pts > 0 else "0"
 	_class_banner.visible = true
-	_class_banner.modulate = Color(0.6, 1.0, 0.65, 1.0)
+	_class_banner.modulate = Color(0.6, 1.0, 0.65, 1.0) if pts > 0 else Color(1.0, 0.45, 0.4, 1.0)
 	_class_banner.scale = Vector2.ONE * 0.7
 	var tw := _class_banner.create_tween()
 	tw.tween_property(_class_banner, "scale", Vector2.ONE, 0.25) \
@@ -2114,15 +2120,10 @@ func _class_on_changed() -> void:
 		"playing", "lobby":
 			return
 		"out":
-			match ClassManager.my_out_reason():
-				"late":
-					_class_end("Your connection was too slow - you're out!")
-				"closed":
-					_class_end("The app was closed during this round - you're out!")
-				"kicked":
-					_class_end("Your teacher removed you from the class.")
-				_:
-					_class_end("Time's up - you're out in round %d!" % ClassManager.my_out_round())
+			if ClassManager.my_out_reason() == "kicked":
+				_class_end("Your teacher removed you from the class.")
+			else:
+				_class_end("You left the game.")
 		"finished":
 			var won := false
 			for e: Dictionary in ClassManager.standings():
@@ -2133,6 +2134,8 @@ func _class_on_changed() -> void:
 				_class_end("YOU WIN!")
 			elif bool(ClassManager.doc.get("ended_early", false)):
 				_class_end("Your teacher ended the game.")
+			elif String(ClassManager.doc.get("end_reason", "")) == "none_completed":
+				_class_end("Nobody completed round %d - game over!" % int(ClassManager.doc.get("round", level)))
 			else:
 				_class_end("Game over!")
 		"kicked":
@@ -2158,17 +2161,27 @@ func _class_end(msg: String) -> void:
 	if is_inside_tree():
 		game_manager.show_class()
 
-# A wrong press or the clock ran out (from _game_over).
-func _class_out() -> void:
-	_class_token += 1
-	ClassManager.report_out(level, "failed")
-	ClassManager.commit_coins()
-	GameState.class_context = {}
+# A wrong press or the clock ran out (from _game_over): 0 points for this round,
+# then wait for the next one like everybody else.
+func _class_missed() -> void:
+	if _state == "waiting" or _state == "gameover":
+		return
+	_disarm_press_timer()
+	_state = "waiting"
+	ClassManager.report_miss(level)
 	AudioManager.play_lose_sound()
-	_set_status("You're out in round %d!" % level)
-	await get_tree().create_timer(1.8).timeout
-	if is_inside_tree():
-		game_manager.show_class()
+	_class_flash_points(0)
+	_class_hold(2.5, "Missed! 0 points this round")
+
+# Show a message on the status pill for `secs` before the waiting countdown resumes.
+func _class_hold(secs: float, msg: String) -> void:
+	_class_hold_until = _now_secs() + secs
+	_class_wait_text = msg
+	_set_status(msg)
+
+func _class_on_notice(msg: String) -> void:
+	if _state != "gameover" and is_inside_tree():
+		_class_hold(4.0, msg)
 
 # "Yes, Leave" in the quit dialog.
 func _class_leave() -> void:

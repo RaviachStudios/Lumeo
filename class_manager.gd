@@ -100,6 +100,8 @@ var _wd_busy := false
 
 # ---- teacher ----
 var referee: ClassReferee
+# The teacher's 10 / 15 rounds pick in the lobby; sent with START.
+var lobby_rounds := ClassRules.DEFAULT_ROUNDS
 var _resyncing := false
 var _confirming := false
 var _confirm_retry_ms := 0
@@ -550,38 +552,37 @@ func student_phase() -> String:
 			if String((ros[me] as Dictionary).get("d", "")) != _device \
 					and not String((ros[me] as Dictionary).get("d", "")).is_empty():
 				return "other_device"
+			# Only leaving (or being removed) takes a student out — a missed round
+			# just scores 0 and they play on.
 			if (doc.get("out", {}) as Dictionary).has(me) or _self_out_round > 0:
 				return "out"
 			return "playing"
 	return "none"
 
-# The round I went out on (from the doc, or my own report if the doc hasn't caught up).
+# The round I left / was removed in (from the doc, or my own report if the doc hasn't
+# caught up). 0 = still in.
 func my_out_round() -> int:
 	var o: Dictionary = doc.get("out", {})
 	if o.has(_uid()):
 		return int(o[_uid()])
 	return _self_out_round
 
-# Why I'm out: failed | late | left | timeout (the referee counted me out because my
-# report never arrived) | kicked.
+# Why I'm out of the game: kicked | left.
 func my_out_reason() -> String:
 	if (doc.get("kicked", {}) as Dictionary).has(_uid()):
 		return "kicked"
-	if not _self_out_reason.is_empty():
-		return _self_out_reason
-	if (doc.get("out", {}) as Dictionary).has(_uid()):
-		return "timeout"
-	return ""
+	return "left"
 
-func my_score() -> int:
-	# A round I completed but was counted out on anyway (my report arrived after the
-	# deadline) isn't credited — same rule as the referee's results.
-	var s := int(_my_row.get("s", 0))
-	var o := my_out_round()
-	if o > 0 and int(_my_row.get("r", 0)) >= o:
-		s -= int(_my_row.get("ls", 0))
-	return maxi(0, s)
-func my_rounds() -> int: return int(_my_row.get("r", 0))
+# My CREDITED totals: what the referee banked in the class doc, never my own running
+# count (a round I answered after it was resolved scores nothing).
+func _my_bank() -> Dictionary:
+	return (doc.get("bank", {}) as Dictionary).get(_uid(), {})
+
+func my_score() -> int: return int(_my_bank().get("s", 0))
+func my_rounds() -> int: return int(_my_bank().get("c", 0))
+
+func max_rounds() -> int:
+	return ClassRules.valid_rounds(int(doc.get("max_rounds", ClassRules.DEFAULT_ROUNDS)))
 
 func _maybe_start_round() -> void:
 	var r := int(doc.get("round", 0))
@@ -595,12 +596,13 @@ func _maybe_start_round() -> void:
 	_started_round = r
 	var lateness := float(server_ms() - int(doc.get("round_at_ms", 0))) / 1000.0
 	if offset_known() and lateness > ClassRules.LATE_LIMIT:
+		# Too late to play this round fairly: it scores 0, and the next one is played
+		# as normal.
+		report_miss(r)
 		if _resumed_mid_game:
-			report_out(r, "closed")
-			notice.emit("The app was closed during round %d — you're out" % r)
+			notice.emit("The app was closed during round %d — 0 points for it" % r)
 		else:
-			report_out(r, "late")
-			notice.emit("Your connection was too slow — you're out in round %d" % r)
+			notice.emit("Round %d reached you too late — 0 points for it" % r)
 		_resumed_mid_game = false
 		return
 	_resumed_mid_game = false
@@ -633,25 +635,32 @@ func prepare_game() -> void:
 func report_round(r: int, pts: int, ms: int) -> void:
 	if class_id.is_empty() or _self_out_round > 0:
 		return
-	var s := int(_my_row.get("s", 0)) + pts
-	var t := int(_my_row.get("t", 0)) + ms
-	var row := {"n": _name(), "d": _device, "st": "in", "r": r, "s": s, "t": t,
-		"ls": pts, "lt": ms, "f": 0}
+	var row := {"n": _name(), "d": _device, "st": "in", "r": r, "w": r,
+		"ls": pts, "lt": ms,
+		"s": int(_my_row.get("s", 0)) + pts, "t": int(_my_row.get("t", 0)) + ms,
+		"c": int(_my_row.get("c", 0)) + 1, "f": 0}
 	_my_row.merge(row, true)
 	_write_row(class_id, row, false)
 
-# I'm out (failed / late / left). One merge write. Idempotent.
-func report_out(r: int, reason: String) -> void:
-	if class_id.is_empty():
+# A round I didn't complete (wrong press, ran out of time, or it reached me too late).
+# Scores 0; I play on. One merge write. `w` (last round won) is left untouched, which
+# is what tells the referee this round was missed.
+func report_miss(r: int) -> void:
+	if class_id.is_empty() or _self_out_round > 0:
 		return
-	if _self_out_round > 0 and reason != "left":
+	if int(_my_row.get("r", 0)) >= r:
 		return
-	_self_out_round = r if _self_out_round <= 0 else _self_out_round
-	_self_out_reason = reason if _self_out_reason.is_empty() or reason == "left" else _self_out_reason
-	var row := {"n": _name(), "d": _device, "st": "left" if reason == "left" else "out",
-		"f": _self_out_round, "r": int(_my_row.get("r", 0)),
-		"s": int(_my_row.get("s", 0)), "t": int(_my_row.get("t", 0)),
-		"ls": int(_my_row.get("ls", 0)), "lt": int(_my_row.get("lt", 0))}
+	var row := {"n": _name(), "d": _device, "st": "in", "r": r, "ls": 0, "lt": 0}
+	_my_row.merge(row, true)
+	_write_row(class_id, row, false)
+
+# I'm leaving the game for good. One merge write. Idempotent.
+func report_out(r: int, _reason: String = "left") -> void:
+	if class_id.is_empty() or _self_out_round > 0:
+		return
+	_self_out_round = r
+	_self_out_reason = "left"
+	var row := {"n": _name(), "d": _device, "st": "left", "f": r}
 	_my_row.merge(row, true)
 	_write_row(class_id, row, false)
 	changed.emit()
@@ -760,9 +769,9 @@ func _load_my_row() -> void:
 	var players := _shape_players((res["data"] as Dictionary).get("players", {}))
 	if players.has(_uid()):
 		_my_row = players[_uid()]
-		if String(_my_row.get("st", "")) == "out" or String(_my_row.get("st", "")) == "left":
+		if String(_my_row.get("st", "")) == "left":
 			_self_out_round = maxi(1, int(_my_row.get("f", 0)))
-			_self_out_reason = "left" if String(_my_row.get("st", "")) == "left" else "failed"
+			_self_out_reason = "left"
 
 # ---------------------------------------------------------------------------
 # Teacher side
@@ -861,13 +870,13 @@ func progress() -> Dictionary:
 	return referee.progress() if referee else {}
 
 # {ok} or {ok:false, error: too_few | not_lobby}
-func start_class() -> Dictionary:
+func start_class(rounds: int = ClassRules.DEFAULT_ROUNDS) -> Dictionary:
 	if referee == null:
 		return {"ok": false, "error": "not_host"}
 	var seed := (randi() & 0x7FFFFFFF)
 	if seed == 0:
 		seed = 1
-	var w := referee.start(server_ms(), server_unix(), seed)
+	var w := referee.start(server_ms(), server_unix(), seed, rounds)
 	if w.has("error"):
 		return {"ok": false, "error": w["error"]}
 	_teacher_write(w)
@@ -892,8 +901,9 @@ func cancel_class() -> void:
 		return
 	_teacher_write(referee.cancel(server_unix()))
 
-# Shaped live roster for the teacher's board: [{uid, n, state, out_round}] where state
-# is done | failed | pending | out.
+# Shaped live roster for the teacher's board, best score first:
+# [{uid, n, s, state, out_round}] where s = banked score and state is
+# done | missed | pending | left | out (left the game / removed).
 func board_rows() -> Array:
 	if referee == null:
 		return []
@@ -901,10 +911,12 @@ func board_rows() -> Array:
 	var r := int(doc.get("round", 0))
 	var o: Dictionary = doc.get("out", {})
 	var ros: Dictionary = doc.get("roster", {})
+	var bk: Dictionary = doc.get("bank", {})
 	for uid in ros:
 		if referee.is_kicked(uid):
 			continue
-		var e := {"uid": uid, "n": String((ros[uid] as Dictionary).get("n", "Student"))}
+		var e := {"uid": uid, "n": String((ros[uid] as Dictionary).get("n", "Student")),
+			"s": int((bk.get(uid, {}) as Dictionary).get("s", 0))}
 		if o.has(uid):
 			e["state"] = "out"
 			e["out_round"] = int(o[uid])
@@ -916,6 +928,8 @@ func board_rows() -> Array:
 		var kb := 1 if b["state"] == "out" else 0
 		if ka != kb:
 			return ka < kb
+		if int(a["s"]) != int(b["s"]):
+			return int(a["s"]) > int(b["s"])
 		return String(a["n"]) < String(b["n"]))
 	return out
 
@@ -923,13 +937,14 @@ func board_rows() -> Array:
 # Results (everyone)
 # ---------------------------------------------------------------------------
 
-# Final standings, best first: [{uid, n, r, s, t, p, is_me}].
+# Final standings, best first: [{uid, n, s, c, t, p, is_me}] — s = score, c = rounds
+# completed, p = place.
 func standings() -> Array:
 	var res: Dictionary = doc.get("results", {})
 	var arr: Array = []
 	for uid in res:
 		var e: Dictionary = res[uid]
-		arr.append({"uid": uid, "n": String(e.get("n", "Student")), "r": int(e.get("r", 0)),
+		arr.append({"uid": uid, "n": String(e.get("n", "Student")), "c": int(e.get("c", 0)),
 			"s": int(e.get("s", 0)), "t": int(e.get("t", 0)), "p": int(e.get("p", 0)),
 			"is_me": uid == _uid()})
 	arr.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -966,8 +981,16 @@ func shape_class(raw: Dictionary, pid: String) -> Dictionary:
 		for uid in rs:
 			var e2: Variant = rs[uid]
 			if e2 is Dictionary:
-				results[uid] = {"n": String(e2.get("n", "Student")), "r": int(e2.get("r", 0)),
+				results[uid] = {"n": String(e2.get("n", "Student")), "c": int(e2.get("c", 0)),
 					"s": int(e2.get("s", 0)), "t": int(e2.get("t", 0)), "p": int(e2.get("p", 0))}
+	var bank := {}
+	var rb: Variant = raw.get("bank", {})
+	if rb is Dictionary:
+		for uid in rb:
+			var e3: Variant = rb[uid]
+			if e3 is Dictionary:
+				bank[uid] = {"s": int(e3.get("s", 0)), "t": int(e3.get("t", 0)),
+					"c": int(e3.get("c", 0)), "a": int(e3.get("a", 0))}
 	return {
 		"id": pid,
 		"v": int(raw.get("v", 0)),
@@ -984,6 +1007,9 @@ func shape_class(raw: Dictionary, pid: String) -> Dictionary:
 		"round_at_ms": int(raw.get("round_at_ms", 0)),
 		"alive": int(raw.get("alive", 0)),
 		"ended_early": bool(raw.get("ended_early", false)),
+		"end_reason": String(raw.get("end_reason", "")),
+		"max_rounds": ClassRules.valid_rounds(int(raw.get("max_rounds", ClassRules.DEFAULT_ROUNDS))),
+		"bank": bank,
 		"roster": ros,
 		"out": outm,
 		"kicked": kicked,
@@ -1003,6 +1029,7 @@ func _shape_players(raw: Variant) -> Dictionary:
 			"j": int(p.get("j", 0)), "st": String(p.get("st", "lobby")),
 			"r": int(p.get("r", 0)), "s": int(p.get("s", 0)), "t": int(p.get("t", 0)),
 			"ls": int(p.get("ls", 0)), "lt": int(p.get("lt", 0)), "f": int(p.get("f", 0)),
+			"w": int(p.get("w", 0)), "c": int(p.get("c", 0)),
 		}
 	return out
 
@@ -1158,6 +1185,7 @@ func _fields(f: Dictionary) -> Dictionary:
 # ===========================================================================
 
 const SIM_BOTS := 14
+var sim_rounds := ClassRules.DEFAULT_ROUNDS   # student-mode sim: the pretend teacher's pick
 var _sim_docs: Dictionary = {}       # "coll/id" -> data
 var _sim_bots: Array = []            # [{uid, n, join_at, skill, ghost, leaver}]
 var _sim_ref: ClassReferee = null    # the pretend teacher (student mode)
@@ -1244,10 +1272,10 @@ func _sim_tick() -> void:
 				if not (cdoc["roster"] as Dictionary).has(uid) or (cdoc["out"] as Dictionary).has(uid):
 					continue
 				var r := int(cdoc["round"])
-				if int(row.get("r", 0)) >= r or String(row.get("st", "")) in ["out", "left"]:
+				if int(row.get("r", 0)) >= r or String(row.get("st", "")) == "left":
 					continue
 				if bool(b["ghost"]) and r >= 2:
-					continue                       # silent: the referee must time it out
+					continue                       # silent: scores 0, not waited for after r2
 				var plan: Dictionary = b["plan"]
 				if int(plan.get("r", 0)) != r:
 					var lim := ClassRules.limit(r)
@@ -1260,10 +1288,11 @@ func _sim_tick() -> void:
 				if now_ms < int(plan["at"]):
 					continue
 				if bool(plan["fail"]):
-					_sim_write(spath, {"players": {uid: {"st": "out", "f": r}}}, true)
+					_sim_write(spath, {"players": {uid: {"st": "in", "r": r, "ls": 0, "lt": 0}}}, true)
 				else:
-					_sim_write(spath, {"players": {uid: {"st": "in", "r": r,
+					_sim_write(spath, {"players": {uid: {"st": "in", "r": r, "w": r,
 						"s": int(row.get("s", 0)) + int(plan["pts"]), "t": int(row.get("t", 0)) + int(plan["ms"]),
+						"c": int(row.get("c", 0)) + 1,
 						"ls": int(plan["pts"]), "lt": int(plan["ms"])}}}, true)
 	# The pretend teacher (student mode): same referee code as a real teacher.
 	if _sim_ref != null:
@@ -1279,7 +1308,7 @@ func _sim_tick() -> void:
 				if e["uid"] == _uid():
 					me_in = true
 			if me_in and waiting.size() >= 6:
-				w = _sim_ref.start(now_ms, now, randi() % 100000 + 1)
+				w = _sim_ref.start(now_ms, now, randi() % 100000 + 1, sim_rounds)
 		else:
 			w = _sim_ref.tick(now_ms, now)
 		if not w.is_empty() and not w.has("error"):

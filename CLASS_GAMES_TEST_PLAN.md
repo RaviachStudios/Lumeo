@@ -7,6 +7,36 @@ referee logic as the app.
 - **Phone as teacher:** bot students join your class and play.
 - **Phone as student:** a bot teacher runs the class, with bot classmates.
 
+## Rules v2 (2026-10-08): what changed for testing
+
+Nobody is knocked out any more (see CLASS_GAMES_PLAN.md). Where the tables below say a
+student is "out", read instead:
+
+| Situation | v2 expectation |
+|---|---|
+| Wrong press / time runs out (B2, B3) | "Missed! 0 points this round", then the next round starts as normal |
+| Round reaches the phone too late, or the app was killed mid-round (B7, B8, B16) | 0 points for that round, a short notice, back in from the next round |
+| Silent student (A3) | Round 2 waits for them once; from round 3 the class no longer waits; they stay on the board with 0s |
+| Late report (A4) | Not credited for that round; still in |
+| Game end | After the teacher's 10 / 15 rounds, or after a round nobody completed |
+| Teacher lobby | ROUNDS 10 / 15 picker next to Cancel Class |
+| Podium / list | Ranked by points; rows show "points · completed/played rounds" |
+
+New simulator options: `--rounds 10|15`, `--start-after S` (bots-only runs, no phone).
+
+Verified without a phone on 2026-10-08:
+- Godot headless: referee tests (missed rounds, banking, silent/late students, 10-round
+  stop, nobody-completed stop, leave/kick/end/cancel) and both editor-sim flows
+  (teacher 10-round game; student misses round 3 and plays on to round 10).
+- `class_sim.js selftest`: 7 scenarios incl. 10 rounds, nobody completes round 1,
+  47 joiners, teacher drop, end early.
+- Rules on the Firestore emulator (`firebase emulators:exec`): 20 checks — teacher-only
+  create, read-only role, 10/15 only, bank / end_reason shape, own-row-only reports,
+  no joins after start, no deletes, and the empty-map merge behaviour.
+- Production: a bots-only 10-round game (`teacher --rounds 10 --start-after 12`) ran to
+  round 10 with only the quitter out; class deleted afterwards.
+- Not yet verified on a device: the new screens (rounds picker, 0-points flow).
+
 ## 0. One-time setup
 
 1. **Deploy the server side** (rules are deployed by hand; see the memory notes):

@@ -57,7 +57,7 @@ class Referee {
     return w;
   }
 
-  start(nowMs, nowUnix, seed) {
+  start(nowMs, nowUnix, seed, rounds = R.DEFAULT_ROUNDS) {
     if (this.status() !== "lobby") return {error: "not_lobby"};
     const waiting = this.lobbyStudents();
     if (waiting.length < R.MIN_STUDENTS) return {error: "too_few"};
@@ -66,19 +66,28 @@ class Referee {
       roster[e.uid] = {n: e.n, d: (this.rows[e.uid] || {}).d || ""};
     }
     return {
-      status: "playing", started_at: nowUnix, seed, roster, round: 1,
-      round_at_ms: nowMs, alive: Object.keys(roster).length, expires_unix: nowUnix + R.PLAY_TTL,
+      status: "playing", started_at: nowUnix, seed, max_rounds: R.validRounds(rounds), roster,
+      round: 1, round_at_ms: nowMs, alive: Object.keys(roster).length, expires_unix: nowUnix + R.PLAY_TTL,
     };
   }
 
+  bank() { return this.doc.bank || {}; }
+  maxRounds() { return R.validRounds(this.doc.max_rounds || R.DEFAULT_ROUNDS); }
   aliveUids() { const o = this.out(); return Object.keys(this.roster()).filter((u) => !(u in o)); }
 
+  // done | missed | left | pending
   answer(uid, r) {
     const row = this.rows[uid];
     if (!row) return "pending";
-    if (row.st === "out" || row.st === "left") return "failed";
-    if ((row.r || 0) >= r) return "done";
+    if (row.st === "left") return "left";
+    if ((row.r || 0) >= r) return (row.w || 0) >= r ? "done" : "missed";
     return "pending";
+  }
+
+  waitsFor(uid, r) {
+    if (r <= 1) return true;
+    if (((this.bank()[uid] || {}).a || 0) >= r - 1) return true;
+    return ((this.rows[uid] || {}).r || 0) >= r - 1;
   }
 
   currentDeadlineMs() { return R.deadlineMs(this.doc.round_at_ms || 0, this.doc.round || 1); }
@@ -86,10 +95,24 @@ class Referee {
   progress() {
     const r = this.doc.round || 0;
     const alive = this.aliveUids();
-    let done = 0; let failed = 0;
-    for (const u of alive) { const a = this.answer(u, r); if (a === "done") done++; else if (a === "failed") failed++; }
-    return {round: r, alive: alive.length, done, failed, pending: alive.length - done - failed,
+    let done = 0; let missed = 0; let pending = 0;
+    for (const u of alive) {
+      const a = this.answer(u, r);
+      if (a === "done") done++; else if (a === "missed") missed++; else if (a === "pending") pending++;
+    }
+    return {round: r, max: this.maxRounds(), alive: alive.length, done, missed, pending,
       out: Object.keys(this.out()).length};
+  }
+
+  bankEntry(uid) {
+    const b = this.bank()[uid] || {};
+    return {s: b.s || 0, t: b.t || 0, c: b.c || 0, a: b.a || 0};
+  }
+
+  credit(b, row, r) {
+    b.s += Math.min(Math.max(row.ls || 0, 0), R.MAX_POINTS);
+    b.t += Math.max(0, row.lt || 0);
+    b.c += 1; b.a = r;
   }
 
   tick(nowMs, nowUnix) {
@@ -97,26 +120,42 @@ class Referee {
     const r = this.doc.round || 0;
     if (r <= 0) return {};
     const alive = this.aliveUids();
-    const allAnswered = alive.every((u) => this.answer(u, r) !== "pending");
+    const allAnswered = alive.every((u) => !this.waitsFor(u, r) || this.answer(u, r) !== "pending");
     if (!allAnswered && nowMs < this.currentDeadlineMs()) return {};
-    const newOut = {}; const survivors = [];
-    for (const u of alive) { if (this.answer(u, r) === "done") survivors.push(u); else newOut[u] = r; }
-    if (survivors.length <= 1 || r >= R.MAX_ROUNDS) {
-      const w = this.finishWrite({...this.out(), ...newOut}, r, nowUnix);
-      if (Object.keys(newOut).length) w.out = newOut;
-      w.alive = survivors.length;
-      return w;
+    const newOut = {}; const newBank = {}; let completed = 0;
+    for (const u of alive) {
+      const row = this.rows[u] || {};
+      const b = this.bankEntry(u);
+      const a = this.answer(u, r);
+      if (a === "done") { this.credit(b, row, r); completed++; } else if (a === "missed") b.a = r;
+      else if (a === "left") newOut[u] = r;
+      newBank[u] = b;
+    }
+    const stillIn = alive.length - Object.keys(newOut).length;
+    let w;
+    if (completed === 0 || r >= this.maxRounds() || stillIn <= 0) {
+      const reason = stillIn <= 0 ? "empty" : completed === 0 ? "none_completed" : "max";
+      w = this.finishWrite(newBank, nowUnix, reason);
+      w.alive = stillIn;
+    } else {
+      w = {round: r + 1, round_at_ms: nowMs, alive: stillIn, expires_unix: nowUnix + R.PLAY_TTL};
     }
     // Never send an empty map: in a Firestore merge an empty map REPLACES the field.
-    const nw = {round: r + 1, round_at_ms: nowMs, alive: survivors.length, expires_unix: nowUnix + R.PLAY_TTL};
-    if (Object.keys(newOut).length) nw.out = newOut;
-    return nw;
+    if (Object.keys(newBank).length) w.bank = newBank;
+    if (Object.keys(newOut).length) w.out = newOut;
+    return w;
   }
 
   endNow(nowUnix) {
     if (this.status() !== "playing") return {};
-    const w = this.finishWrite(this.out(), this.doc.round || 0, nowUnix);
+    const r = this.doc.round || 0;
+    const newBank = {};
+    for (const u of this.aliveUids()) {
+      if (this.answer(u, r) === "done") { const b = this.bankEntry(u); this.credit(b, this.rows[u], r); newBank[u] = b; }
+    }
+    const w = this.finishWrite(newBank, nowUnix, "teacher");
     w.ended_early = true;
+    if (Object.keys(newBank).length) w.bank = newBank;
     return w;
   }
 
@@ -124,11 +163,12 @@ class Referee {
     const w = {kicked: {[uid]: true}};
     if (this.status() === "playing" && uid in this.roster() && !(uid in this.out())) {
       const r = this.doc.round || 1;
+      const left = this.aliveUids().length - 1;
       w.out = {[uid]: r};
-      w.alive = Math.max(0, this.aliveUids().length - 1);
-      if (this.aliveUids().length - 1 <= 1) {
-        const f = this.finishWrite({...this.out(), [uid]: r}, r, nowUnix, {[uid]: true});
-        return {...f, kicked: w.kicked, out: w.out, alive: w.alive};
+      w.alive = Math.max(0, left);
+      if (left <= 0) {
+        const f = this.finishWrite({}, nowUnix, "empty", {[uid]: true});
+        return {...f, kicked: w.kicked, out: w.out, alive: 0};
       }
     }
     if (this.status() === "lobby") w.expires_unix = Math.max(this.doc.expires_unix || 0, nowUnix + 60);
@@ -139,23 +179,17 @@ class Referee {
     return {status: "cancelled", finished_at: nowUnix, expires_unix: nowUnix + R.DONE_TTL};
   }
 
-  finishWrite(finalOut, curRound, nowUnix, alsoKicked = {}) {
+  finishWrite(fresh, nowUnix, reason, alsoKicked = {}) {
     const list = [];
     for (const [uid, e] of Object.entries(this.roster())) {
       if (this.isKicked(uid) || uid in alsoKicked) continue;
-      const row = this.rows[uid] || {};
-      const rr = row.r || 0; let s = row.s || 0; let t = row.t || 0;
-      let rounds = Math.min(rr, curRound);
-      if (uid in finalOut) {
-        const at = finalOut[uid];
-        rounds = Math.max(0, at - 1);
-        if (rr >= at) { s = Math.max(0, s - (row.ls || 0)); t = Math.max(0, t - (row.lt || 0)); }
-      }
-      list.push({uid, n: e.n || "Student", r: rounds, s, t});
+      const b = fresh[uid] || this.bankEntry(uid);
+      list.push({uid, n: e.n || "Student", s: b.s, c: b.c, t: b.t});
     }
     const results = {};
-    for (const e of R.rank(list)) results[e.uid] = {n: e.n, r: e.r, s: e.s, t: e.t, p: e.p};
-    return {status: "finished", finished_at: nowUnix, results, expires_unix: nowUnix + R.DONE_TTL};
+    for (const e of R.rank(list)) results[e.uid] = {n: e.n, s: e.s, c: e.c, t: e.t, p: e.p};
+    return {status: "finished", finished_at: nowUnix, end_reason: reason, results,
+      expires_unix: nowUnix + R.DONE_TTL};
   }
 }
 

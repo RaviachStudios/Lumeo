@@ -14,9 +14,13 @@ extends RefCounted
 # created with, and a device on a different version is refused at the door (an older
 # build would time rounds differently from the referee and be counted out unfairly).
 
-const VERSION := 1
+# 2: nobody is knocked out any more — a missed round scores 0 and the student plays on;
+#    the game ends after the teacher's chosen 10/15 rounds or a round nobody completed.
+const VERSION := 2
 
-const MAX_ROUNDS := 15
+const MAX_ROUNDS := 15                 # hard cap (rules + sequence length)
+const ROUND_CHOICES := [10, 15]        # what the teacher can pick in the lobby
+const DEFAULT_ROUNDS := 15
 const MAX_STUDENTS := 45
 const MIN_STUDENTS := 2           # a one-student game would end the moment it started
 
@@ -120,16 +124,20 @@ static func valid_pid(pid: String) -> bool:
 			return false
 	return true
 
-# Final ranking. `rows` = [{uid, n, r, s, t}] where r = rounds completed, s = score,
-# t = total completion time in ms. Sorted by rounds (most first), then score (highest
-# first), then time (lowest first). Exact ties share a place (1, 1, 3). Adds `p`.
+static func valid_rounds(n: int) -> int:
+	return n if ROUND_CHOICES.has(n) else DEFAULT_ROUNDS
+
+# Final ranking. `rows` = [{uid, n, s, c, t}] where s = total score (a missed round
+# scores 0), c = rounds completed, t = total completion time in ms. Sorted by score
+# (highest first), then rounds completed (most first), then time (lowest first).
+# Exact ties share a place (1, 1, 3). Adds `p`.
 static func rank(rows: Array) -> Array:
 	var out := rows.duplicate(true)
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		if int(a["r"]) != int(b["r"]):
-			return int(a["r"]) > int(b["r"])
 		if int(a["s"]) != int(b["s"]):
 			return int(a["s"]) > int(b["s"])
+		if int(a["c"]) != int(b["c"]):
+			return int(a["c"]) > int(b["c"])
 		if int(a["t"]) != int(b["t"]):
 			return int(a["t"]) < int(b["t"])
 		return String(a["n"]) < String(b["n"]))
@@ -137,7 +145,7 @@ static func rank(rows: Array) -> Array:
 		var e: Dictionary = out[i]
 		if i > 0:
 			var prev: Dictionary = out[i - 1]
-			if int(prev["r"]) == int(e["r"]) and int(prev["s"]) == int(e["s"]) \
+			if int(prev["c"]) == int(e["c"]) and int(prev["s"]) == int(e["s"]) \
 					and int(prev["t"]) == int(e["t"]):
 				e["p"] = int(prev["p"])
 				continue

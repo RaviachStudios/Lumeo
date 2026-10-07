@@ -6,6 +6,20 @@
 > `firestore.rules` and `functions/index.js` (`sweepExpiredClasses`). Device testing:
 > `CLASS_GAMES_TEST_PLAN.md` and `tools/class_sim/`.
 >
+> **Rules v2 (2026-10-08) — replaces the elimination rules below:**
+> - Nobody is knocked out. A round a student fails, runs out of time on, or never
+>   answers scores **0** and they play the next round. Only leaving or being removed
+>   takes a student out.
+> - The teacher picks **10 or 15 rounds** in the lobby (`max_rounds`, sent with START).
+> - The game ends when that many rounds are played, or after a round **nobody
+>   completed** (`end_reason`: `max` / `none_completed` / `teacher` / `empty`).
+> - Ranking: **score** first, then rounds completed, then total time.
+> - Points are banked per round in the class doc (`bank.{uid}: {s, t, c, a}`) when the
+>   referee resolves the round, so a report that arrives late is never credited.
+> - A round is held open only for students who answered the previous one; a silent
+>   device stops delaying the class after one round and can score again when it's back.
+> - `ClassRules.VERSION` is 2: an app on v1 can't join a v2 class (and vice versa).
+>
 > Where the build differs from the text below:
 > - The "I'm in class X" pointer is a **local file** (`user://class_pointer.cfg`),
 >   not `users.current_class`, so joining costs no extra write.

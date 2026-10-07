@@ -298,6 +298,27 @@ func _render_teacher_lobby() -> void:
 		_ask("Cancel this class game?", func() -> void:
 			ClassManager.cancel_class()))
 	_content.add_child(cancel)
+	# How many rounds: the teacher's 10 / 15 pick, sent with START.
+	var px := w * 0.04
+	var pl := _label("ROUNDS", 15, ArenaUI.MUTED, Vector2(px, by + 18), 80)
+	pl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_content.add_child(pl)
+	for i in ClassRules.ROUND_CHOICES.size():
+		var n: int = ClassRules.ROUND_CHOICES[i]
+		var on := ClassManager.lobby_rounds == n
+		var b := _chip(str(n), CLASS_ACCENT if on else Color(0.75, 0.75, 0.85), Vector2(78, 52))
+		b.add_theme_font_size_override("font_size", 24)
+		if on:
+			var sel := _flat(Color(CLASS_ACCENT.r, CLASS_ACCENT.g, CLASS_ACCENT.b, 0.35), 12, CLASS_ACCENT.lightened(0.2))
+			sel.set_border_width_all(2)
+			b.add_theme_stylebox_override("normal", sel)
+			b.add_theme_stylebox_override("hover", sel)
+		b.position = Vector2(px + 78 + i * 88, by + 4)
+		b.size = Vector2(78, 52)
+		b.pressed.connect(func() -> void:
+			ClassManager.lobby_rounds = n
+			_render())
+		_content.add_child(b)
 	if students.size() < ClassRules.MIN_STUDENTS:
 		_content.add_child(_label("At least %d students are needed to start" % ClassRules.MIN_STUDENTS,
 			14, ArenaUI.MUTED, Vector2(w * 0.5 + 10, by + 64), 280))
@@ -309,7 +330,7 @@ func _on_start() -> void:
 	if _busy:
 		return
 	_busy = true
-	var res := ClassManager.start_class()
+	var res := ClassManager.start_class(ClassManager.lobby_rounds)
 	_busy = false
 	if not bool(res.get("ok", false)):
 		match String(res.get("error", "")):
@@ -326,7 +347,7 @@ func _render_teacher_live() -> void:
 	var p := ClassManager.progress()
 	var r := int(p.get("round", 1))
 
-	var top := _label("ROUND %d / %d" % [r, ClassRules.MAX_ROUNDS], 40, ArenaUI.GOLD, Vector2(0, 0), w)
+	var top := _label("ROUND %d / %d" % [r, int(p.get("max", ClassRules.DEFAULT_ROUNDS))], 40, ArenaUI.GOLD, Vector2(0, 0), w)
 	_content.add_child(top)
 	if not ClassManager.teacher_offline:
 		_content.add_child(_label("%ds to complete the sequence" % int(ClassRules.limit(r)), 15,
@@ -348,9 +369,11 @@ func _render_teacher_live() -> void:
 	_clock_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_content.add_child(_clock_lbl)
 
-	_content.add_child(_label("%d still in   ·   %d done   ·   %d playing   ·   %d out" % [
-		int(p.get("alive", 0)), int(p.get("done", 0)), int(p.get("pending", 0)),
-		int(p.get("out", 0))], 18, ArenaUI.TEXT, Vector2(0, 100), w))
+	var stats := "%d completed   ·   %d missed   ·   %d still playing" % [
+		int(p.get("done", 0)), int(p.get("missed", 0)), int(p.get("pending", 0))]
+	if int(p.get("out", 0)) > 0:
+		stats += "   ·   %d left" % int(p.get("out", 0))
+	_content.add_child(_label(stats, 18, ArenaUI.TEXT, Vector2(0, 100), w))
 
 	if ClassManager.teacher_offline:
 		var off := _label("Connection lost - the game is paused until you're back online", 16,
@@ -375,18 +398,19 @@ func _render_teacher_live() -> void:
 	var chip_w := (gw - (grid.columns - 1) * 8) / float(grid.columns)
 	for e: Dictionary in rows:
 		var st := String(e["state"])
-		var txt := String(e["n"])
+		var txt := "%s   %d" % [String(e["n"]), int(e.get("s", 0))]
 		var col := Color(0.85, 0.90, 1.0)
 		match st:
 			"done":
 				txt = "✓ " + txt
 				col = OK_GREEN
-			"failed":
+			"missed":
 				txt = "✗ " + txt
 				col = FAIL_ORANGE
-			"out":
-				txt = "%s  (R%d)" % [txt, int(e.get("out_round", 0))]
+			"left", "out":
+				txt = "%s  (left)" % String(e["n"])
 				col = OUT_GREY
+				st = "out"
 		var chip := _chip(txt, col, Vector2(chip_w, 36))
 		var uid := String(e["uid"])
 		var nm := String(e["n"])
@@ -444,33 +468,27 @@ func _render_get_ready() -> void:
 			Vector2(0, 216), w))
 	_add_flyers(1)
 
+# A student who left the game (from another device) or was removed: their banked
+# result, and the live round, until the podium.
 func _render_spectator() -> void:
 	var w := _content.size.x
 	var h := _content.size.y
 	var r := ClassManager.my_out_round()
-	var why := ""
-	match ClassManager.my_out_reason():
-		"late": why = "Your connection was too slow to play round %d." % r
-		"closed": why = "The app was closed during round %d." % r
-		"timeout": why = "Your answer for round %d didn't arrive in time." % r
-		"left": why = "You left the game in round %d." % r
-		"kicked": why = "Your teacher removed you."
-		_: why = "You were knocked out in round %d." % r
+	var why := "Your teacher removed you." if ClassManager.my_out_reason() == "kicked" \
+		else "You left the game in round %d." % r
 	var pw := minf(620.0, w - 80.0)
 	var panel := ArenaUI.glass_panel(FAIL_ORANGE)
 	panel.position = Vector2(w * 0.5 - pw * 0.5, 10)
 	panel.size = Vector2(pw, 250)
 	_content.add_child(panel)
-	panel.add_child(_label("You're out!", 40, FAIL_ORANGE.lightened(0.2), Vector2(0, 18), pw))
+	panel.add_child(_label("You're out of the game", 36, FAIL_ORANGE.lightened(0.2), Vector2(0, 18), pw))
 	panel.add_child(_label(why, 18, ArenaUI.TEXT, Vector2(0, 76), pw))
-	var rounds := maxi(0, r - 1)
-	panel.add_child(_label("%s completed  ·  %d points" % [_rounds_txt(rounds), ClassManager.my_score()],
+	panel.add_child(_label("%s completed  ·  %d points" % [_rounds_txt(ClassManager.my_rounds()), ClassManager.my_score()],
 		24, ArenaUI.GOLD, Vector2(0, 118), pw))
 	if ClassManager.coins_earned > 0:
 		panel.add_child(_label("+%d coins" % ClassManager.coins_earned, 18, ArenaUI.GOLD.lightened(0.2),
 			Vector2(0, 156), pw))
-	var live := "Round %d  ·  %d still in" % [int(ClassManager.doc.get("round", 0)),
-		int(ClassManager.doc.get("alive", 0))]
+	var live := "Round %d / %d" % [int(ClassManager.doc.get("round", 0)), ClassManager.max_rounds()]
 	if ClassManager.teacher_late:
 		live += "  ·  waiting for your teacher..."
 	panel.add_child(_label(live, 17, ArenaUI.MUTED, Vector2(0, 198), pw))
@@ -494,6 +512,8 @@ func _render_podium(teacher: bool) -> void:
 	var title := "Final Results"
 	if bool(ClassManager.doc.get("ended_early", false)):
 		title = "Final Results (ended early)"
+	elif String(ClassManager.doc.get("end_reason", "")) == "none_completed":
+		title = "Final Results - nobody completed round %d" % int(ClassManager.doc.get("round", 0))
 	_content.add_child(_label(title, 26, ArenaUI.GOLD, Vector2(0, -4), w))
 
 	var entries: Array = []
@@ -527,7 +547,8 @@ func _render_podium(teacher: bool) -> void:
 			mine = e
 
 	if not teacher and not mine.is_empty():
-		var txt := "You placed #%d  ·  %s  ·  %d points" % [int(mine["p"]), _rounds_txt(int(mine["r"])), int(mine["s"])]
+		var txt := "You placed #%d  ·  %d points  ·  %d of %d rounds" % [int(mine["p"]), int(mine["s"]),
+			int(mine["c"]), _rounds_played()]
 		if ClassManager.coins_earned > 0:
 			txt += "  ·  +%d coins" % ClassManager.coins_earned
 		_content.add_child(_label(txt, 20, ArenaUI.GOLD.lightened(0.25), Vector2(0, h - 120), w))
@@ -541,6 +562,10 @@ func _render_podium(teacher: bool) -> void:
 		ClassManager.close_out()
 		game_manager.show_home())
 	_content.add_child(done)
+
+# Rounds the game actually ran (it can stop early when nobody completes one).
+func _rounds_played() -> int:
+	return maxi(1, int(ClassManager.doc.get("round", 1)))
 
 static func _rounds_txt(n: int) -> String:
 	return "1 round" if n == 1 else "%d rounds" % n
@@ -570,7 +595,7 @@ func _result_row(e: Dictionary, w: float) -> Control:
 	nm.size.y = 40
 	nm.clip_text = true
 	row.add_child(nm)
-	var stats := _label("%s  ·  %d pts" % [_rounds_txt(int(e["r"])), int(e["s"])], 16, ArenaUI.MUTED,
+	var stats := _label("%d pts  ·  %d/%d rounds" % [int(e["s"]), int(e["c"]), _rounds_played()], 16, ArenaUI.MUTED,
 		Vector2(w * 0.5, 0), w * 0.5 - 14)
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	stats.size.y = 40

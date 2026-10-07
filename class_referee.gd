@@ -11,13 +11,22 @@ extends RefCounted
 # one deterministic writer, no trigger latency or ordering problems, and the referee's
 # whole state can be rebuilt from Firestore (class doc + 5 shards) after a restart.
 #
+# Nobody is knocked out. Every student plays every round; a round they fail, run out
+# of time on, or never answer scores 0 and they play on. Only leaving or being removed
+# takes a student out of the game.
+#
 # Round lifecycle (all times in SERVER milliseconds):
 #   publish round r      -> doc {round: r, round_at_ms}
-#   every student either reports {st:"in", r} (completed) or {st:"out"/"left"}
-#   resolve round r when every student still in has answered OR deadline_ms(r) passes:
-#     - completed  -> stays in
-#     - anything else (failed, left, never answered) -> out[uid] = r
-#   then: <= 1 student left or r == MAX_ROUNDS -> finish; else publish r + 1.
+#   each student reports round r: completed {r, w: r, ls, lt} or missed {r} (w < r)
+#   resolve round r when every student we're waiting for has answered, or at
+#   deadline_ms(r). The points are BANKED in the class doc (bank.{uid}) at that moment,
+#   so a report that arrives after the round was resolved is never credited.
+#   then: nobody completed round r, or r == max_rounds, or nobody is left -> finish;
+#   otherwise publish r + 1.
+#
+# "Waiting for" = active students who answered the PREVIOUS round (in time or late).
+# A student whose phone died answers nothing, so after one silent round the class
+# stops waiting for them — they can still score the moment they're back.
 
 const ClassRules := preload("res://class_rules.gd")
 
@@ -124,7 +133,8 @@ func lobby_upkeep(now_unix: int) -> Dictionary:
 
 # The START write, or {"error": ...}. Takes the first MAX_STUDENTS waiting students
 # (by join time) as the frozen roster; anyone else who slipped in sees "class full".
-func start(now_ms: int, now_unix: int, seed: int) -> Dictionary:
+# `rounds` is the teacher's 10 / 15 choice.
+func start(now_ms: int, now_unix: int, seed: int, rounds: int = ClassRules.DEFAULT_ROUNDS) -> Dictionary:
 	if status() != "lobby":
 		return {"error": "not_lobby"}
 	var waiting := lobby_students()
@@ -139,6 +149,7 @@ func start(now_ms: int, now_unix: int, seed: int) -> Dictionary:
 		"status": "playing",
 		"started_at": now_unix,
 		"seed": seed,
+		"max_rounds": ClassRules.valid_rounds(rounds),
 		"roster": roster,
 		"round": 1,
 		"round_at_ms": now_ms,
@@ -153,10 +164,18 @@ func start(now_ms: int, now_unix: int, seed: int) -> Dictionary:
 func roster() -> Dictionary:
 	return doc.get("roster", {})
 
+# Students who LEFT or were REMOVED, and the round it happened in. Nobody else is
+# ever "out" — a missed round just scores 0.
 func out_map() -> Dictionary:
 	return doc.get("out", {})
 
-# Roster students not (yet) counted out.
+func bank() -> Dictionary:
+	return doc.get("bank", {})
+
+func max_rounds() -> int:
+	return ClassRules.valid_rounds(int(doc.get("max_rounds", ClassRules.DEFAULT_ROUNDS)))
+
+# Roster students still in the game (not left / removed).
 func alive_uids() -> Array:
 	var out: Array = []
 	var o := out_map()
@@ -165,18 +184,27 @@ func alive_uids() -> Array:
 			out.append(uid)
 	return out
 
-# Where a still-in student stands on round r: "done" (completed it), "failed" (told us
-# they're out / left), or "pending" (nothing yet).
+# How a student stands on round r: "done" (completed it), "missed" (reported a fail /
+# timeout), "left", or "pending" (no answer yet).
 func answer(uid: String, r: int) -> String:
 	var row: Dictionary = rows.get(uid, {})
 	if row.is_empty():
 		return "pending"
-	var st := String(row.get("st", ""))
-	if st == "out" or st == "left":
-		return "failed"
+	if String(row.get("st", "")) == "left":
+		return "left"
 	if int(row.get("r", 0)) >= r:
-		return "done"
+		return "done" if int(row.get("w", 0)) >= r else "missed"
 	return "pending"
+
+# Do we hold round r open for this student? Round 1: everyone. After that, only
+# students who answered round r - 1 at all (on time or late) — a silent device isn't
+# waited for, but can still score if it answers before the round is resolved.
+func waits_for(uid: String, r: int) -> bool:
+	if r <= 1:
+		return true
+	if int((bank().get(uid, {}) as Dictionary).get("a", 0)) >= r - 1:
+		return true
+	return int((rows.get(uid, {}) as Dictionary).get("r", 0)) >= r - 1
 
 func current_deadline_ms() -> int:
 	return ClassRules.deadline_ms(int(doc.get("round_at_ms", 0)), int(doc.get("round", 1)))
@@ -185,18 +213,21 @@ func current_deadline_ms() -> int:
 func progress() -> Dictionary:
 	var r := int(doc.get("round", 0))
 	var done := 0
-	var failed := 0
+	var missed := 0
+	var pending := 0
 	var alive := alive_uids()
 	for uid in alive:
 		match answer(uid, r):
 			"done": done += 1
-			"failed": failed += 1
+			"missed": missed += 1
+			"pending": pending += 1
 	return {
 		"round": r,
+		"max": max_rounds(),
 		"alive": alive.size(),
 		"done": done,
-		"failed": failed,
-		"pending": alive.size() - done - failed,
+		"missed": missed,
+		"pending": pending,
 		"out": out_map().size(),
 		"deadline_ms": current_deadline_ms(),
 	}
@@ -212,70 +243,99 @@ func tick(now_ms: int, now_unix: int) -> Dictionary:
 	var alive := alive_uids()
 	var all_answered := true
 	for uid in alive:
-		if answer(uid, r) == "pending":
+		if waits_for(uid, r) and answer(uid, r) == "pending":
 			all_answered = false
 			break
 	if not all_answered and now_ms < current_deadline_ms():
 		return {}
 	return _resolve_round(r, alive, now_ms, now_unix)
 
+# Bank round r for every student still in, then either publish r + 1 or finish.
 func _resolve_round(r: int, alive: Array, now_ms: int, now_unix: int) -> Dictionary:
 	var new_out := {}
-	var survivors: Array = []
+	var new_bank := {}
+	var completed := 0
 	for uid in alive:
-		if answer(uid, r) == "done":
-			survivors.append(uid)
-		else:
-			new_out[uid] = r
-	if survivors.size() <= 1 or r >= ClassRules.MAX_ROUNDS:
-		var merged_out := out_map().duplicate()
-		for uid in new_out:
-			merged_out[uid] = new_out[uid]
-		var w := _finish_write(merged_out, r, now_unix)
-		if not new_out.is_empty():
-			w["out"] = new_out
-		w["alive"] = survivors.size()
-		return w
-	var nw := {
-		"round": r + 1,
-		"round_at_ms": now_ms,
-		"alive": survivors.size(),
-		"expires_unix": now_unix + ClassRules.PLAY_TTL,
-	}
+		var row: Dictionary = rows.get(uid, {})
+		var b := _bank_entry(uid)
+		match answer(uid, r):
+			"done":
+				b["s"] = int(b["s"]) + clampi(int(row.get("ls", 0)), 0, ClassRules.MAX_POINTS)
+				b["t"] = int(b["t"]) + maxi(0, int(row.get("lt", 0)))
+				b["c"] = int(b["c"]) + 1
+				b["a"] = r
+				completed += 1
+			"missed":
+				b["a"] = r
+			"left":
+				new_out[uid] = r
+		new_bank[uid] = b
+	var still_in := alive.size() - new_out.size()
+	var w := {}
+	if completed == 0 or r >= max_rounds() or still_in <= 0:
+		var reason := "max"
+		if still_in <= 0:
+			reason = "empty"
+		elif completed == 0:
+			reason = "none_completed"
+		w = _finish_write(new_bank, now_unix, reason)
+		w["alive"] = still_in
+	else:
+		w = {
+			"round": r + 1,
+			"round_at_ms": now_ms,
+			"alive": still_in,
+			"expires_unix": now_unix + ClassRules.PLAY_TTL,
+		}
 	# NEVER send an empty map: in a Firestore merge write an empty map value REPLACES
-	# the whole field (there are no leaf keys to merge), which wiped every earlier
-	# round's outs the first time a round passed with nobody going out.
+	# the whole field (there are no leaf keys to merge).
+	if not new_bank.is_empty():
+		w["bank"] = new_bank
 	if not new_out.is_empty():
-		nw["out"] = new_out
-	return nw
+		w["out"] = new_out
+	return w
 
-# The teacher pressed End Game. Whoever already completed the current round keeps
-# it; whoever was still mid-round is credited with the rounds before it (no one is
-# counted out for a round the teacher cut short).
+func _bank_entry(uid: String) -> Dictionary:
+	var b: Dictionary = (bank().get(uid, {}) as Dictionary).duplicate()
+	for k in ["s", "t", "c", "a"]:
+		b[k] = int(b.get(k, 0))
+	return b
+
+# The teacher pressed End Game. Whoever already completed the current round is
+# credited with it; nobody is penalised for the round that was cut short.
 func end_now(now_unix: int) -> Dictionary:
 	if status() != "playing":
 		return {}
 	var r := int(doc.get("round", 0))
-	var w := _finish_write(out_map(), r, now_unix)
+	var new_bank := {}
+	for uid in alive_uids():
+		if answer(uid, r) == "done":
+			var row: Dictionary = rows.get(uid, {})
+			var b := _bank_entry(uid)
+			b["s"] = int(b["s"]) + clampi(int(row.get("ls", 0)), 0, ClassRules.MAX_POINTS)
+			b["t"] = int(b["t"]) + maxi(0, int(row.get("lt", 0)))
+			b["c"] = int(b["c"]) + 1
+			b["a"] = r
+			new_bank[uid] = b
+	var w := _finish_write(new_bank, now_unix, "teacher")
 	w["ended_early"] = true
+	if not new_bank.is_empty():
+		w["bank"] = new_bank
 	return w
 
-# Remove a student. In the lobby they simply vanish from the list; mid-game they are
-# also counted out on the current round.
+# Remove a student. In the lobby they simply vanish from the list; mid-game they stop
+# playing (their banked points stay on the board unless they were removed).
 func kick(uid: String, now_unix: int) -> Dictionary:
 	var w := {"kicked": {uid: true}}
 	if status() == "playing" and roster().has(uid) and not out_map().has(uid):
 		w["out"] = {uid: int(doc.get("round", 1))}
-		w["alive"] = maxi(0, alive_uids().size() - 1)
-		# Removing the second-to-last student leaves a winner — end it now rather than
-		# make one student play on alone.
-		if alive_uids().size() - 1 <= 1:
-			var merged := out_map().duplicate()
-			merged[uid] = int(doc.get("round", 1))
-			var f := _finish_write(merged, int(doc.get("round", 1)), now_unix, {uid: true})
+		var left := alive_uids().size() - 1
+		w["alive"] = maxi(0, left)
+		if left <= 0:
+			var f := _finish_write({}, now_unix, "empty", {uid: true})
 			f["kicked"] = w["kicked"]
 			f["out"] = w["out"]
-			f["alive"] = w["alive"]
+			f["alive"] = 0
 			return f
 	if status() == "lobby":
 		w["expires_unix"] = maxi(int(doc.get("expires_unix", 0)), now_unix + 60)
@@ -288,40 +348,26 @@ func cancel(now_unix: int) -> Dictionary:
 		"expires_unix": now_unix + ClassRules.DONE_TTL,
 	}
 
-# Build the final results from the report rows and the out map.
-#   rounds completed: out at round R -> R - 1; still in -> min(row.r, current round)
-#   score/time: the row's running totals — EXCEPT a student counted out at R whose
-#   (late) report says they completed R: the totals then include a round they were
-#   not credited with, so its points/time (ls/lt) are taken back off.
-# `also_kicked` = students being removed by the very write this result rides on (not
-# yet in doc.kicked), so they're left out of the standings too.
-func _finish_write(final_out: Dictionary, cur_round: int, now_unix: int,
+# Final results from the bank (+ `fresh` entries this very write is banking). Removed
+# students are left out; students who left keep what they banked.
+func _finish_write(fresh: Dictionary, now_unix: int, reason: String,
 		also_kicked: Dictionary = {}) -> Dictionary:
 	var list: Array = []
 	var ros := roster()
 	for uid in ros:
 		if is_kicked(uid) or also_kicked.has(uid):
 			continue
-		var row: Dictionary = rows.get(uid, {})
-		var rr := int(row.get("r", 0))
-		var s := int(row.get("s", 0))
-		var t := int(row.get("t", 0))
-		var rounds := mini(rr, cur_round)
-		if final_out.has(uid):
-			var at := int(final_out[uid])
-			rounds = maxi(0, at - 1)
-			if rr >= at:
-				s = maxi(0, s - int(row.get("ls", 0)))
-				t = maxi(0, t - int(row.get("lt", 0)))
+		var b: Dictionary = fresh.get(uid, _bank_entry(uid))
 		list.append({"uid": uid, "n": String((ros[uid] as Dictionary).get("n", "Student")),
-			"r": rounds, "s": s, "t": t})
+			"s": int(b.get("s", 0)), "c": int(b.get("c", 0)), "t": int(b.get("t", 0))})
 	var ranked := ClassRules.rank(list)
 	var results := {}
 	for e: Dictionary in ranked:
-		results[e["uid"]] = {"n": e["n"], "r": e["r"], "s": e["s"], "t": e["t"], "p": e["p"]}
+		results[e["uid"]] = {"n": e["n"], "s": e["s"], "c": e["c"], "t": e["t"], "p": e["p"]}
 	return {
 		"status": "finished",
 		"finished_at": now_unix,
+		"end_reason": reason,
 		"results": results,
 		"expires_unix": now_unix + ClassRules.DONE_TTL,
 	}
