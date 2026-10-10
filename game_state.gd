@@ -113,7 +113,13 @@ func _hydrate_from_leaderboard() -> void:
 	_hydrated = true
 	for diff in ["easy", "moderate", "hard"]:
 		var s: int = await LeaderboardManager.get_my_score(diff)
-		high_scores[diff] = s
+		if s < 0:
+			# Read failed — keep what we have and let a later sign-in/launch retry,
+			# rather than recording an unknown best as 0.
+			_hydrated = false
+			continue
+		high_scores[diff] = maxi(maxi(s, LeaderboardManager.pending_score(diff)),
+				high_scores.get(diff, 0) as int)
 
 func _save_guest_scores() -> void:
 	var cfg := ConfigFile.new()

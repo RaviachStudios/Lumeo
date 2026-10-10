@@ -10,6 +10,23 @@ service cloud.firestore {
           && request.resource.data.score >= 0
           && request.resource.data.score <= 9999;
     }
+    // A best can only go up. Shipped clients treated a FAILED read of their own
+    // row as "no row" and wrote a lower run over their real best (a 35 became a
+    // 6) — this blocks that for every app version. Name-only merges keep the
+    // stored score, so renames still pass.
+    function scoreNotLower() {
+      return resource == null
+          || !('score' in resource.data)
+          || request.resource.data.score >= resource.data.score;
+    }
+    // Daily: same, but only within one day — a legacy-shape row (doc id == uid)
+    // is legitimately reused across days and may start lower on a new date.
+    function dailyScoreNotLower() {
+      return resource == null
+          || !('score' in resource.data)
+          || resource.data.get('date', '') != request.resource.data.date
+          || request.resource.data.score >= resource.data.score;
+    }
 
     // ---- client-swept expiry (the replacement for Firestore TTL) -----------
     // Firestore TTL policies only act on fields of type Timestamp, and the
@@ -47,17 +64,17 @@ service cloud.firestore {
     // into the same rule would error out and deny every delete.
     match /global_easy/{uid} {
       allow read: if true;
-      allow write: if isUser(uid) && scoreOk();
+      allow write: if isUser(uid) && scoreOk() && scoreNotLower();
       allow delete: if isUser(uid);
     }
     match /global_moderate/{uid} {
       allow read: if true;
-      allow write: if isUser(uid) && scoreOk();
+      allow write: if isUser(uid) && scoreOk() && scoreNotLower();
       allow delete: if isUser(uid);
     }
     match /global_hard/{uid} {
       allow read: if true;
-      allow write: if isUser(uid) && scoreOk();
+      allow write: if isUser(uid) && scoreOk() && scoreNotLower();
       allow delete: if isUser(uid);
     }
 
@@ -100,7 +117,7 @@ service cloud.firestore {
     }
     match /daily_easy/{docId} {
       allow read: if true;
-      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow write: if dailyOwner(docId) && dailyRowOk() && dailyScoreNotLower();
       // isExpired() is checked FIRST because it is the only arm safe on every row
       // shape: it existence-checks its field, whereas reading resource.data.uid
       // on a legacy row (which has none) raises and denies before a later arm
@@ -112,7 +129,7 @@ service cloud.firestore {
     }
     match /daily_moderate/{docId} {
       allow read: if true;
-      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow write: if dailyOwner(docId) && dailyRowOk() && dailyScoreNotLower();
       // isExpired() is checked FIRST because it is the only arm safe on every row
       // shape: it existence-checks its field, whereas reading resource.data.uid
       // on a legacy row (which has none) raises and denies before a later arm
@@ -124,7 +141,7 @@ service cloud.firestore {
     }
     match /daily_hard/{docId} {
       allow read: if true;
-      allow write: if dailyOwner(docId) && dailyRowOk();
+      allow write: if dailyOwner(docId) && dailyRowOk() && dailyScoreNotLower();
       // isExpired() is checked FIRST because it is the only arm safe on every row
       // shape: it existence-checks its field, whereas reading resource.data.uid
       // on a legacy row (which has none) raises and denies before a later arm

@@ -116,6 +116,12 @@ var _sim_daily := {"easy": {}, "moderate": {}, "hard": {}}
 const _RANK_CACHE_PATH := "user://rank_cache.cfg"
 var _rank_cache: Dictionary = {}   # diff -> int rank (>0)
 
+# All-time bests that couldn't be submitted because the player's row was
+# unreadable (offline / server error). submit_score never writes blind — that is
+# what let a flaky read overwrite a real best with a lower run — so the score is
+# parked here per uid and flushed on the next sign-in / launch.
+const _PENDING_PATH := "user://pending_scores.cfg"
+
 # Boot-warmed board cache. Both families are fetched right after sign-in (well
 # before the player can reach the leaderboards screen), so the screen can paint
 # instantly from here with NO loading overlay and then quietly revalidate. Keys
@@ -140,6 +146,7 @@ func _ready() -> void:
 	if not _uid().is_empty():
 		_load_rank_cache()
 		warm_boards()
+		flush_pending_scores()
 
 # The last cached all-time rank for `difficulty` (0 if unknown / not signed in).
 func cached_rank(difficulty: String) -> int:
@@ -150,6 +157,7 @@ func _on_signed_in(_uid_in: String, _name_in: String) -> void:
 	_load_rank_cache()
 	# Preload both leaderboard families now so the screen never shows a loader.
 	warm_boards()
+	flush_pending_scores()
 
 func _on_signed_out() -> void:
 	_rank_cache.clear()
@@ -674,15 +682,17 @@ func _fetch_family_tops(prefix: String, extra_eq: Dictionary) -> Dictionary:
 # ---- public API: all-time ----
 
 # Reads the signed-in user's stored all-time score for one difficulty. Returns
-# 0 when the user has no row yet, isn't signed in, or the read fails — callers
-# (GameState) treat "no row" and "score 0" identically.
+# 0 when the user has no row yet or isn't signed in, and -1 when the read fails
+# (network/server) — the caller must not mistake an unknown best for a 0 best.
 func get_my_score(difficulty: String) -> int:
 	if _uid().is_empty():
 		return 0
 	if _is_editor:
 		var g: Dictionary = _sim_global.get(difficulty, {})
 		return int(g.get(_uid(), {}).get("score", 0))
-	var existing := await _rest_get("global_" + difficulty, _uid())
+	var existing := await _rest_get_status("global_" + difficulty, _uid())
+	if String(existing.get("status", "error")) == "error":
+		return -1
 	return int(existing.get("data", {}).get("score", 0))
 
 # Submit a new all-time score. Only writes if it strictly beats the player's
@@ -696,9 +706,16 @@ func submit_score(difficulty: String, score: int) -> void:
 			_sim_global[difficulty] = g
 		return
 	var coll := "global_" + difficulty
-	var existing := await _rest_get(coll, _uid())
+	# A failed read must NOT count as "no row": that turned a flaky connection into
+	# a lower score overwriting the player's real best (set_document still queues
+	# and syncs later). Only a definitive 404 means old_score 0; on error, skip.
+	var existing := await _rest_get_status(coll, _uid())
+	if String(existing.get("status", "error")) == "error":
+		_set_pending(difficulty, score)
+		return
 	var old_score := int(existing.get("data", {}).get("score", 0))
 	if score <= old_score:
+		_clear_pending(difficulty, old_score)
 		return
 	Firebase.firestore.set_document(coll, _uid(),
 		{"name": _name(), "score": score}, true)
@@ -710,6 +727,42 @@ func submit_score(difficulty: String, score: int) -> void:
 	if old_score > 0:
 		deltas[old_score] = int(deltas.get(old_score, 0)) - 1
 	await _hist_apply(coll, deltas)
+	_clear_pending(difficulty, score)
+
+# Best parked by submit_score for `difficulty` on the signed-in account (0 if none).
+func pending_score(difficulty: String) -> int:
+	var cfg := ConfigFile.new()
+	if _uid().is_empty() or cfg.load(_PENDING_PATH) != OK:
+		return 0
+	return int(cfg.get_value(_uid(), difficulty, 0))
+
+func _set_pending(difficulty: String, score: int) -> void:
+	if score <= pending_score(difficulty):
+		return
+	var cfg := ConfigFile.new()
+	cfg.load(_PENDING_PATH)
+	cfg.set_value(_uid(), difficulty, score)
+	cfg.save(_PENDING_PATH)
+
+# Drop the parked best once the board holds `stored` or better.
+func _clear_pending(difficulty: String, stored: int) -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(_PENDING_PATH) != OK or not cfg.has_section_key(_uid(), difficulty):
+		return
+	if int(cfg.get_value(_uid(), difficulty, 0)) > stored:
+		return
+	cfg.erase_section_key(_uid(), difficulty)
+	cfg.save(_PENDING_PATH)
+
+# Retry every parked best for the signed-in account. submit_score re-reads the
+# row, so this only writes when the parked score really beats the board.
+func flush_pending_scores() -> void:
+	if _is_editor:
+		return
+	for diff in DIFFS:
+		var p := pending_score(diff)
+		if p > 0:
+			await submit_score(diff, p)
 
 # Submit a new daily score. Rows are keyed per-day (`{today}__{uid}`), so this
 # only ever compares against TODAY's own row — no cross-day overwrite handling is
@@ -738,7 +791,10 @@ func submit_score_daily(difficulty: String, score: int) -> void:
 		_sim_daily[difficulty] = g
 		return
 	var coll := "daily_" + difficulty
-	var existing := await _rest_get(coll, doc_id)
+	# Same rule as submit_score: an unreadable row is unknown, not empty.
+	var existing := await _rest_get_status(coll, doc_id)
+	if String(existing.get("status", "error")) == "error":
+		return
 	if score <= int(existing.get("data", {}).get("score", 0)):
 		return
 	# `expires_unix` is the field expiry ACTUALLY keys on. The earlier plan here
